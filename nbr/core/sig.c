@@ -1,36 +1,76 @@
-/*
- *	signal_handler.c:	extend signal handlers
- *
- *	$Revision: 1 $
- *	$Date: 07/11/29 20:57 $
- *	$Id: $
- */
-
-
+/***************************************************************
+ * sig.c : handling signal stuff (linux os only?)
+ * 2009/11/07 iyatomi : create
+ *                             Copyright (C) 2008-2009 Takehiro Iyatomi
+ * This file is part of libnbr.
+ * libnbr is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU Lesser General Public License
+ * as published by the Free Software Foundation; either
+ * version 2.1 of the License or any later version.
+ * libnbr is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+ * See the GNU Lesser General Public License for more details.
+ * You should have received a copy of
+ * the GNU Lesser General Public License along with libnbr;
+ * if not, write to the Free Software Foundation, Inc.,
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+ ****************************************************************/
+#include "common.h"
 #include "sig.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <signal.h>
 
-#define CMD_PSTACK	"/usr/bin/pstack"
 
-static signal_handler_t s_signal_handler, s_old_signal_handler;
 
+/*-------------------------------------------------------------*/
+/* constant													   */
+/*-------------------------------------------------------------*/
+#define PSTACK	"/usr/bin/pstack"
+
+
+
+/*-------------------------------------------------------------*/
+/* internal types											   */
+/*-------------------------------------------------------------*/
+typedef struct sigfunctable {
+	union {
+		SIGFUNC	func[32 + 1];
+		void (*logger)(const char *);		/* func[0] is log handler */
+	};
+} sigfunctable_t;
+
+
+
+/*-------------------------------------------------------------*/
+/* internal values											   */
+/*-------------------------------------------------------------*/
+static sigfunctable_t g_now, g_old;
+
+
+
+/*-------------------------------------------------------------*/
+/* internal methods											   */
+/*-------------------------------------------------------------*/
 /* common functions */
-static void _write_log(const char *buf)
+NBR_INLINE
+void sig_write_log(const char *buf)
 {
-	if (s_signal_handler.func_loghandler) {
-		s_signal_handler.func_loghandler(buf);
+	if (g_now.logger) {
+		g_now.logger(buf);
 	}
 	else {
 		fprintf(stderr, "%s\n", buf);
 	}
 }
 
-static void _write_signal_log(int signum, __sighandler_t sighandler)
+NBR_INLINE void
+sig_write_signal_log(int signum, SIGFUNC fn)
 {
-	char buf[32] = "Caught SIG";
+	char buf[32] = "[SIG";
 
 	switch (signum) {
 	  case SIGHUP:		strcat(buf, "HUP");		break;
@@ -67,46 +107,30 @@ static void _write_signal_log(int signum, __sighandler_t sighandler)
 	  case SIGUNUSED:	strcat(buf, "UNUSED");	break;
 	}
 
-	strcat(buf, " ...");
-	if (sighandler == SIG_IGN) {
-		strcat(buf, " ignored.");
+	strcat(buf, "]...");
+	if (fn == SIG_IGN) {
+		strcat(buf, "ignore");
 	}
-	_write_log(buf);
+	sig_write_log(buf);
 }
 
-static void _write_stack_log()
+NBR_INLINE void
+sig_write_stack_log()
 {
-	if (access(CMD_PSTACK, X_OK) == 0) {
-		char 			buf[256];
-		FILE			*fp;
-		int				drop_flag = 1;
-		__sighandler_t	sh_chld;
-
-		sprintf(buf, CMD_PSTACK " %d", (int)getpid());
-		/* undefine LD_PRELOAD to avoid 64-bit problems */
+	char 	buf[256], *ptr;
+	FILE	*fp;
+	SIGFUNC	sh_chld;
+	if (access(PSTACK, X_OK) == 0) {
+		sprintf(buf, PSTACK" %u", getpid());
 		(void)putenv("LD_PRELOAD=");
 
 		sh_chld = signal(SIGCHLD, SIG_IGN);
-		if ((fp = popen(buf, "r")) != NULL) {
-			char *ptr;
-			while (1) {
-				fgets(buf, sizeof(buf), fp);
-				if (feof(fp)) {
-					break;
-				}
-				if (drop_flag) {
-					char cmd[8];
-					sscanf(buf, "%*p: %6s", cmd);
-					if (strcmp(cmd, "killpg") == 0) {
-						drop_flag = 0;
-					}
-					continue;
-				}
-				ptr = strchr(buf, '\n');
-				if (ptr != NULL) {
+		if ((fp = popen(buf, "r"))) {
+			while (!fgets(buf, sizeof(buf), fp)) {
+				if ((ptr = strchr(buf, '\n'))) {
 					*ptr = '\0';
 				}
-				_write_log(buf);
+				sig_write_log(buf);
 			}
 			pclose(fp);
 		}
@@ -115,123 +139,183 @@ static void _write_stack_log()
 }
 
 
-/* signal handlers */
-
-static void _sig_ign_handler(int signum)
+/* SIGNAL HANDLERS */
+static void
+sig_ignore_handler(int signum)
 {
-	_write_signal_log(signum, SIG_IGN);
-	signal(signum, _sig_ign_handler);	/* ignore */
+	sig_write_signal_log(signum, SIG_IGN);
 }
 
-static void _terminate_handler(int signum)
+static void
+sig_term_handler(int signum)
 {
-	if (s_signal_handler.func[signum]) {
-		_write_signal_log(signum, SIG_IGN);
-		s_signal_handler.func[signum](signum);
-		signal(signum, _terminate_handler);	/* ignore */
+	if (g_now.func[signum]) {
+		sig_write_signal_log(signum, g_now.func[signum]);
+		g_now.func[signum](signum);
 	}
 	else {
-		_write_signal_log(signum, s_old_signal_handler.func[signum]);
-		signal(signum, s_old_signal_handler.func[signum]);
+		sig_write_signal_log(signum, g_old.func[signum]);
+		signal(signum, g_old.func[signum]);
 		raise(signum);	/* default */
 	}
 }
 
-static void _ignore_handler(int signum)
+static void
+sig_fault_handler(int signum)
 {
-	_write_signal_log(signum, SIG_IGN);
-	if (s_signal_handler.func[signum]) {
-		s_signal_handler.func[signum](signum);
+	sig_write_signal_log(signum, g_old.func[signum]);
+	sig_write_stack_log();
+	if (g_now.func[signum]) {
+		g_now.func[signum](signum);
 	}
-	signal(signum, _ignore_handler);	/* ignore */
-}
-
-static void _dump_core_handler(int signum)
-{
-	_write_signal_log(signum, s_old_signal_handler.func[signum]);
-	_write_stack_log();
-	if (s_signal_handler.func[signum]) {
-		s_signal_handler.func[signum](signum);
-	}
-	signal(signum, s_old_signal_handler.func[signum]);
+	signal(signum, g_old.func[signum]);
 	raise(signum);	/* default */
 }
 
-static void _stop_handler(int signum)
+static void
+sig_stop_handler(int signum)
 {
-	_write_signal_log(signum, s_old_signal_handler.func[signum]);
-	if (s_signal_handler.func[signum]) {
-		s_signal_handler.func[signum](signum);
+	sig_write_signal_log(signum, g_now.func[signum]);
+	if (g_now.func[signum]) {
+		g_now.func[signum](signum);
 	}
-	signal(signum, s_old_signal_handler.func[signum]);
+	signal(signum, g_old.func[signum]);
 	raise(signum);	/* default */
 }
 
-int overlay_signal_handler(signal_handler_t* sht)
+
+
+/*-------------------------------------------------------------*/
+/* external methods											   */
+/*-------------------------------------------------------------*/
+int nbr_sig_init()
 {
 	int signum;
-
-	memcpy(&s_signal_handler, sht, sizeof(signal_handler_t));
+	memset(&g_old, 0, sizeof(sigfunctable_t));
+	memset(&g_now, 0, sizeof(sigfunctable_t));
 	for (signum = 1; signum < 32; signum++) {
 		if (signum == SIGKILL || signum == SIGSTOP) {
 			/* cannot catch */
 			continue;
 		}
-		if (sht->func[signum] == SIG_IGN) {
-			s_old_signal_handler.func[signum] = signal(signum, _sig_ign_handler);
-		}
-		else {
-			switch (signum) {
-			  case SIGHUP:
-			  case SIGINT:
-			/*case SIGKILL:*/
-			  case SIGPIPE:
-			  case SIGALRM:
-			  case SIGTERM:
-			  case SIGUSR1:
-			  case SIGUSR2:
-			  case SIGPROF:
-			  case SIGVTALRM:
-			  case SIGSTKFLT:
-			  case SIGIO:
-			  case SIGPWR:
-			/*case SIGLOST:*/
-			  case SIGUNUSED:
-				/* terminate the process */
-				s_old_signal_handler.func[signum] = signal(signum, _terminate_handler);
-				break;
+		switch (signum) {
+		case SIGHUP:
+		case SIGINT:
+		/*case SIGKILL:*/
+		case SIGPIPE:
+		case SIGALRM:
+		case SIGTERM:
+		case SIGUSR1:
+		case SIGUSR2:
+		case SIGPROF:
+		case SIGVTALRM:
+		case SIGSTKFLT:
+		case SIGIO:
+		case SIGPWR:
+		/*case SIGLOST:*/
+		case SIGUNUSED:
+		/* terminate the process */
+			g_old.func[signum] = signal(signum, sig_term_handler);
+			break;
 
-			  case SIGCHLD:
-			  case SIGCONT:
-			  case SIGURG:
-			  case SIGWINCH:
-				/* ignore the signal */
-				s_old_signal_handler.func[signum] = signal(signum, _ignore_handler);
-				break;
+		case SIGCHLD:
+		case SIGCONT:
+		case SIGURG:
+		case SIGWINCH:
+			/* ignore the signal */
+			g_old.func[signum] = signal(signum, sig_ignore_handler);
+			break;
 
-			  case SIGQUIT:
-			  case SIGILL:
-			  case SIGABRT:
-			  case SIGBUS:
-			  case SIGFPE:
-			  case SIGSEGV:
-			  case SIGTRAP:
-			  case SIGXCPU:
-			  case SIGXFSZ:
-				/* dump core */
-				s_old_signal_handler.func[signum] = signal(signum, _dump_core_handler);
-				break;
+		case SIGQUIT:
+		case SIGILL:
+		case SIGABRT:
+		case SIGBUS:
+		case SIGFPE:
+		case SIGSEGV:
+		case SIGTRAP:
+		case SIGXCPU:
+		case SIGXFSZ:
+			/* dump core */
+			g_old.func[signum] = signal(signum, sig_fault_handler);
+			break;
 
-			/*case SIGSTOP:*/
-			  case SIGTSTP:
-			  case SIGTTIN:
-			  case SIGTTOU:
-				/* stop the process */
-				s_old_signal_handler.func[signum] = signal(signum, _stop_handler);
-				break;
-			}
+		/*case SIGSTOP:*/
+		case SIGTSTP:
+		case SIGTTIN:
+		case SIGTTOU:
+			/* stop the process */
+			g_old.func[signum] = signal(signum, sig_stop_handler);
+			break;
 		}
 	}
 
 	return 0;
 }
+
+NBR_API void
+nbr_sig_set_logger(void (*logger)(const char*))
+{
+	g_now.logger = logger;
+}
+
+NBR_API int
+nbr_sig_set_handler(int signum, SIGFUNC fn)
+{
+	if (signum <= 32) {
+		g_now.func[signum] = fn;
+		return NBR_OK;
+	}
+	return NBR_EINVAL;
+}
+
+NBR_API void
+nbr_sig_set_ignore_handler(SIGFUNC fn)
+{
+	g_now.func[SIGCHLD] =
+	g_now.func[SIGCONT] =
+	g_now.func[SIGURG] =
+	g_now.func[SIGWINCH] =	fn;
+}
+
+NBR_API void
+nbr_sig_set_intr_handler(SIGFUNC fn)
+{
+	g_now.func[SIGHUP] =
+	g_now.func[SIGINT] =
+	g_now.func[SIGPIPE] =
+	g_now.func[SIGALRM] =
+	g_now.func[SIGTERM] =
+	g_now.func[SIGUSR1] =
+	g_now.func[SIGUSR2] =
+	g_now.func[SIGPROF] =
+	g_now.func[SIGVTALRM] =
+	g_now.func[SIGSTKFLT] =
+	g_now.func[SIGIO] =
+	g_now.func[SIGPWR] =
+	g_now.func[SIGUNUSED] =	fn;
+}
+
+NBR_API void
+nbr_sig_set_fault_handler(SIGFUNC fn)
+{
+	g_now.func[SIGQUIT] =
+	g_now.func[SIGILL] =
+	g_now.func[SIGABRT] =
+	g_now.func[SIGBUS] =
+	g_now.func[SIGFPE] =
+	g_now.func[SIGSEGV] =
+	g_now.func[SIGTRAP] =
+	g_now.func[SIGXCPU] =
+	g_now.func[SIGXFSZ] =	fn;
+}
+
+NBR_API void
+nbr_sig_set_stop_handler(SIGFUNC fn)
+{
+	g_now.func[SIGTSTP] =
+	g_now.func[SIGTTIN] =
+	g_now.func[SIGTTOU] =	fn;
+}
+
+
+

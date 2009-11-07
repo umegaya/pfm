@@ -143,6 +143,7 @@ typedef struct	nbr_init_t
 typedef int					DSCRPTR;
 typedef int	(*RECVFUNC) (DSCRPTR, void*, size_t, int, ...);
 typedef int	(*SENDFUNC)	(DSCRPTR, const void*, size_t, ...);
+typedef void (*SIGFUNC)	(int);
 typedef struct	nbr_proto_t
 {
 	char	*name;
@@ -289,11 +290,20 @@ NBR_API char	*nbr_sock_rparser_text(char *p, int *len, int *rlen);
 NBR_API char	*nbr_sock_rparser_raw(char *p, int *len, int *rlen);
 
 
-/* paxos.c */
+/* node.c */
 NBR_API NODE	nbr_node_create(U16 type_id, int nrb, int nwb, int max_servant);
 NBR_API void	nbr_node_destroy(NODE nd);
 NBR_API int		nbr_node_is_master(NODE nd);
 NBR_API int 	nbr_node_send_master(NODE nd, char *data, int len);
+
+
+/* sig.c */
+NBR_API int		nbr_sig_set_handler(int signum, SIGFUNC fn);
+NBR_API void	nbr_sig_set_ignore_handler(SIGFUNC fn);
+NBR_API void	nbr_sig_set_intr_handler(SIGFUNC fn);
+NBR_API void	nbr_sig_set_fault_handler(SIGFUNC fn);
+NBR_API void 	nbr_sig_set_stop_handler(SIGFUNC fn);
+NBR_API void	nbr_sig_set_logger(void (*logger)(const char*));
 
 
 /* thread.c */
