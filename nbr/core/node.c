@@ -401,10 +401,22 @@ nbr_node_is_master(NODE nd)
 }
 
 NBR_API int
+nbr_node_is_ready(NODE nd)
+{
+	node_t *ndp = nd;
+	return ndp->master_skm ?
+			(ndp->state == NST_M_ESTABLISHED ? 1 : 0) :
+			(ndp->state == NST_S_ESTABLISHED ? 1 : 0);
+}
+
+NBR_API int
 nbr_node_send_master(NODE nd, char *data, int len)
 {
 	node_t *ndp = nd;
-	if (!(ndp->master)) { return NBR_EINVAL; }
+	if ((!(ndp->master)) || ndp->master_skm) {
+		ASSERT(FALSE);
+		return NBR_EINVAL;
+	}
 	return nbr_sock_send_bin32(ndp->master->conn, data, len);
 }
 

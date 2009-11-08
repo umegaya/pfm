@@ -135,7 +135,7 @@ typedef struct	nbr_init_t
 	int max_task;
 	int	max_proto;
 	int	max_sockmgr;
-	int max_events;
+	int max_nfd;
 	int max_thread;
 	int sockbuf_size;
 	NIOCONF 	ioc;
@@ -295,6 +295,7 @@ NBR_API char	*nbr_sock_rparser_raw(char *p, int *len, int *rlen);
 NBR_API NODE	nbr_node_create(U16 type_id, int nrb, int nwb, int max_servant);
 NBR_API void	nbr_node_destroy(NODE nd);
 NBR_API int		nbr_node_is_master(NODE nd);
+NBR_API int		nbr_node_is_ready(NODE nd);
 NBR_API int 	nbr_node_send_master(NODE nd, char *data, int len);
 
 

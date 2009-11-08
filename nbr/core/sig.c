@@ -253,7 +253,20 @@ int nbr_sig_init()
 	/* for default, I want to ignore SIGPIPE and SIGHUP... */
 	nbr_sig_set_handler(SIGPIPE, SIG_IGN);
 	nbr_sig_set_handler(SIGHUP, SIG_IGN);
-	return 0;
+	return NBR_OK;
+}
+
+NBR_API void
+nbr_sig_fin()
+{
+	int signum;
+	for (signum = 1; signum < 32; signum++) {
+		if (signum == SIGKILL || signum == SIGSTOP) {
+			/* cannot catch */
+			continue;
+		}
+		signal(signum, g_old.func[signum]);
+	}
 }
 
 NBR_API void

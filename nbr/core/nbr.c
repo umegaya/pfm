@@ -26,6 +26,7 @@
 #include "thread.h"
 #include "sock.h"
 #include "node.h"
+#include "sig.h"
 
 
 /*-------------------------------------------------------------*/
@@ -55,14 +56,15 @@ nbr_init(CONFIG *c)
 	}
 	nbr_err_init();
 	INIT_OR_DIE(r, nbr_clock_init());
+	INIT_OR_DIE(r, nbr_sig_init());
 	INIT_OR_DIE(r, nbr_array_init(c->max_array));
-	INIT_OR_DIE(r, nbr_lock_init(c->max_events));
+	INIT_OR_DIE(r, nbr_lock_init(c->max_nfd));
 	INIT_OR_DIE(r, nbr_rand_init());
 	INIT_OR_DIE(r, nbr_thread_init(c->max_thread));
 	INIT_OR_DIE(r, nbr_search_init(c->max_search));
 	INIT_OR_DIE(r, nbr_proto_init(c->max_proto));
 	INIT_OR_DIE(r, nbr_sock_init(c->max_sockmgr,
-		c->max_events, c->max_thread, c->sockbuf_size));
+		c->max_nfd, c->max_thread, c->sockbuf_size));
 	INIT_OR_DIE(r, nbr_node_init(c->ndc.bcast_port,
 		c->ndc.max_node, c->ndc.multiplex));
 	nbr_sock_set_nioconf(c->ioc);
@@ -76,7 +78,7 @@ nbr_get_default(CONFIG *c)
 	c->max_array = 128 + c->max_search;
 	c->max_proto = 3;
 	c->max_sockmgr = 16;
-	c->max_events = 256;
+	c->max_nfd = 1024;
 	c->max_thread = 3;
 	c->sockbuf_size = 1 * 1024 * 1024; /* 1MB */
 	/* NIOCONF */
@@ -101,6 +103,7 @@ nbr_fin()
 	nbr_err_fin();
 	nbr_clock_fin();
 	nbr_array_fin();
+	nbr_sig_fin();
 }
 
 NBR_API void
