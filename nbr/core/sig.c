@@ -38,7 +38,7 @@
 /*-------------------------------------------------------------*/
 typedef struct sigfunctable {
 	union {
-		SIGFUNC	func[32 + 1];
+		SIGFUNC	func[32];
 		void (*logger)(const char *);		/* func[0] is log handler */
 	};
 } sigfunctable_t;
@@ -248,7 +248,11 @@ int nbr_sig_init()
 			break;
 		}
 	}
-
+	/* for default, we redirect signal log to err.c */
+	nbr_sig_set_logger(nbr_err_sig);
+	/* for default, I want to ignore SIGPIPE and SIGHUP... */
+	nbr_sig_set_handler(SIGPIPE, SIG_IGN);
+	nbr_sig_set_handler(SIGHUP, SIG_IGN);
 	return 0;
 }
 

@@ -65,6 +65,7 @@ enum {
 	NBR_ESOCKOPT	= -26,
 	NBR_EDUP		= -27,
 	NBR_ERLIMIT		= -28,
+	NBR_ESIGNAL		= -29,
 };
 
 enum {

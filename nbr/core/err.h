@@ -23,6 +23,7 @@ void	nbr_err_init();
 void	nbr_err_fin();
 void	nbr_err_set(const char *file, const char *func, 
 			int line, int level, int err, const char *fmt, ...);
+void 	nbr_err_sig(const char *msg);
 
 #define NBR_ERROUT(lv,err,...)		\
 	nbr_err_set(__FILE__,__FUNC__,__LINE__,ELV_##lv,NBR_E##err,__VA_ARGS__)
