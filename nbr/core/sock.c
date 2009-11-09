@@ -90,10 +90,7 @@ typedef struct	sockbuf
 typedef struct	epollinfo
 {
 	U8			type, padd[3];
-	union {
-		void	*ptr;
-		int		fd;
-	};
+	void	*ptr;
 }	epollinfo_t;
 
 typedef struct	sockmgrdata
@@ -147,7 +144,8 @@ typedef struct 	sockevent
 typedef struct 	sockjob
 {
 	THREAD		thrd;		/* thread object to process this queue */
-	sockdata_t	*list;		/* list of sockdata which should handle with this task */
+	sockdata_t	*exec;		/* list of sockdata which should handle with this task */
+	sockdata_t	*free;		/* list of sockdata which should free by main thread */
 	sockbuf_t	eb[2];		/* sockbuf (double buffer) */
 	sockbuf_t	*reb, *web;	/* ptr to double buffer (reb for read/web for write) */
 }	sockjob_t;
@@ -159,7 +157,8 @@ typedef struct 	sockjob
 /*-------------------------------------------------------------*/
 static struct {
 		ARRAY		skm_a;
-		SEARCH		fd_s;
+		sockdata_t	*free;
+		MUTEX		lock;
 		THPOOL		worker;
 		sockjob_t	*jobs;
 		int			jobidx, jobmax, total_fds, reserve_fds;
@@ -167,6 +166,7 @@ static struct {
 		DSCRPTR		epfd;
 		NIOCONF		ioc;
 }		g_sock = {
+					NULL,
 					NULL,
 					NULL,
 					NULL,
@@ -518,9 +518,9 @@ sock_addjob(sockdata_t *skd)
 		skd->thrd = assign->thrd;
 		if ((r = sock_push_event(skd, skd->serial,
 			SOCK_EVENT_ADDSOCK, NULL, 0, NULL)) == NBR_OK) {
-			/* because if assign->list, then sock_process_job keep on running
+			/* because if assign->exec, then sock_process_job keep on running
 			 * and execute event handle loop, so no need to wake up. */
-			if (!assign->list) { nbr_thread_signal(assign->thrd, 1); }
+			if (!assign->exec) { nbr_thread_signal(assign->thrd, 1); }
 		}
 		return r;
 	}
@@ -628,29 +628,32 @@ NBR_INLINE int
 sock_attach_epoll(int epfd, sockdata_t *skd, int modify, int r, int w)
 {
 	struct epoll_event e;
-	int fd;
 	if (!r && !w) { return 0; }
 	e.events = (EPOLLONESHOT | EPOLLRDHUP);
 	if (r) { e.events |= EPOLLIN; }
 	if (w) { e.events |= EPOLLOUT; }
-	fd = sock_get_realfd(skd);
-	skd->reg.fd = fd;
+	skd->reg.ptr = skd;
 	e.data.ptr = &(skd->reg);
 	//TRACE("%u: attach epoll: %08x %u %u\n", getpid(), e.events, r, w);
-	if (modify) { return epoll_ctl(epfd, EPOLL_CTL_MOD, fd, &e); }
-	else {
-		if (nbr_search_int_regist(g_sock.fd_s, fd, skd) < 0) { return LASTERR; }
-		return epoll_ctl(epfd, EPOLL_CTL_ADD, fd, &e);
-	}
+	if (modify) { return epoll_ctl(epfd, EPOLL_CTL_MOD, sock_get_realfd(skd), &e); }
+	else { return epoll_ctl(epfd, EPOLL_CTL_ADD, sock_get_realfd(skd), &e); }
 }
 
 NBR_INLINE int
 sock_detach_epoll(int epfd, sockdata_t *skd)
 {
 	struct epoll_event e;
-	int fd = sock_get_realfd(skd);
-	if (nbr_search_int_unregist(g_sock.fd_s, fd) < 0) { ASSERT(FALSE); }
-	return epoll_ctl(epfd, EPOLL_CTL_DEL, fd, &e);
+	return epoll_ctl(epfd, EPOLL_CTL_DEL, sock_get_realfd(skd), &e);
+}
+
+NBR_INLINE void
+sockmgr_cleanup_skd(sockdata_t *skd)
+{
+	if (!skd->skm->proto->dgram) {
+		sock_detach_epoll(g_sock.epfd, skd);
+		skd->skm->proto->close(skd->fd);
+	}
+	sockmgr_free_skd(skd->skm, skd);
 }
 
 NBR_INLINE U32
@@ -680,13 +683,7 @@ sockmgr_from(EVENT *e)
 NBR_INLINE sockdata_t *
 sock_from(EVENT *e)
 {
-	return (sockdata_t *)nbr_search_int_get(g_sock.fd_s, reginfo_from(e)->fd);
-}
-
-NBR_INLINE int
-sock_event_valid(EVENT *e)
-{
-	return sock_from(e)->serial == ((U32)(e->data.u64 >> 32));
+	return (sockdata_t *)reginfo_from(e)->ptr;;
 }
 
 NBR_INLINE BOOL
@@ -772,8 +769,8 @@ sockjob_process_event(sockjob_t *j, sockevent_t *e)
 		sock_set_close(skd, GET_32(e->data));
 		break;
 	case SOCK_EVENT_ADDSOCK:
-		skd->next = j->list;
-		j->list = skd;
+		skd->next = j->exec;
+		j->exec = skd;
 		ASSERT(skd->thrd == j->thrd);
 		if (sock_attach_epoll_on_accept(skd) < 0) {
 			sock_set_close(skd, CLOSED_BY_ERROR);
@@ -826,7 +823,7 @@ sock_process_job(THREAD thrd)
 	sockjob_t *j = nbr_thread_get_data(thrd);
 	sockevent_t *e, *le;
 	sockbuf_t  *skb;
-	sockdata_t *sk, *psk, *ppsk;
+	sockdata_t *sk, *psk, *ppsk, *last;
 	nbr_thread_setcancelstate(0);	/* non-cancelable */
 	for (;;) {
 		if (g_sock.ioc.job_idle_sleep_us > 0) {
@@ -853,13 +850,18 @@ sock_process_job(THREAD thrd)
 			j->reb->blen = 0;
 		}
 		nbr_thread_testcancel();	/* if cancel request, stop this thread */
-		if ((sk = j->list)) {
+		if ((sk = j->exec)) {
 			ppsk = NULL;
 			while((psk = sk)) {
 				sk = psk->next;
 				if (nbr_sock_io(psk)) { ppsk = psk; }
-				else if (ppsk) { ppsk->next = sk; }
-				else { j->list = sk; }
+				else {
+					if (!j->free) { last = psk; }
+					psk->next = j->free;
+					j->free = psk;
+					if (ppsk) { ppsk->next = sk; }
+					else { j->exec = sk; }
+				}
 			}
 		}
 		else {
@@ -868,6 +870,14 @@ sock_process_job(THREAD thrd)
 				nbr_mutex_unlock(nbr_thread_signal_mutex(thrd));
 			}
 			nbr_thread_setcancelstate(0);	/* non-cancelable */
+		}
+		if (j->free) {
+			if (NBR_OK == nbr_mutex_lock(g_sock.lock)) {
+				last->next = g_sock.free;
+				g_sock.free = j->free;
+				if (NBR_OK != nbr_mutex_unlock(g_sock.lock)) { break; }
+				j->free = NULL;
+			}
 		}
 	}
 	return thrd;
@@ -914,7 +924,7 @@ nbr_sock_init(int max, int max_nfd, int n_worker, int skbsz)
 		g_sock.jobidx = 0;
 		for (i = 0; i < n_worker; i++) {
 			j = g_sock.jobs + i;
-			j->list = NULL;
+			j->exec = NULL;
 			for (ii = 0; ii < 2; ii++) {
 				if (!sockbuf_alloc(&(j->eb[ii]), skbsz)) {
 					goto error;
@@ -940,12 +950,11 @@ nbr_sock_init(int max, int max_nfd, int n_worker, int skbsz)
 	}
 	g_sock.reserve_fds = 1;/* for epoll fd */
 	if ((g_sock.total_fds = sockmgr_expand_maxfd(max_nfd)) < 0) {
-		SOCK_ERROUT(ERROR,EPOLL,"expand maxfd: %d,errno=%d",max_nfd,errno);
+		SOCK_ERROUT(ERROR,EXPIRE,"expand maxfd: %d,errno=%d",max_nfd,errno);
 		goto error;
 	}
-	if (!(g_sock.fd_s = nbr_search_init_int_engine(
-			max_nfd, (NBR_PRIM_THREADSAFE | NBR_PRIM_EXPANDABLE), max_nfd))) {
-		SOCK_ERROUT(ERROR,EPOLL,"init int search: %d,errno=%d",max_nfd,errno);
+	if (!(g_sock.lock = nbr_mutex_create())) {
+		SOCK_ERROUT(ERROR,PTHREAD,"mutex create: errno=%d",errno);
 		goto error;
 	}
 	return NBR_OK;
@@ -960,9 +969,15 @@ nbr_sock_fin()
 	int i, ii;
 	sockjob_t *j;
 	SOCKMGR *skm, *pskm;
+	sockdata_t *skd, *pskd;
 	if (g_sock.worker) {
 		nbr_thpool_destroy(g_sock.worker);
 		g_sock.worker = NULL;
+	}
+	skd = g_sock.free;
+	while((pskd = skd)) {
+		skd = skd->next;
+		sockmgr_cleanup_skd(pskd);
 	}
 	if (g_sock.skm_a) {
 		skm = nbr_array_get_first(g_sock.skm_a);
@@ -973,6 +988,7 @@ nbr_sock_fin()
 		nbr_array_destroy(g_sock.skm_a);
 		g_sock.skm_a = NULL;
 	}
+	g_sock.free = NULL;
 	if (g_sock.epfd >= 0) {
 		nbr_epoll_destroy(g_sock.epfd);
 		g_sock.epfd = -1;
@@ -991,9 +1007,9 @@ nbr_sock_fin()
 		nbr_mem_free(g_sock.jobs);
 		g_sock.jobs = NULL;
 	}
-	if (g_sock.fd_s) {
-		nbr_search_destroy(g_sock.fd_s);
-		g_sock.fd_s = NULL;
+	if (g_sock.lock) {
+		nbr_mutex_destroy(g_sock.lock);
+		g_sock.lock = NULL;
 	}
 	g_sock.total_fds = 0;
 	return NBR_OK;
@@ -1024,9 +1040,11 @@ nbr_sockmgr_create(
 	skm->fd	= -1;
 	fd_max = (g_sock.reserve_fds + max_sock + 16);	/* +16 for misc work (eg. gethostbyname) */
 	if ((g_sock.total_fds = sockmgr_expand_maxfd(fd_max)) < 0) {
-		SOCK_ERROUT(ERROR,INTERNAL,"expand_maxfd: skd: %d", max_sock);
+		SOCK_ERROUT(ERROR,INTERNAL,"expand_maxfd: to %d(%d)",
+			fd_max,g_sock.reserve_fds);
 		goto bad;
 	}
+	g_sock.reserve_fds += max_sock;
 	/* first, set invalid value for goto bad. */
 	skm->type = SKM_INVALID;
 	skm->proto = proto;
@@ -1101,6 +1119,7 @@ nbr_sockmgr_destroy(SOCKMGR s)
 			pskd->thrd = NULL;	/* detach from worker thread */
 			sock_set_stat(pskd, SS_CLOSE);
 			nbr_sock_io(pskd);
+			sockmgr_cleanup_skd(pskd);
 		}
 		nbr_array_destroy(skm->skd_a);
 		skm->skd_a = NULL;
@@ -1684,11 +1703,6 @@ nbr_sock_io(void *ptr)
 	case SS_CLOSE:
 finalize:
 		skd->skm->on_close(sockmgr_make_sock(skd), skd->closereason);
-		if (!skd->skm->proto->dgram) {
-			sock_detach_epoll(g_sock.epfd, skd);
-			skd->skm->proto->close(skd->fd);
-		}
-		sockmgr_free_skd(skd->skm, skd);
 		return NULL;
 	default:
 		SOCK_ERROUT(ERROR,INVAL,"invalid state: %d", sock_get_stat(skd));
@@ -1729,16 +1743,25 @@ nbr_sock_poll()
 			dgsk_accept(sockmgr_from(ev));
 			break;
 		case EPD_SOCK:
-			if ((skd = sock_from(ev))) {
-				skd->events |= events_from(ev);
-			}
+			sock_from(ev)->events |= events_from(ev);
 			break;
 		default:
 			ASSERT(FALSE);
 			break;
 		}
 	}
-	if (!MT_MODE()) {
+	if (MT_MODE()) {
+		if (!g_sock.free) { return; }
+		if (NBR_OK != nbr_mutex_lock(g_sock.lock)) { return; }
+		skd = g_sock.free;
+		g_sock.free = NULL;
+		if (NBR_OK != nbr_mutex_unlock(g_sock.lock)) { ASSERT(FALSE); }
+		while((tmp = skd)) {
+			skd = skd->next;
+			sockmgr_cleanup_skd(tmp);
+		}
+	}
+	else {
 		e = (sockevent_t *)g_sock.eb.buf;
 		le = (sockevent_t *)(g_sock.eb.buf + g_sock.eb.blen);
 		while (e < le) {
@@ -1756,7 +1779,9 @@ nbr_sock_poll()
 			skd = nbr_array_get_first(skm->skd_a);
 			while ((tmp = skd)) {
 				skd = nbr_array_get_next(skm->skd_a, skd);
-				nbr_sock_io(tmp);
+				if (!nbr_sock_io(tmp)) {
+					sockmgr_cleanup_skd(tmp);
+				}
 			}
 		}
 	}

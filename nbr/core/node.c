@@ -60,7 +60,7 @@ enum {
 #define NODE_TIMEO_SEC	(10)	/* 10 sec timeout */
 #define NODE_BCAST_RB	(1024)
 #define NODE_BCAST_WB	(1024)
-#define NODE_BCAST_SOCK	(10)
+#define NODE_BCAST_SOCK	(5)
 
 
 

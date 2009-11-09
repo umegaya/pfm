@@ -87,7 +87,7 @@ nbr_err_get()
 void
 nbr_err_sig(const char *msg)
 {
-	nbr_err_set("sig.c", "", 0, ELV_ERROR, NBR_ESIGNAL, msg);
+	nbr_err_set("sig.c", "", __LINE__, ELV_ERROR, NBR_ESIGNAL, msg);
 }
 
 

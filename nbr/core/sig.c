@@ -118,6 +118,7 @@ NBR_INLINE void
 sig_write_stack_log()
 {
 	char 	buf[256], *ptr;
+	int		skip = 1;
 	FILE	*fp;
 	SIGFUNC	sh_chld;
 	if (access(PSTACK, X_OK) == 0) {
@@ -127,6 +128,14 @@ sig_write_stack_log()
 		sh_chld = signal(SIGCHLD, SIG_IGN);
 		if ((fp = popen(buf, "r"))) {
 			while (!fgets(buf, sizeof(buf), fp)) {
+				if (skip) {
+					char cmd[8];
+					sscanf(buf, "%*p: %6s", cmd);
+					if (strcmp(cmd, "killpg") == 0) {
+						skip = 0;
+					}
+					continue;
+				}
 				if ((ptr = strchr(buf, '\n'))) {
 					*ptr = '\0';
 				}
@@ -138,12 +147,17 @@ sig_write_stack_log()
 	}
 }
 
-
 /* SIGNAL HANDLERS */
 static void
 sig_ignore_handler(int signum)
 {
 	sig_write_signal_log(signum, SIG_IGN);
+}
+
+static void
+sig_noop_handler(int signum)
+{
+	(void)signum;
 }
 
 static void
@@ -181,6 +195,12 @@ sig_stop_handler(int signum)
 	}
 	signal(signum, g_old.func[signum]);
 	raise(signum);	/* default */
+}
+
+NBR_INLINE SIGFUNC
+sig_get_real_handler(SIGFUNC fn)
+{
+	return (fn == SIG_IGN) ? sig_noop_handler : fn;
 }
 
 
@@ -279,7 +299,7 @@ NBR_API int
 nbr_sig_set_handler(int signum, SIGFUNC fn)
 {
 	if (signum <= 32) {
-		g_now.func[signum] = fn;
+		g_now.func[signum] = sig_get_real_handler(fn);
 		return NBR_OK;
 	}
 	return NBR_EINVAL;
@@ -291,7 +311,7 @@ nbr_sig_set_ignore_handler(SIGFUNC fn)
 	g_now.func[SIGCHLD] =
 	g_now.func[SIGCONT] =
 	g_now.func[SIGURG] =
-	g_now.func[SIGWINCH] =	fn;
+	g_now.func[SIGWINCH] =	sig_get_real_handler(fn);
 }
 
 NBR_API void
@@ -309,7 +329,7 @@ nbr_sig_set_intr_handler(SIGFUNC fn)
 	g_now.func[SIGSTKFLT] =
 	g_now.func[SIGIO] =
 	g_now.func[SIGPWR] =
-	g_now.func[SIGUNUSED] =	fn;
+	g_now.func[SIGUNUSED] =	sig_get_real_handler(fn);
 }
 
 NBR_API void
@@ -323,7 +343,7 @@ nbr_sig_set_fault_handler(SIGFUNC fn)
 	g_now.func[SIGSEGV] =
 	g_now.func[SIGTRAP] =
 	g_now.func[SIGXCPU] =
-	g_now.func[SIGXFSZ] =	fn;
+	g_now.func[SIGXFSZ] =	sig_get_real_handler(fn);
 }
 
 NBR_API void
@@ -331,7 +351,7 @@ nbr_sig_set_stop_handler(SIGFUNC fn)
 {
 	g_now.func[SIGTSTP] =
 	g_now.func[SIGTTIN] =
-	g_now.func[SIGTTOU] =	fn;
+	g_now.func[SIGTTOU] =	sig_get_real_handler(fn);
 }
 
 
