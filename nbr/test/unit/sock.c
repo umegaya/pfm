@@ -301,8 +301,9 @@ struct {
 			"plugin/public.key", "plugin/private.key" },
 };
 
-PROTOCOL *proto_regist_by_name(const char *name)
+PROTOCOL *proto_regist_by_name(const char *name, void **proto_p)
 {
+	*proto_p = NULL;
 	if (strcmp(name, "SSL") == 0) {
 		return nbr_proto_ssl(&(g_confs.sslc));
 	}
@@ -334,6 +335,7 @@ nbr_sock_test(int max_thread, int max_client, int exec_dur, int max_query, char 
 	CONFIG c;
 	char buf_thnum[256], buf_exedur[256], buf_max_client[256], buf_max_query[256];
 	struct rlimit rl;
+	void *proto_p;
 
 	nbr_get_default(&c);
 	c.max_thread = max_thread;
@@ -354,7 +356,8 @@ nbr_sock_test(int max_thread, int max_client, int exec_dur, int max_query, char 
 						sizeof(workbuf_t),
 						f_udp ? 10 : 500 * 1000,
 						"0.0.0.0:1978",
-						proto_regist_by_name(proto), 0/* non-expandable */);
+						proto_regist_by_name(proto, &proto_p), proto_p,
+						0/* non-expandable */);
 	if (skm == NULL) {
 		TRACE("fail to create skm\n");
 		return FALSE;

@@ -411,7 +411,9 @@ DSCRPTR
 nbr_osdep_udp_socket(char *addr, SKCONF *cfg)
 {
 	struct sockaddr_in sa;
+	struct ip_mreqn mreq;
 	int alen, reuse;
+	UDPCONF *ucf = cfg->proto_p;
 	DSCRPTR fd = socket(PF_INET, SOCK_DGRAM, 0);
 	if (fd < 0) {
 		OSDEP_ERROUT(ERROR,INVAL,"UDP: create socket fail errno=%d", errno);
@@ -429,13 +431,39 @@ nbr_osdep_udp_socket(char *addr, SKCONF *cfg)
 		}
 		reuse = 1;
 		if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0) {
-			OSDEP_ERROUT(ERROR,BIND,"TCP: setsockopt(reuseaddr) fail errno=%d", errno);
+			OSDEP_ERROUT(ERROR,SOCKOPT,"TCP: setsockopt(reuseaddr) fail errno=%d",
+				errno);
 			goto error;
 		}
 		if (bind(fd, (struct sockaddr *)&sa, alen) < 0) {
 			OSDEP_ERROUT(ERROR,BIND,"UDP: bind fail errno=%d", errno);
 			goto error;
 		}
+	}
+	if (ucf && ucf->mcast_addr) {
+		if (0 == inet_aton(ucf->mcast_addr, &(mreq.imr_multiaddr))) {
+			OSDEP_ERROUT(ERROR,SOCKET,"get mcast addr: (%s)\n", ucf->mcast_addr);
+			goto error;
+		}
+		mreq.imr_address.s_addr = addr ? sa.sin_addr.s_addr : INADDR_ANY;
+		mreq.imr_ifindex = 0;
+		if (setsockopt(fd,
+			IPPROTO_IP, IP_MULTICAST_IF, (char *)&(mreq), sizeof(mreq)) == -1) {
+			OSDEP_ERROUT(ERROR,SOCKOPT,"setmcastif : %d\n", errno);
+			goto error;
+		}
+		if (addr) { /* if bind is done */
+			if (setsockopt(fd,
+				IPPROTO_IP, IP_ADD_MEMBERSHIP, (char *)&(mreq), sizeof(mreq)) == -1) {
+				OSDEP_ERROUT(ERROR,SOCKOPT,"add member ship : %d\n", errno);
+				goto error;
+			}
+		}
+		if (setsockopt(fd,
+			IPPROTO_IP, IP_MULTICAST_TTL, (char *)&(ucf->ttl), sizeof(ucf->ttl)) == -1) {
+			printf("set multicast ttl : %d %d\n", errno, ucf->ttl);
+			goto error;
+		 }
 	}
 	return fd;
 

@@ -286,7 +286,7 @@ static int create_connection(SOCKMGR skm, const char *addr, U8 type)
 //			VTRACE("idx=%u is invalid: create new connection\n", i);
 			ASSERT(sent[i] == 0);
 			sent[i] = 0;
-			ska[i] = nbr_sockmgr_connect(skm, addr);
+			ska[i] = nbr_sockmgr_connect(skm, addr, NULL);
 			if (nbr_sock_valid(ska[i])) {
 				continue;
 			}
@@ -317,8 +317,9 @@ struct {
 			"plugin/public.key", "plugin/private.key" },
 };
 
-PROTOCOL *proto_regist_by_name(const char *name)
+PROTOCOL *proto_regist_by_name(const char *name, void **proto_pp)
 {
+	*proto_pp = NULL;
 	if (strcmp(name, "SSL") == 0) {
 		return nbr_proto_ssl(&(g_confs.sslc));
 	}
@@ -339,6 +340,7 @@ main(int argc, char *argv[], char *envp[])
 	SOCK last;
 	time_t tm_last_send_start;
 	PROTOCOL *prt;
+	void *prt_p;
 	struct rlimit rl;
 	if (argc < 4) {
 		TRACE("argc = %u\n", argc);
@@ -387,7 +389,7 @@ main(int argc, char *argv[], char *envp[])
 		TRACE("alloc fail2: N_CLIENT=%d\n", N_CLIENT);
 		return -10;
 	}
-	prt = proto_regist_by_name(argv[4]);
+	prt = proto_regist_by_name(argv[4], &prt_p);
 	if (!prt) {
 		TRACE("protocol registration fail %s\n", argv[4]);
 		return -10;
@@ -402,7 +404,8 @@ main(int argc, char *argv[], char *envp[])
 						sizeof(workbuf_t),
 						f_udp ? 10 : 600,
 						NULL,
-						prt, 0/* non-expandable */);
+						prt, prt_p,
+						0/* non-expandable */);
 	if (skm == NULL) {
 		TRACE("fail to create skm\n");
 		return -3;
@@ -456,7 +459,7 @@ main(int argc, char *argv[], char *envp[])
 		}
 	}
 	printf("###### sending last result...\n");
-	last = nbr_sockmgr_connect(skm, argv[0]);
+	last = nbr_sockmgr_connect(skm, argv[0], NULL);
 	tm_last_send_start = time(NULL);
 	while(1) {
 		if (nbr_sock_writable(last) > 0) {

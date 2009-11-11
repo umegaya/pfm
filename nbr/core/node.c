@@ -45,7 +45,6 @@ enum {
 	NST_M_RECEIVEDATA_FROM_MASTER,
 	NST_M_CONNECTING_ALL_NODE,
 	NST_M_CONNECTED_TO_ALL_NODE,
-	NST_M_ESTABLISHED = NST_M_CONNECTED_TO_ALL_NODE,
 	/* servant node status */
 	NST_S_START,
 	NST_S_MULTICAST_TO_FIND,
@@ -54,6 +53,8 @@ enum {
 	NST_S_CONNECTING_TO_SECONDARY,
 	NST_S_CONNECTED_TO_SECONDARY,
 	NST_S_DETECT_MASTER_DOWN,
+	/* establish mark */
+	NST_M_ESTABLISHED = NST_M_CONNECTED_TO_ALL_NODE,
 	NST_S_ESTABLISHED = NST_S_CONNECTED_TO_MASTER,
 };
 
@@ -71,8 +72,7 @@ typedef struct nodedata {
 	struct nodedata	*next;
 	SOCK 		conn;		/* connection to node */
 	U8			addr[32];
-	U16			addrlen;
-	U16			padd;
+	U8			addrlen, padd[3];
 	UTIME		mtime;
 }	nodedata_t;
 
@@ -263,6 +263,7 @@ int
 nbr_node_init(int bcast_port, int max_node, int multiplex)
 {
 	char addr[32];
+	UDPCONF ucf = { "239.192.1.2", 1 };
 	g_node.multiplex = multiplex;
 	if (!(g_node.node_a = nbr_array_create(max_node, sizeof(node_t), 0))) {
 		NODE_ERROUT(ERROR,EXPIRE,"node: node_t array\n");
@@ -281,7 +282,7 @@ nbr_node_init(int bcast_port, int max_node, int multiplex)
 	if (!(g_node.bcast_skm = nbr_sockmgr_create(
 						NODE_BCAST_RB, NODE_BCAST_WB,
 						NODE_BCAST_SOCK, 0, NODE_TIMEO_SEC,
-						addr, nbr_proto_udp(), NBR_PRIM_EXPANDABLE))) {
+						addr, nbr_proto_udp(), &ucf, NBR_PRIM_EXPANDABLE))) {
 		NODE_ERROUT(ERROR,EXPIRE,"create servant skm\n");
 		goto bad;
 	}
@@ -320,6 +321,7 @@ nbr_node_fin()
 		g_node.nodedata_a = NULL;
 	}
 	g_node.bcast_skm = NULL;
+	g_node.bcast_port = 0;
 }
 
 void
@@ -336,7 +338,7 @@ nbr_node_poll()
 
 
 NBR_API NODE
-nbr_node_create(U16 type_id, int nrb, int nwb, int max_servant)
+nbr_node_create(U16 type_id, int mstr_rb, int mstr_wb, int max_servant)
 {
 	char addr[32];
 	node_t *nd;
@@ -347,15 +349,25 @@ nbr_node_create(U16 type_id, int nrb, int nwb, int max_servant)
 		goto bad;
 	}
 	nd->type_id = type_id;
-	if (max_servant <= 0) {
+	if (max_servant <= 0) {	/* means servant node */
 		nd->state = NST_S_START;
 		nd->master_skm = NULL;
+		/* swap nrb and nwb (because master nrb = servant nwb and vice versa) */
+		if (!(nd->servant_skm = nbr_sockmgr_create(mstr_wb, mstr_rb,
+							g_node.multiplex, 0,
+							NODE_TIMEO_SEC, NULL, nbr_proto_tcp(), NULL,
+							NBR_PRIM_EXPANDABLE))) {
+			NODE_ERROUT(ERROR,EXPIRE,"create servant skm\n");
+			goto bad;
+		}
 	}
 	else {
 		nd->state = NST_M_START;
 		nbr_str_printf(addr, sizeof(addr) - 1, "0.0.0.0:%u", nd->type_id);
-		if (!(nd->master_skm = nbr_sockmgr_create(nrb, nwb, max_servant, 0,
-							NODE_TIMEO_SEC, addr, nbr_proto_tcp(), NBR_PRIM_EXPANDABLE))) {
+		if (!(nd->master_skm = nbr_sockmgr_create(mstr_rb, mstr_wb,
+							max_servant, 0,
+							NODE_TIMEO_SEC, addr, nbr_proto_tcp(), NULL,
+							NBR_PRIM_EXPANDABLE))) {
 			NODE_ERROUT(ERROR,EXPIRE,"create master skm\n");
 			goto bad;
 		}
@@ -366,12 +378,14 @@ nbr_node_create(U16 type_id, int nrb, int nwb, int max_servant)
 			master_node_closewatcher,
 			master_node_parser,
 			master_node_event_handler);
-	}
-	/* swap nrb and nwb (because master nrb = servant nwb and vice versa) */
-	if (!(nd->servant_skm = nbr_sockmgr_create(nwb, nrb, g_node.multiplex, 0,
-						NODE_TIMEO_SEC, NULL, nbr_proto_tcp(), NBR_PRIM_EXPANDABLE))) {
-		NODE_ERROUT(ERROR,EXPIRE,"create servant skm\n");
-		goto bad;
+		/* swap nrb and nwb (because master nrb = servant nwb and vice versa) */
+		if (!(nd->servant_skm = nbr_sockmgr_create(mstr_wb, mstr_rb,
+							NODE_BCAST_SOCK, 0,
+							NODE_TIMEO_SEC, NULL, nbr_proto_tcp(), NULL,
+							NBR_PRIM_EXPANDABLE))) {
+			NODE_ERROUT(ERROR,EXPIRE,"create servant skm\n");
+			goto bad;
+		}
 	}
 	/* setup servant callbacks */
 	nbr_sockmgr_set_callback(nd->servant_skm,

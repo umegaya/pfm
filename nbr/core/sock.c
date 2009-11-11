@@ -1023,11 +1023,12 @@ nbr_sockmgr_create(
 			int timeout_sec,
 			char *addr,
 			PROTOCOL *proto,
+			void *proto_p,
 			int option)
 {
 	int fd_max;
 	skmdata_t *skm;
-	SKCONF skc = {timeout_sec, nrb, nwb};
+	SKCONF skc = {timeout_sec, nrb, nwb, proto_p};
 	if (!(skm = (skmdata_t *)nbr_array_alloc(g_sock.skm_a))) {
 		nbr_mem_zero(skm, sizeof(*skm));
 		skm->fd = -1;
@@ -1052,7 +1053,6 @@ nbr_sockmgr_create(
 	skm->timeout = TO_UTIME(timeout_sec);
 	skm->skd_s = NULL;
 	/* create mempool */
-	option |= NBR_PRIM_THREADSAFE;	/* SOCKMGR needs thread safety */
 	if (!(skm->skd_a = nbr_array_create(
 		max_sock, sock_get_size(workmem), option))) {
 		SOCK_ERROUT(ERROR,INTERNAL,"array_create: skd: %d", max_sock);
@@ -1141,7 +1141,7 @@ nbr_sockmgr_destroy(SOCKMGR s)
 }
 
 NBR_API SOCK
-nbr_sockmgr_connect(SOCKMGR s, const char *address)
+nbr_sockmgr_connect(SOCKMGR s, const char *address, void *proto_p)
 {
 	ASSERT(s);
 	skmdata_t *skm = s;
@@ -1149,7 +1149,7 @@ nbr_sockmgr_connect(SOCKMGR s, const char *address)
 	SOCK sk;
 	char addr[256];
 	int addrlen = sizeof(addr), r;
-	SKCONF skc = {skm->timeout, skm->nrb, skm->nwb };
+	SKCONF skc = {skm->timeout, skm->nrb, skm->nwb, proto_p };
 
 	if (skm->proto->str2addr(address, addr, &addrlen) < 0) {
 		SOCK_ERROUT(ERROR,HOSTBYNAME,"s2a: %s,errno=%d", address,errno);

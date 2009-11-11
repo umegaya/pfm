@@ -118,16 +118,25 @@ typedef struct	nbr_nioconf
 	int epoll_timeout_ms;
 	int job_idle_sleep_us;
 }							NIOCONF;
-typedef struct 	nbr_sockconf
-{
-	int timeout;
-	int rblen, wblen;
-}							SKCONF;
 typedef struct 	nbr_nodeconf
 {
 	int	max_node, multiplex;
 	int bcast_port;
 }							NODECONF;
+/* this config is given to proto modules */
+typedef struct 	nbr_sockconf
+{
+	int timeout;
+	int rblen, wblen;
+	void *proto_p;
+}							SKCONF;
+/* these proto conf for proto_p parameter for
+ * nbr_sockmgr_create / nbr_sockmgr_connect */
+typedef struct 	nbr_udpconf
+{
+	char *mcast_addr;
+	int	ttl;
+}							UDPCONF;
 typedef struct	nbr_init_t
 {
 	int	max_array;
@@ -262,9 +271,10 @@ NBR_API SOCKMGR	nbr_sockmgr_create(int nrb, int nwb,
 					int timeout_sec,
 					char *addr,
 					PROTOCOL *proto,
+					void *proto_p,
 					int option);
 NBR_API int		nbr_sockmgr_destroy(SOCKMGR s);
-NBR_API SOCK	nbr_sockmgr_connect(SOCKMGR s, const char *address);
+NBR_API SOCK	nbr_sockmgr_connect(SOCKMGR s, const char *address, void *proto_p);
 NBR_API int		nbr_sockmgr_bcast(SOCKMGR s, const char *address, char *data, int len);
 NBR_API int 	nbr_sock_close(SOCK s);
 NBR_API int		nbr_sock_event(SOCK s, char *p, int len);
