@@ -66,6 +66,7 @@ enum {
 	NBR_EDUP		= -27,
 	NBR_ERLIMIT		= -28,
 	NBR_ESIGNAL		= -29,
+	NBR_ESEND		= -30,
 };
 
 enum {
@@ -103,7 +104,7 @@ typedef void				*THREAD;
 typedef void				*THPOOL;
 typedef void				*MUTEX;
 typedef void				*RWLOCK;
-typedef void				*NODE;
+typedef void				*CLST;
 typedef U32					THRID;
 /* system type */
 typedef U64					UTIME;
@@ -301,12 +302,12 @@ NBR_API char	*nbr_sock_rparser_text(char *p, int *len, int *rlen);
 NBR_API char	*nbr_sock_rparser_raw(char *p, int *len, int *rlen);
 
 
-/* node.c */
-NBR_API NODE	nbr_node_create(U16 type_id, int nrb, int nwb, int max_servant);
-NBR_API void	nbr_node_destroy(NODE nd);
-NBR_API int		nbr_node_is_master(NODE nd);
-NBR_API int		nbr_node_is_ready(NODE nd);
-NBR_API int 	nbr_node_send_master(NODE nd, char *data, int len);
+/* clst.c */
+NBR_API CLST	nbr_clst_create(U16 type_id, int nrb, int nwb, int max_servant);
+NBR_API void	nbr_clst_destroy(CLST nd);
+NBR_API int		nbr_clst_is_master(CLST nd);
+NBR_API int		nbr_clst_is_ready(CLST nd);
+NBR_API int 	nbr_clst_send_master(CLST nd, char *data, int len);
 
 
 /* sig.c */

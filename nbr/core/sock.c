@@ -173,7 +173,7 @@ static struct {
 					NULL,
 					0, 0, 0, 0,
 					{ NULL, 0, 0 },
-					-1,
+					INVALID_FD,
 					{0, 0}
 };
 
@@ -251,7 +251,7 @@ sockmgr_alloc_skd(skmdata_t *skm, char *addr, int addrlen)
 	skd->skm = (SOCKMGR)skm;
 	skd->serial = sockmgr_new_serial(skm);
 	skd->stat = SS_INIT;
-	skd->fd = -1;
+	skd->fd = INVALID_FD;
 	skd->next = NULL;
 	skd->thrd = NULL;
 	skd->closereason = CLOSED_BY_INVALID;
@@ -611,8 +611,7 @@ sockmgr_attach_epoll(int epfd, skmdata_t *skm)
 {
 	struct epoll_event e;
 	e.events = EPOLLIN;
-	//e.data.ptr = &(skm->reg);
-	e.data.u64 = (U64)(((U32)&(skm->reg)));
+	e.data.ptr = &(skm->reg);
 	return epoll_ctl(epfd, EPOLL_CTL_ADD, sockmgr_get_realfd(skm), &e);
 }
 
@@ -989,9 +988,9 @@ nbr_sock_fin()
 		g_sock.skm_a = NULL;
 	}
 	g_sock.free = NULL;
-	if (g_sock.epfd >= 0) {
+	if (g_sock.epfd != INVALID_FD) {
 		nbr_epoll_destroy(g_sock.epfd);
-		g_sock.epfd = -1;
+		g_sock.epfd = INVALID_FD;
 	}
 	if (g_sock.eb.buf) {
 		sockbuf_free(&(g_sock.eb));
@@ -1031,14 +1030,14 @@ nbr_sockmgr_create(
 	SKCONF skc = {timeout_sec, nrb, nwb, proto_p};
 	if (!(skm = (skmdata_t *)nbr_array_alloc(g_sock.skm_a))) {
 		nbr_mem_zero(skm, sizeof(*skm));
-		skm->fd = -1;
+		skm->fd = INVALID_FD;
 		goto bad;
 	}
 	if (!proto) {
 		proto = nbr_proto_tcp();	/* default */
 	}
 	nbr_mem_zero(skm, sizeof(*skm));
-	skm->fd	= -1;
+	skm->fd	= INVALID_FD;
 	fd_max = (g_sock.reserve_fds + max_sock + 16);	/* +16 for misc work (eg. gethostbyname) */
 	if ((g_sock.total_fds = sockmgr_expand_maxfd(fd_max)) < 0) {
 		SOCK_ERROUT(ERROR,INTERNAL,"expand_maxfd: to %d(%d)",
@@ -1132,10 +1131,11 @@ nbr_sockmgr_destroy(SOCKMGR s)
 		nbr_array_destroy(skm->wb_a);
 		skm->wb_a = NULL;
 	}
-	if (skm->fd != -1) {
+	if (skm->fd != INVALID_FD) {
 		sockmgr_detach_epoll(g_sock.epfd, skm);
 		ASSERT(skm->proto);
 		skm->proto->close(skm->fd);
+		skm->fd = INVALID_FD;
 	}
 	return nbr_array_free(g_sock.skm_a, skm);
 }

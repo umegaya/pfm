@@ -60,10 +60,10 @@ NBR_INLINE U64 htonll(U64 n) { return (((U64)htonl(n)) << 32) + htonl(n >> 32); 
 #define	POP_16(i)				{U16 __ts;  POP_LENGTHCHECK(__ts); U32 _i = 0; do{((char *)(&__ts))[_i] = _data[_i];}while(++_i < 2); i = ntohs(__ts); _data+=sizeof(__ts); _ofs+=sizeof(__ts);}
 #define	POP_32(i)				{U32 __tl;  POP_LENGTHCHECK(__tl); U32 _i = 0; do{((char *)(&__tl))[_i] = _data[_i];}while(++_i < 4); i = ntohl(__tl); _data+=sizeof(__tl); _ofs+=sizeof(__tl);}
 #define	POP_64(i)				{U64 __tll; POP_LENGTHCHECK(__tll);U32 _i = 0; do{((char *)(&__tll))[_i] = _data[_i];}while(++_i < 8); i = ntohll(__tll); _data+=sizeof(__tll); _ofs+=sizeof(__tll);}
-#define POP_8A(ia, ialen)		{U16 alen; POP_U16(alen); if (alen > 0) { if ((S32)alen>(S32)(ialen)) {__RETURN -3;} if ((_ofs + alen) > _len) {__RETURN -1;} memcpy((ia),_data,alen); _data+=alen; _ofs+=alen; ialen=alen;}}
-#define	POP_16A(ia, ialen)		{U32 __ii;U32 __max_len=ialen; POP_U16(ialen); if (ialen>__max_len) {__RETURN -3;} for (__ii = 0 ; __ii < ialen ; __ii++) { POP_U16(ia[__ii]); }}
-#define	POP_32A(ia, ialen)		{U32 __ii;U32 __max_len=ialen; POP_U16(ialen); if (ialen>__max_len) {__RETURN -3;} for (__ii = 0 ; __ii < ialen ; __ii++) { POP_U32(ia[__ii]); }}
-#define	POP_64A(ia, ialen)		{U32 __ii;U32 __max_len=ialen; POP_U16(ialen); if (ialen>__max_len) {__RETURN -3;} for (__ii = 0 ; __ii < ialen ; __ii++) { POP_U64(ia[__ii]); }}
+#define POP_8A(ia, ialen)		{U16 __alen; POP_16(__alen); if (__alen > 0) { if ((S32)__alen>(S32)(ialen)) {__RETURN -3;} if ((_ofs + __alen) > _len) {__RETURN -1;} memcpy((ia),_data,__alen); _data+=__alen; _ofs+=__alen; ialen=__alen;}}
+#define	POP_16A(ia, ialen)		{U32 __ii;U32 __max_len=ialen; POP_16(ialen); if (ialen>__max_len) {__RETURN -3;} for (__ii = 0 ; __ii < ialen ; __ii++) { POP_U16(ia[__ii]); }}
+#define	POP_32A(ia, ialen)		{U32 __ii;U32 __max_len=ialen; POP_16(ialen); if (ialen>__max_len) {__RETURN -3;} for (__ii = 0 ; __ii < ialen ; __ii++) { POP_U32(ia[__ii]); }}
+#define	POP_64A(ia, ialen)		{U32 __ii;U32 __max_len=ialen; POP_16(ialen); if (ialen>__max_len) {__RETURN -3;} for (__ii = 0 ; __ii < ialen ; __ii++) { POP_U64(ia[__ii]); }}
 #define	POP_STR(buf, buf_len)	{char *__strt=(char *)buf; int __i=0; while (*_data!='\0') {*__strt=*_data; _data++; __strt++; _ofs++; __i++; POP_LENGTHCHECK(char); if (buf_len<=__i+1) {break;}} *__strt='\0';_ofs++;_data++;}
 #define POP_MEM(buf, buf_len)   {if ((_ofs + (int)buf_len) > _len) { __RETURN -1; } memcpy(buf, _data, buf_len); _data += buf_len; _ofs += buf_len; }
 
