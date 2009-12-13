@@ -106,6 +106,7 @@ typedef struct	sockmgrdata
 	UTIME		timeout;	/* timeout (usec) */
 	PROTOCOL	*proto;		/* protocol interface */
 	skmconf_t	cf;			/* configuration */
+	void		*data;		/* user data */
 	int			(*on_accept)		(SOCK);					/* accept watcher */
 	int			(*on_close)			(SOCK, int);			/* close watcher */
 	char		*(*record_parser)	(char *, int *, int*);	/* protocol parcer */
@@ -874,8 +875,8 @@ sock_process_job(THREAD thrd)
 			if (NBR_OK == nbr_mutex_lock(g_sock.lock)) {
 				last->next = g_sock.free;
 				g_sock.free = j->free;
-				if (NBR_OK != nbr_mutex_unlock(g_sock.lock)) { break; }
 				j->free = NULL;
+				if (NBR_OK != nbr_mutex_unlock(g_sock.lock)) { break; }
 			}
 		}
 	}
@@ -1012,6 +1013,13 @@ nbr_sock_fin()
 	}
 	g_sock.total_fds = 0;
 	return NBR_OK;
+}
+
+DSCRPTR
+nbr_sockmgr_get_listenfd(SOCKMGR s)
+{
+	skmdata_t *skm = s;
+	return skm->fd;
 }
 
 NBR_API SOCKMGR
@@ -1188,24 +1196,45 @@ bad:
 }
 
 NBR_API int
-nbr_sockmgr_bcast(SOCKMGR s, const char *address, char *data, int len)
+nbr_sockmgr_mcast(SOCKMGR s, const char *address, char *data, int len)
 {
 	char addr[256];
 	int addrlen = sizeof(addr);
 	skmdata_t *skm = s;
 	if (!skm->proto->dgram || skm->fd != INVALID_FD) {
-		SOCK_ERROUT(ERROR,INVAL,"bcast: %s,%d,%d", address,skm->proto->dgram,skm->fd);
+		SOCK_ERROUT(ERROR,INVAL,"mcast: %s,%d,%d", address,skm->proto->dgram,skm->fd);
 		return NBR_EINVAL;
 	}
 	if (skm->proto->str2addr(address, addr, &addrlen) < 0) {
-		SOCK_ERROUT(ERROR,HOSTBYNAME,"bcast: s2a: %s,errno=%d", address,errno);
+		SOCK_ERROUT(ERROR,HOSTBYNAME,"mcast: s2a: %s,errno=%d", address,errno);
 		return NBR_EHOSTBYNAME;
 	}
 	if (skm->proto->send(skm->fd, data, len, addr, addrlen) < 0) {
-		SOCK_ERROUT(ERROR,SOCKET,"bcast: s2a: %s,errno=%d", address,errno);
+		SOCK_ERROUT(ERROR,SOCKET,"mcast: s2a: %s,errno=%d", address,errno);
 		return NBR_ESOCKET;
 	}
 	return NBR_OK;
+}
+
+NBR_API void
+nbr_sockmgr_set_data(SOCKMGR s, void *p)
+{
+	skmdata_t *skm = s;
+	skm->data = p;
+}
+
+NBR_API void*
+nbr_sockmgr_get_data(SOCKMGR s, void *p)
+{
+	skmdata_t *skm = s;
+	return skm->data;
+}
+
+NBR_API SOCKMGR
+nbr_sock_get_mgr(SOCK s)
+{
+	sockdata_t *skd = s.p;
+	return skd->skm;
 }
 
 

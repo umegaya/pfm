@@ -404,6 +404,33 @@ nbr_osdep_tcp_send(DSCRPTR fd, const void *data, size_t len, int flag)
 	return send(fd, data, len, flag);
 }
 
+int
+nbr_osdep_tcp_addr_from_fd(DSCRPTR fd, char *addr, int alen)
+{
+#define MAX_INTERFACE (16)
+	struct ifconf	ifc;
+	struct ifreq	iflist[MAX_INTERFACE];
+	char ifname[IFNAMSIX]; int i;
+	if (getsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, ifname, sizeof(ifname)) < 0) {
+		OSDEP_ERROUT(ERROR,SOCKOPT,"getsockopt (bindtodevice) errno=%d", errno);
+		goto error;
+	}
+	ifc.ifc_len = MAX_INTERFACE;
+	ifc.ifc_req = iflist;
+	if ((ret = ioctl(fd, SIOCGIFCONF, &ifc)) < 0) {
+		OSDEP_ERROUT(INFO,IOCTL,"ioctl fail: ret=%d,errno=%d",ret,errno);
+		goto error;
+	}
+	for (i = 0; i < ifc.ifc_len; i++) {
+		if (nbr_str_cmp(ifc.ifc_req[i].ifr_name, ifname, IFNAMSIX) == 0) {
+			return nbr_str_copy(addr, alen, ifc.ifc_req[i].ifr_addr, alen);
+		}
+	}
+	return NBR_ENOTFOUND;
+error:
+	return LASTERR;
+}
+
 
 
 /* UDP related */

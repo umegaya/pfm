@@ -62,6 +62,7 @@ DSCRPTR	nbr_osdep_tcp_accept(DSCRPTR fd, void *addr, int *len, SKCONF *cfg);
 int		nbr_osdep_tcp_close(DSCRPTR fd);
 int		nbr_osdep_tcp_recv(DSCRPTR fd, void *data, size_t len, int);
 int		nbr_osdep_tcp_send(DSCRPTR fd, const void *data, size_t len, int);
+int 	nbr_osdep_tcp_addr_from_fd(DSCRPTR fd, char *addr, int alen);
 
 /* UDP related */
 #define nbr_osdep_udp_str2addr	nbr_osdep_tcp_str2addr

@@ -25,7 +25,7 @@
 #include "osdep.h"
 #include "thread.h"
 #include "sock.h"
-#include "clst.h"
+#include "cluster.h"
 #include "sig.h"
 
 
@@ -65,7 +65,7 @@ nbr_init(CONFIG *c)
 	INIT_OR_DIE(r, nbr_proto_init(c->max_proto));
 	INIT_OR_DIE(r, nbr_sock_init(c->max_sockmgr,
 		c->max_nfd, c->max_thread, c->sockbuf_size));
-	INIT_OR_DIE(r, nbr_clst_init(c->ndc.bcast_port,
+	INIT_OR_DIE(r, nbr_cluster_init(c->ndc.mcast_port,
 		c->ndc.max_node, c->ndc.multiplex));
 	nbr_sock_set_nioconf(c->ioc);
 	return NBR_OK;
@@ -87,13 +87,13 @@ nbr_get_default(CONFIG *c)
 	/* NODECONF */
 	c->ndc.max_node = 2;
 	c->ndc.multiplex = 2;
-	c->ndc.bcast_port = 8888;
+	c->ndc.mcast_port = 8888;
 }
 
 NBR_API void
 nbr_fin()
 {
-	nbr_clst_fin();
+	nbr_cluster_fin();
 	nbr_sock_fin();
 	nbr_search_fin();
 	nbr_thread_fin();

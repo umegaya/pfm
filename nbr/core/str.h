@@ -90,6 +90,6 @@ nbr_str_length(const char *str, size_t max)
 
 #define nbr_str_printf(__p, __l, __fmt, ...)	\
 	snprintf(__p, __l, __fmt, __VA_ARGS__);
-
+#define nbr_str_dup	strdup
 
 #endif//__STR_H__

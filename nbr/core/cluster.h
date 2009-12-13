@@ -19,8 +19,8 @@
 #if !defined(__CLST_H__)
 #define __CLST_H__
 
-int nbr_clst_init();
-void nbr_clst_poll();
-void nbr_clst_fin();
+int nbr_cluster_init();
+void nbr_cluster_poll();
+void nbr_cluster_fin();
 
 #endif

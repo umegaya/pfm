@@ -67,6 +67,8 @@ enum {
 	NBR_ERLIMIT		= -28,
 	NBR_ESIGNAL		= -29,
 	NBR_ESEND		= -30,
+	NBR_ECBFAIL		= -31,
+	NBR_ECONFIGURE	= -32,
 };
 
 enum {
@@ -104,7 +106,8 @@ typedef void				*THREAD;
 typedef void				*THPOOL;
 typedef void				*MUTEX;
 typedef void				*RWLOCK;
-typedef void				*CLST;
+typedef void				*CLUSTER;
+typedef void				*NODE;
 typedef U32					THRID;
 /* system type */
 typedef U64					UTIME;
@@ -122,7 +125,7 @@ typedef struct	nbr_nioconf
 typedef struct 	nbr_nodeconf
 {
 	int	max_node, multiplex;
-	int bcast_port;
+	int mcast_port;
 }							NODECONF;
 /* this config is given to proto modules */
 typedef struct 	nbr_sockconf
@@ -174,6 +177,16 @@ typedef struct	nbr_proto_t
 	int		(*recv) 	(DSCRPTR, void*, size_t, int, ...);
 	int		(*send)		(DSCRPTR, const void*, size_t, ...);
 }							PROTOCOL;
+/* event for node data */
+typedef enum {
+	NDEV_INVALID,
+	NDEV_GET_DATA,	/* system request for packing node data
+					 to send it to another node */
+	NDEV_PUT_DATA,	/* system request for unpacking node data
+					 to update/create local node data */
+	NDEV_DELETE,	/* node is delete (by linkdead or something) */
+} NDEVENT;
+
 
 
 /* nbr.c */
@@ -276,7 +289,10 @@ NBR_API SOCKMGR	nbr_sockmgr_create(int nrb, int nwb,
 					int option);
 NBR_API int		nbr_sockmgr_destroy(SOCKMGR s);
 NBR_API SOCK	nbr_sockmgr_connect(SOCKMGR s, const char *address, void *proto_p);
-NBR_API int		nbr_sockmgr_bcast(SOCKMGR s, const char *address, char *data, int len);
+NBR_API int		nbr_sockmgr_mcast(SOCKMGR s, const char *address, char *data, int len);
+NBR_API void	nbr_sockmgr_set_data(SOCKMGR s, void *p);
+NBR_API void	*nbr_sockmgr_get_data(SOCKMGR s, void *p);
+NBR_API SOCKMGR	nbr_sock_get_mgr(SOCK s);
 NBR_API int 	nbr_sock_close(SOCK s);
 NBR_API int		nbr_sock_event(SOCK s, char *p, int len);
 NBR_API void	nbr_sock_clear(SOCK *p);
@@ -302,12 +318,14 @@ NBR_API char	*nbr_sock_rparser_text(char *p, int *len, int *rlen);
 NBR_API char	*nbr_sock_rparser_raw(char *p, int *len, int *rlen);
 
 
-/* clst.c */
-NBR_API CLST	nbr_clst_create(U16 type_id, int nrb, int nwb, int max_servant);
-NBR_API void	nbr_clst_destroy(CLST nd);
-NBR_API int		nbr_clst_is_master(CLST nd);
-NBR_API int		nbr_clst_is_ready(CLST nd);
-NBR_API int 	nbr_clst_send_master(CLST nd, char *data, int len);
+/* cluster.c */
+NBR_API CLUSTER	nbr_cluster_create(U16 clst_id, int max_servant, int nrb, int nwb,
+					void *nodedata, int ndlen,
+					int (*proc)(void*, NDEVENT, char *, int));
+NBR_API void	nbr_cluster_destroy(CLUSTER c);
+NBR_API int		nbr_cluster_is_master(CLUSTER c);
+NBR_API int		nbr_cluster_is_ready(CLUSTER c);
+NBR_API int 	nbr_cluster_send_master(CLUSTER c, char *data, int len);
 
 
 /* sig.c */
