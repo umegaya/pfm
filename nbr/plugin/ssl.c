@@ -186,7 +186,7 @@ nbr_ssl_fd(DSCRPTR fd)
 }
 
 DSCRPTR
-nbr_ssl_socket(char *addr, SKCONF *cfg)
+nbr_ssl_socket(const char *addr, SKCONF *cfg)
 {
 	sslfd_t *sfd = nbr_array_alloc(g_ssl.socks);
 	if (!sfd) {

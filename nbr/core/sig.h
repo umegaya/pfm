@@ -19,9 +19,6 @@
 #if !defined(__SIG_H__)
 #define __SIG_H__
 
-#include <signal.h>
-#include <string.h>
-
 int nbr_sig_init();
 void nbr_sig_fin();
 

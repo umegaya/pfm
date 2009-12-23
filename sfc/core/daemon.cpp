@@ -1,4 +1,6 @@
 #include "sfc.hpp"
+#include <stdarg.h>
+#include <signal.h>
 
 U32 daemon::m_sigflag = 0;
 
@@ -12,7 +14,7 @@ int
 daemon::alive()
 {
 	if (m_sigflag == 0) { return 1; }
-	for (int i = 0; i < sizeof(m_sigflag) * 8; i++) {
+	for (int i = 0; i < (int)(sizeof(m_sigflag) * 8); i++) {
 		if ((m_sigflag & (1 << i)) != 0) {
 			if (on_signal(i) < 0) {
 				return 0;
@@ -29,11 +31,11 @@ daemon::run()
 	while(alive()) {
 		nbr_poll();
 		UTIME ut = nbr_clock();
-		sslist::iterator p = m_sl.begin();
+		smap::iterator p = m_sl.begin();
 		for (; p != m_sl.end(); p = m_sl.next(p)) {
 			if ((ut - p->m_last_poll) > p->cfg().m_taskspan) {
 				p->m_last_poll = ut;
-				p->poll();
+				p->poll(ut);
 			}
 		}
 	}
@@ -42,16 +44,16 @@ daemon::run()
 }
 
 int
-daemon::init(int argc, char *argv[], config &list[], int n_list)
+daemon::init(int argc, char *argv[], config *list[], int n_list)
 {
 	int r;
-	CONFIG c;
-	nbr_get_default(&c);
-	if ((r = initlib(&c)) < 0) {
+	CONFIG libcfg;
+	nbr_get_default(&libcfg);
+	if ((r = initlib(libcfg)) < 0) {
 		log(LOG_ERROR, "fail to library parameter (%d)\n", r);
 		return r;
 	}
-	if ((r = nbr_init(&c)) < 0) {
+	if ((r = nbr_init(&libcfg)) < 0) {
 		log(LOG_ERROR, "fail to init library(%d)\n", r);
 		return r;
 	}
@@ -59,39 +61,39 @@ daemon::init(int argc, char *argv[], config &list[], int n_list)
 		log(LOG_ERROR, "config list too big? (%d)\n", m_cl.size());
 		return NBR_EEXPIRE;
 	}
-	cfglist::iterator c;
+	cmap::iterator c;
 	for (int i = 0; i < n_list; i++) {
 		config *cfg;
-		if (!(cfg = create_config(list[i].m_name))) {
-			log(LOG_ERROR, "%s: fail to create config\n", p->m_name);
+		if (!(cfg = create_config(list[i]->m_name))) {
+			log(LOG_ERROR, "%s: fail to create config\n", list[i]->m_name);
 			return NBR_EINVAL;
 		}
-		cfg->set(list[i]);
-		p = m_cl.insert(cfg, list[i].m_name);
-		if (p == m_cl.end()) {
+		cfg->set(*list[i]);
+		c = m_cl.insert(cfg, list[i]->m_name);
+		if (c == m_cl.end()) {
 			return NBR_EEXPIRE;
 		}
 	}
 	if ((r = read_config(argc, argv)) < 0) {
-		log(LOG_ERROR, "read_config fail\n");
+		log(LOG_ERROR, "read_config fail (%d)\n", r);
 		return NBR_ECONFIGURE;
 	}
 	if (!m_sl.init(m_cl.size(), m_cl.size())) {
 		log(LOG_ERROR, "session factory list too big? (%d)\n", m_cl.size());
 		return NBR_EEXPIRE;
 	}
-	sslist::iterator s;
-	for (p = m_cl.begin(); p != m_cl.end(); p = m_cl.next(p)) {
+	smap::iterator s;
+	for (c = m_cl.begin(); c != m_cl.end(); c = m_cl.next(c)) {
 		session::factory *f;
-		if (!(f = create_factory(p->m_name))) {
-			log(LOG_ERROR, "%s: fail to create factory\n", p->m_name);
+		if (!(f = create_factory(c->m_name))) {
+			log(LOG_ERROR, "%s: fail to create factory\n", c->m_name);
 			return NBR_EINVAL;
 		}
-		if ((r = f->init(*p)) < 0) {
-			log(LOG_ERROR, "%s: init error %d\n", p->m_name, r);
+		if ((r = f->init(*c)) < 0) {
+			log(LOG_ERROR, "%s: init error %d\n", c->m_name, r);
 			return r;
 		}
-		s = m_sl.insert(f, p->m_name);
+		s = m_sl.insert(f, c->m_name);
 		if (s == m_sl.end()) {
 			return NBR_EEXPIRE;
 		}
@@ -105,14 +107,14 @@ daemon::init(int argc, char *argv[], config &list[], int n_list)
 void
 daemon::fin()
 {
-	sslist::iterator s;
+	smap::iterator s;
 	for (s = m_sl.begin(); s != m_sl.end(); s = m_sl.next(s)) {
 		s->fin();
 	}
 	m_sl.fin();
-	cfglist::iterator c;
+	cmap::iterator c;
 	for (c = m_cl.begin(); c != m_cl.end(); c = m_cl.next(c)) {
-		c->~config();
+		c->fin();
 	}
 	m_cl.fin();
 	nbr_fin();
@@ -124,8 +126,8 @@ daemon::log(int prio, const char *fmt, ...)
 	char buff[4096];
 
 	va_list v;
-	va_args(v, fmt);
-	vsnprintf(buff, fmt, v);
+	va_start(v, fmt);
+	vsnprintf(buff, sizeof(buff) - 1, fmt, v);
 	va_end(v);
 
 	fprintf(stderr, "%u:%s", prio, buff);
@@ -134,24 +136,25 @@ daemon::log(int prio, const char *fmt, ...)
 
 
 int
-daemon::read_config(int argc, char *argv[], config &list[], int n_list)
+daemon::read_config(int argc, char *argv[])
 {
 	char *a_files[256];
 	int n_files = 0, i;
 	for (i = 0; i < argc; i++) {
-		if (nbr_str_cmp_tail(argv[i], ".conf", 256) == 0) {
+		if (nbr_str_cmp_tail(argv[i], ".conf", 5, 256) == 0) {
 			a_files[n_files++] = argv[i];
 		}
 	}
 	for (i = 0; i < n_files; i++) {
 		FILE *fp = fopen(a_files[i], "r");
 		if (fp == NULL) {
-			log(LOG_INFO, "%s: cannot open\n", file);
+			log(LOG_INFO, "%s: cannot open\n", a_files[i]);
 			continue;	/* –³‚©‚Á‚½‚çdefaultÝ’è‚Ås‚­‚Ì‚Å‚n‚j */
 		}
-		char work[MAX_WORK_SIZE], sname[MAX_WORK_SIZE], *buff;
+		char work[1024], sname[config::MAX_SESSION_NAME], *buff;
+		const char *line;
 		while(fgets(work, sizeof(work), fp)) {
-			buff = nbr_str_chop(work, sizeof(work));
+			buff = nbr_str_chop(work);
 			if (config::emptyline(buff)) { continue; }
 			else if (config::commentline(buff)) { continue; }
 			if (!(line = nbr_str_divide_tag_and_val('.', buff, sname, sizeof(sname)))) {
@@ -203,5 +206,5 @@ daemon::create_config(const char *sname)
 session::factory*
 daemon::create_factory(const char *sname)
 {
-	return new session::factory<session>;
+	return new session::factory_impl<session>;
 }

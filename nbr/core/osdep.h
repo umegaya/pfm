@@ -55,7 +55,7 @@
 /* TCP related */
 int		nbr_osdep_tcp_str2addr(const char *str, void *addr, int *len);
 int		nbr_osdep_tcp_addr2str(void *addr, int len, char *str, int slen);
-DSCRPTR	nbr_osdep_tcp_socket(char *addr, SKCONF *cfg);
+DSCRPTR	nbr_osdep_tcp_socket(const char *addr, SKCONF *cfg);
 int		nbr_osdep_tcp_connect(DSCRPTR fd, void *addr, int len);
 int		nbr_osdep_tcp_handshake(DSCRPTR fd, int r, int w);
 DSCRPTR	nbr_osdep_tcp_accept(DSCRPTR fd, void *addr, int *len, SKCONF *cfg);
@@ -67,7 +67,7 @@ int 	nbr_osdep_tcp_addr_from_fd(DSCRPTR fd, char *addr, int alen);
 /* UDP related */
 #define nbr_osdep_udp_str2addr	nbr_osdep_tcp_str2addr
 #define nbr_osdep_udp_addr2str	nbr_osdep_tcp_addr2str
-DSCRPTR	nbr_osdep_udp_socket(char *addr, SKCONF *cfg);
+DSCRPTR	nbr_osdep_udp_socket(const char *addr, SKCONF *cfg);
 #define	nbr_osdep_udp_connect	nbr_osdep_tcp_connect
 #define nbr_osdep_udp_handshake	nbr_osdep_tcp_handshake
 DSCRPTR	nbr_osdep_udp_accept(DSCRPTR fd, void *addr, int *len, SKCONF *cfg);

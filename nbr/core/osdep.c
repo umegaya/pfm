@@ -20,7 +20,7 @@
 #include	"osdep.h"
 #include	"nbr_pkt.h"
 #include 	<sys/resource.h>
-
+#include 	<sys/ioctl.h>
 
 
 
@@ -283,7 +283,7 @@ nbr_osdep_tcp_addr2str(void *addr, int len, char *str_addr, int str_len)
 }
 
 DSCRPTR
-nbr_osdep_tcp_socket(char *addr, SKCONF *cfg)
+nbr_osdep_tcp_socket(const char *addr, SKCONF *cfg)
 {
 	struct sockaddr_in sa;
 	int alen, reuse;
@@ -408,10 +408,13 @@ int
 nbr_osdep_tcp_addr_from_fd(DSCRPTR fd, char *addr, int alen)
 {
 #define MAX_INTERFACE (16)
+#define IFNAMSIX		(256)
 	struct ifconf	ifc;
 	struct ifreq	iflist[MAX_INTERFACE];
-	char ifname[IFNAMSIX]; int i;
-	if (getsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, ifname, sizeof(ifname)) < 0) {
+	char ifname[IFNAMSIX]; int i, ret;
+	socklen_t len;
+	len = sizeof(ifname);
+	if (getsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, ifname, &len) < 0) {
 		OSDEP_ERROUT(ERROR,SOCKOPT,"getsockopt (bindtodevice) errno=%d", errno);
 		goto error;
 	}
@@ -422,8 +425,8 @@ nbr_osdep_tcp_addr_from_fd(DSCRPTR fd, char *addr, int alen)
 		goto error;
 	}
 	for (i = 0; i < ifc.ifc_len; i++) {
-		if (nbr_str_cmp(ifc.ifc_req[i].ifr_name, ifname, IFNAMSIX) == 0) {
-			return nbr_str_copy(addr, alen, ifc.ifc_req[i].ifr_addr, alen);
+		if (nbr_str_cmp(ifc.ifc_req[i].ifr_name, IFNAMSIX, ifname, IFNAMSIX) == 0) {
+			return nbr_str_copy(addr, alen, (char *)&(ifc.ifc_req[i].ifr_addr), alen);
 		}
 	}
 	return NBR_ENOTFOUND;
@@ -435,7 +438,7 @@ error:
 
 /* UDP related */
 DSCRPTR
-nbr_osdep_udp_socket(char *addr, SKCONF *cfg)
+nbr_osdep_udp_socket(const char *addr, SKCONF *cfg)
 {
 	struct sockaddr_in sa;
 	struct ip_mreqn mreq;

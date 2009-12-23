@@ -20,6 +20,7 @@
 #include "cluster.h"
 #include "proto.h"
 #include "sock.h"
+#include "osdep.h"
 #include "nbr_pkt.h"
 
 
@@ -99,7 +100,7 @@ typedef struct cluster {
 	U16				clst_id;	/* its port number as well */
 	RWLOCK			lock;
 	/* sort master nodes to connect (for servant node) */
-	int				(*sort)(NODE**, int);
+	int				(*sort)(NODE*, int);
 }	cluster_t;
 
 
@@ -141,7 +142,7 @@ nodeset_create(nodeset_t *nds, const char *addr, int max, int ndlen, int rb, int
 	nds->list = NULL;
 	/* swap nrb and nwb (because servant nrb = master nwb and vice versa) */
 	if (!(nds->skm = nbr_sockmgr_create(rb, wb, max, 0,
-						CLUSTER_TIMEO_SEC, addr, nbr_proto_tcp(), NULL,
+						CLUSTER_TIMEO_SEC, (char *)addr, nbr_proto_tcp(), NULL,
 						NBR_PRIM_EXPANDABLE))) {
 		CLUSTER_ERROUT(ERROR,EXPIRE,"create master skm\n");
 		return LASTERR;
@@ -162,7 +163,7 @@ nodeset_destroy(nodeset_t *nds)
 		nd = nd->next;
 		node_destroy(nds, pnd);
 	}
-	if (nd->node_a) {
+	if (nds->node_a) {
 		nbr_array_destroy(nds->node_a);
 		nds->node_a = NULL;
 	}
@@ -182,7 +183,7 @@ nodeset_reconstruct(cluster_t *c, nodeset_t *nds, node_t **list, int n_list)
 		list = a_nodes;
 		n_list = cnt;
 	}
-	c->sort(list, n_list);
+	c->sort((NODE *)list, n_list);
 	nds->list = list[0];
 	nds->list->belong = c;
 	for (i = 1; i < (n_list - 1); i++) {
@@ -194,7 +195,7 @@ nodeset_reconstruct(cluster_t *c, nodeset_t *nds, node_t **list, int n_list)
 	cnt = nbr_cluster_is_master(c) ? n_list : g_clst.multiplex;
 	for (i = 0, nd = nds->list; nd && i < cnt; i++, nd = nd->next) {
 		if (!nbr_sock_valid(nd->conn)) {
-			nd->conn = nbr_sockmgr_connect(c->master.skm, nd->addr);
+			nd->conn = nbr_sockmgr_connect(c->master.skm, nd->addr, NULL);
 			if (!nbr_sock_valid(nd->conn)) {
 				return NBR_ECONNECT;
 			}
@@ -282,11 +283,11 @@ mcast_send_find_master(SOCKMGR skm, U16 clst_id)
 	U16 len = 3;
 	PUSH_START(data, sizeof(data));
 	PUSH_16(len);	/* bin32 proto */
-	PUSH_8(((U8)NBR_CLUSTER_BCAST_FIND));
+	PUSH_8(((U8)NBR_CLUSTER_MCAST_FIND));
 	PUSH_16(clst_id);
 	nbr_str_printf(addr, sizeof(addr) - 1, "%s:%u",
-		CLUSTER_BCAST_GROUP, c->clst_id);
-	return nbr_sockmgr_bcast(skm, addr, data, PUSH_LEN());
+		CLUSTER_BCAST_GROUP, clst_id);
+	return nbr_sockmgr_mcast(skm, addr, data, PUSH_LEN());
 }
 
 /* conn sender */
@@ -294,15 +295,15 @@ mcast_send_find_master(SOCKMGR skm, U16 clst_id)
 
 /* mcast handler */
 NBR_INLINE int
-mcast_on_find(cluster_t *c, char *data, int len)
+mcast_on_find(SOCK sk, cluster_t *c, char *p, int l)
 {
 	char work[1024 * 1024];
 	char tmp[1024];
 	node_t *nd;
 	int n_node, len;
 	PUSH_START(work, sizeof(work));
-	PUSH_8(((U8)NBR_CLUSTER_BCAST_FIND_ACK));
-	PUSH_16(clst_id);
+	PUSH_8(((U8)NBR_CLUSTER_MCAST_FIND_ACK));
+	PUSH_16(c->clst_id);
 	n_node = nbr_array_use(c->master.node_a);
 	PUSH_32(n_node);
 	ARRAY_SCAN(c->master.node_a, nd) {
@@ -321,9 +322,10 @@ mcast_on_find(cluster_t *c, char *data, int len)
 }
 
 NBR_INLINE int
-mcast_on_find_ack(cluster_t *c, char *data, int len)
+mcast_on_find_ack(SOCK sk, cluster_t *c, char *data, int len)
 {
 	U16 clst_id;
+	U8 cmd;
 	int n_node, i, r = NBR_OK;
 	char tmp[1024];
 	if (cluster_is_master(c)) {
@@ -339,7 +341,7 @@ mcast_on_find_ack(cluster_t *c, char *data, int len)
 	POP_16(clst_id);
 	POP_32(n_node);
 	if (n_node > 0) {
-		node_t *a_nodes[n_node], *nd;
+		node_t *a_nodes[n_node];
 		int cnt = 0;
 		nbr_mem_zero(a_nodes, n_node * sizeof(node_t *));
 		for (i = 0; i < n_node; i++) {
@@ -353,7 +355,7 @@ mcast_on_find_ack(cluster_t *c, char *data, int len)
 				r = NBR_ECBFAIL;
 				break;
 			}
-			nbr_conn_clear(&(a_nodes[cnt]->conn));
+			nbr_sock_clear(&(a_nodes[cnt]->conn));
 			cnt++;
 		}
 		if (r == NBR_OK) {
@@ -446,7 +448,6 @@ static int
 mcast_receiver(SOCK sk, char *data, int len)
 {
 	cluster_t *c;
-	node_t *nd;
 	U16 clst_id;
 	U8 cmd;
 	int r = NBR_OK;
@@ -459,13 +460,12 @@ mcast_receiver(SOCK sk, char *data, int len)
 	case NBR_CLUSTER_MCAST_FIND:
 		if (!nbr_cluster_is_master(c)) { return NBR_EINVAL; }
 		if (!nbr_cluster_is_ready(c)) { return NBR_EINVAL; }
-		r = mcast_on_master_find(c, data, len);
+		r = mcast_on_find(sk, c, data, len);
 		break;
 	case NBR_CLUSTER_MCAST_FIND_ACK:
-		r = mcast_on_find_ack(c, data, len);
+		r = mcast_on_find_ack(sk, c, data, len);
 		break;
 	}
-end:
 	nbr_rwlock_unlock(c->lock);
 	nbr_sock_close(sk); /* prevent from expiring sock buffer */
 	return NBR_OK;
@@ -494,7 +494,7 @@ nbr_cluster_init(int mcast_port, int max_clst, int multiplex)
 		goto bad;
 	}
 	if (!(g_clst.node_s = nbr_search_init_mem_engine(
-		1000, NBR_PRIM_EXPANDABLE, n_node, CLUSTER_ADRL))) {
+		1000, NBR_PRIM_EXPANDABLE, 1000, CLUSTER_ADRL))) {
 		CLUSTER_ERROUT(ERROR,EXPIRE,"clst: node_t array\n");
 		goto bad;
 	}
@@ -513,7 +513,7 @@ nbr_cluster_init(int mcast_port, int max_clst, int multiplex)
 	nbr_sockmgr_set_callback(g_clst.mcast_skm,
 				nbr_sock_rparser_bin16,
 				mcast_acceptwatcher, mcast_closewatcher,
-				mcast_receiver, NULL);
+				mcast_receiver, mcast_event_handler);
 	g_clst.mcast_port = mcast_port;
 	return NBR_OK;
 bad:
@@ -525,7 +525,6 @@ void
 nbr_cluster_fin()
 {
 	cluster_t *c, *pc;
-	node_t *nd, *pnd;
 	if (g_clst.cluster_a) {
 		c = nbr_array_get_first(g_clst.cluster_a);
 		while ((pc = c)) {
@@ -537,7 +536,7 @@ nbr_cluster_fin()
 	}
 	if (g_clst.node_s) {
 		nbr_search_destroy(g_clst.node_s);
-		g_clst.node_a = NULL;
+		g_clst.node_s = NULL;
 	}
 	g_clst.mcast_skm = NULL;
 	g_clst.mcast_port = 0;
@@ -559,7 +558,7 @@ nbr_cluster_create(U16 clst_id, int max_servant, int nrb, int nwb,
 		void *my_nodedata, int my_ndlen,
 		int (*mstrproc)(void*, NDEVENT, char *, int), int mstr_ndlen,
 		int (*svntproc)(void*, NDEVENT, char *, int), int svnt_ndlen,
-		int (*sort)(NODE**, int))
+		int (*sort)(NODE*, int))
 {
 	char addr[32];
 	int r;

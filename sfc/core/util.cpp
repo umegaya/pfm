@@ -1,16 +1,31 @@
 #include "sfc.hpp"
+#include "common.h"
+#include "str.h"
 
 config::config()
 {
-	m_name = "";
-	m_host = "";
-	m_port = 0;
+	m_name[0] = '\0';
+	m_host[0] = '\0';
 	m_max_connection = 0;
 	m_timeout = 0;
 	m_rbuf = m_wbuf = 0;
-	m_proto = NULL;
+	m_proto_name = "";
 	m_taskspan = m_ld_wait = 0;
 	m_ping_timeo = m_ping_intv = 0;
+}
+
+config::config(BASE_CONFIG_PLIST) :
+		m_max_connection(max_connection),
+		m_timeout(timeout), m_option(option),
+		m_rbuf(rbuf), m_wbuf(wbuf),
+		m_ping_timeo(ping_timeo), m_ping_intv(ping_intv),
+		m_proto_name(proto_name),
+		m_taskspan(taskspan), m_ld_wait(ld_wait),
+		m_fnp(fnp),
+		m_fns(fns)
+{
+	nbr_str_copy(m_name, sizeof(m_name), name, sizeof(m_name));
+	nbr_str_copy(m_host, sizeof(m_host), host, sizeof(m_host));
 }
 
 config::~config()
@@ -19,7 +34,8 @@ config::~config()
 
 int config::load(const char *line)
 {
-	char *val, key[256];
+	char key[256];
+	const char *val;
 	if (!(val = nbr_str_divide_tag_and_val('=', line, key, sizeof(key)))) {
 		return NBR_EFORMAT;
 	}
@@ -31,20 +47,11 @@ int config::cmp(const char *a, const char *b)
 	return nbr_str_cmp_nocase(a, b, MAX_VALUE_STR) == 0;
 }
 
-int config::str(const char *k, char *&v) const
+int config::str(const char *k, const char *&v) const
 {
 	if (cmp("name", k)) { v = m_name; }
 	else if (cmp("host", k)) { v = m_host; }
-	else {
-		if (m_proto == nbr_proto_tcp()) {
-			v = "TCP";
-			return NBR_OK;
-		}
-		else if (m_proto == nbr_proto_udp()) {
-			v = "UDP";
-			return NBR_OK;
-		}
-	}
+	else if (cmp("proto", k)) { v = m_proto_name; }
 	return NBR_ENOTFOUND;
 }
 
@@ -68,13 +75,12 @@ int	config::bignum(const char *k, U64 &v) const
 
 int	config::set(const char *k, const char *v)
 {
-	int tmp;
 	if (cmp("name", k)) {
-		nbr_str_copy(m_name, v, MAX_VALUE_STR);
+		nbr_str_copy(m_name, sizeof(m_name), v, MAX_VALUE_STR);
 		return NBR_OK;
 	}
 	else if (cmp("host", k)) {
-		nbr_str_copy(m_host, v, MAX_VALUE_STR);
+		nbr_str_copy(m_host, sizeof(m_host), v, MAX_VALUE_STR);
 		return NBR_OK;
 	}
 	else if (cmp("max_connection", k)) {
@@ -99,20 +105,17 @@ int	config::set(const char *k, const char *v)
 		return nbr_str_atoi(v, &m_ping_intv, MAX_VALUE_STR);
 	}
 	else if (cmp("taskspan", k)) {
-		return nbr_str_atobn(v, &m_taskspan, MAX_VALUE_STR);
+		return nbr_str_atobn(v, (S64 *)&m_taskspan, MAX_VALUE_STR);
 	}
 	else if (cmp("ld_wait", k))  {
-		return nbr_str_atobn(v, &m_ld_wait, MAX_VALUE_STR);
+		return nbr_str_atobn(v, (S64 *)&m_ld_wait, MAX_VALUE_STR);
 	}
 	else if (cmp("proto", k)) {
-		if (cmp("TCP", v)) {
-			m_proto = nbr_proto_tcp();
-			return NBR_OK;
+		PROTOCOL *pr;
+		if ((pr = nbr_proto_from_name(v))) {
+			m_proto_name = v;
 		}
-		else if (cmp("UDP", v)) {
-			m_proto = nbr_proto_udp();
-			return NBR_OK;
-		}
+		return pr ? NBR_OK : NBR_ENOTFOUND;
 	}
 	else if (cmp("sender", k)) {
 		m_fns = sender_from(v);
@@ -125,7 +128,7 @@ int	config::set(const char *k, const char *v)
 	return NBR_ENOTFOUND;
 }
 
-parser
+config::parser
 config::rparser_from(const char *str)
 {
 	if (cmp(str, "text")) {
@@ -144,7 +147,7 @@ config::rparser_from(const char *str)
 	return nbr_sock_rparser_raw;
 }
 
-sender
+config::sender
 config::sender_from(const char *str)
 {
 	if (cmp(str, "text")) {

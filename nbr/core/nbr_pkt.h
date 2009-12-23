@@ -24,11 +24,11 @@
 
 /* support routine & macros */
 #if __BYTE_ORDER == __BIG_ENDIAN
-NBR_INLINE U64 ntohll(U64 n) { return n; }
-NBR_INLINE U64 htonll(U64 n) { return n; }
+static inline U64 ntohll(U64 n) { return n; }
+static inline U64 htonll(U64 n) { return n; }
 #else
-NBR_INLINE U64 ntohll(U64 n) { return (((U64)ntohl(n)) << 32) + ntohl(n >> 32); }
-NBR_INLINE U64 htonll(U64 n) { return (((U64)htonl(n)) << 32) + htonl(n >> 32); }
+static inline U64 ntohll(U64 n) { return (((U64)ntohl(n)) << 32) + ntohl(n >> 32); }
+static inline U64 htonll(U64 n) { return (((U64)htonl(n)) << 32) + htonl(n >> 32); }
 #endif
 
 #if defined (_DEBUG)

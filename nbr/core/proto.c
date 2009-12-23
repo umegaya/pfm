@@ -162,6 +162,21 @@ error:
 }
 
 NBR_API PROTOCOL*
+nbr_proto_from_name(const char *name)
+{
+	proto_t *pr;
+	if (g_proto) {
+		ARRAY_SCAN(g_proto, pr) {
+			if (nbr_str_cmp(pr->name, sizeof(pr->name),
+					name, sizeof(pr->name)) == 0) {
+				return pr;
+			}
+		}
+	}
+	return NULL;
+}
+
+NBR_API PROTOCOL*
 nbr_proto_tcp()
 {
 	ASSERT(g_tcp_p);

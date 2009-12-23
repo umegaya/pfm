@@ -31,14 +31,14 @@ nbr_str_cmp(const char *a, size_t al, const char *b, size_t bl)
 			return -1;
 		}
 		wa++; wb++;
-		if ((wa - a) > al) {
-			if ((wb - b) > bl) {
+		if ((size_t)(wa - a) > al) {
+			if ((size_t)(wb - b) > bl) {
 				return 0;
 			}
 			return -1;
 		}
 		else {
-			if ((wb - b) > bl) {
+			if ((size_t)(wb - b) > bl) {
 				return 1;
 			}
 		}
@@ -62,11 +62,11 @@ nbr_str_copy(char *a, size_t al, const char *b, size_t bl)
 	const char *wb = b;
 	while (*wb) {
 		*wa++ = *wb++;
-		if ((wa - a) >= al) {
+		if ((size_t)(wa - a) >= al) {
 			a[al - 1] = '\0';
 			return al;
 		}
-		if ((wb - b) >= bl) {
+		if ((size_t)(wb - b) >= bl) {
 			*wa = '\0';
 			return (wa - a);
 		}
@@ -80,7 +80,7 @@ nbr_str_length(const char *str, size_t max)
 {
 	const char *w = str;
 	while(*w) {
-		if ((w - str) > max) {
+		if ((size_t)(w - str) > max) {
 			ASSERT(FALSE);
 			return max;
 		}

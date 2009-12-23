@@ -1028,7 +1028,7 @@ nbr_sockmgr_create(
 			int max_sock,
 			int workmem,
 			int timeout_sec,
-			char *addr,
+			const char *addr,
 			PROTOCOL *proto,
 			void *proto_p,
 			int option)
@@ -1224,7 +1224,7 @@ nbr_sockmgr_set_data(SOCKMGR s, void *p)
 }
 
 NBR_API void*
-nbr_sockmgr_get_data(SOCKMGR s, void *p)
+nbr_sockmgr_get_data(SOCKMGR s)
 {
 	skmdata_t *skm = s;
 	return skm->data;

@@ -350,7 +350,7 @@ main(int argc, char *argv[], char *envp[])
 	}
 	nbr_get_default(&c);
 	c.sockbuf_size = 16 * 1024 * 1024;
-	c.ndc.bcast_port = 9999;
+	c.ndc.mcast_port = 9999;
 	if (nbr_str_atoi(argv[1], &(c.max_thread), 256) < 0) {
 		TRACE("get args1 fail %s\n", argv[1]);
 		return -3;

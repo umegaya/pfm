@@ -12,6 +12,29 @@ int session::factory::mcast(const char *addr, char *p, int l)
 	return nbr_sockmgr_mcast(m_skm, addr, p, l);
 }
 
+int session::factory::init(const config &cfg,
+							int (*aw)(SOCK),
+							int (*cw)(SOCK, int),
+							int (*pp)(SOCK, char*, int),
+							int (*eh)(SOCK, char*, int))
+{
+	m_cfg = &cfg;
+	if (!(m_skm = nbr_sockmgr_create(cfg.m_rbuf, cfg.m_wbuf,
+							cfg.m_max_connection,
+							sizeof(session*),
+							cfg.m_timeout,
+							cfg.m_host,
+							nbr_proto_from_name(cfg.m_proto_name),
+							cfg.proto_p(),
+							cfg.m_option))) {
+		return NBR_ESOCKET;
+	}
+	nbr_sockmgr_set_data(m_skm, this);
+	nbr_sockmgr_set_callback(m_skm,
+			cfg.m_fnp, aw, cw, pp, eh);
+	return NBR_OK;
+}
+
 int session::pingmgr::send(class session &s)
 {
 	/* disabled ping? */
@@ -24,7 +47,7 @@ int session::pingmgr::send(class session &s)
 	PUSH_8((U8)0);
 	m_last_msgid = s.msgid();
 	PUSH_32(m_last_msgid);
-	return s.send(work, PACKED_LEN());
+	return s.send(work, PUSH_LEN());
 }
 
 int session::pingmgr::recv(class session &s, char *p, int l)
@@ -45,7 +68,6 @@ int session::pingmgr::recv(class session &s, char *p, int l)
 	return NBR_OK;
 }
 
-
 int session::poll(UTIME ut)
 {
 	if (valid()) {
@@ -57,7 +79,7 @@ int session::poll(UTIME ut)
 		return NBR_EINVAL;
 	}
 	else if ((ut - last_access()) > cfg().m_ld_wait) {
-		if (connect(cfg().m_host, cfg().proto_p()) < 0) {
+		if (f()->connect(cfg().m_host, cfg().proto_p()) < 0) {
 			return NBR_ECONNECT;
 		}
 		update_access();

@@ -24,7 +24,7 @@ extern int		nbr_sock_init(int max, int max_nfd, int worker, int skbsz);
 extern int		nbr_sock_fin();
 extern void 	nbr_sock_poll();
 extern void 	*nbr_sock_io(void *skd);
-extern DSCRPTR	nbr_sockmgr_get_listenfd(SOCKMGR s)
+extern DSCRPTR	nbr_sockmgr_get_listenfd(SOCKMGR s);
 extern int		nbr_sockmgr_get_accept_size(SOCKMGR s);
 extern int		nbr_sockmgr_get_conn_worksize(SOCKMGR s);
 extern int		nbr_sockmgr_iterate_sock(SOCKMGR s, void *p, int (*fn) (SOCK, void*));

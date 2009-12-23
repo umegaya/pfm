@@ -169,7 +169,7 @@ typedef struct	nbr_proto_t
 	int		(*fd)		(DSCRPTR);
 	int		(*str2addr)	(const char*, void*, int*);
 	int		(*addr2str)	(void*, int, char*, int);
-	DSCRPTR	(*socket)	(char*, SKCONF*);
+	DSCRPTR	(*socket)	(const char*, SKCONF*);
 	int		(*connect)	(DSCRPTR, void*, int);
 	int		(*handshake)(DSCRPTR, int, int);
 	DSCRPTR	(*accept)	(DSCRPTR, void*, int*, SKCONF*);
@@ -219,6 +219,7 @@ NBR_API PROTOCOL	*nbr_proto_regist(PROTOCOL proto);
 NBR_API int			nbr_proto_unregist(PROTOCOL *proto_p);
 NBR_API PROTOCOL	*nbr_proto_tcp();
 NBR_API PROTOCOL	*nbr_proto_udp();
+NBR_API PROTOCOL	*nbr_proto_from_name(const char *name);
 
 
 /* str.c */
@@ -283,7 +284,7 @@ NBR_API SOCKMGR	nbr_sockmgr_create(int nrb, int nwb,
 					int max_sock,
 					int workmem,
 					int timeout_sec,
-					char *addr,
+					const char *addr,
 					PROTOCOL *proto,
 					void *proto_p,
 					int option);
@@ -291,7 +292,7 @@ NBR_API int		nbr_sockmgr_destroy(SOCKMGR s);
 NBR_API SOCK	nbr_sockmgr_connect(SOCKMGR s, const char *address, void *proto_p);
 NBR_API int		nbr_sockmgr_mcast(SOCKMGR s, const char *address, char *data, int len);
 NBR_API void	nbr_sockmgr_set_data(SOCKMGR s, void *p);
-NBR_API void	*nbr_sockmgr_get_data(SOCKMGR s, void *p);
+NBR_API void	*nbr_sockmgr_get_data(SOCKMGR s);
 NBR_API SOCKMGR	nbr_sock_get_mgr(SOCK s);
 NBR_API int 	nbr_sock_close(SOCK s);
 NBR_API int		nbr_sock_event(SOCK s, char *p, int len);
@@ -320,8 +321,10 @@ NBR_API char	*nbr_sock_rparser_raw(char *p, int *len, int *rlen);
 
 /* cluster.c */
 NBR_API CLUSTER	nbr_cluster_create(U16 clst_id, int max_servant, int nrb, int nwb,
-					void *nodedata, int ndlen,
-					int (*proc)(void*, NDEVENT, char *, int));
+					void *my_nodedata, int my_ndlen,
+					int (*mstrproc)(void*, NDEVENT, char *, int), int mstr_ndlen,
+					int (*svntproc)(void*, NDEVENT, char *, int), int svnt_ndlen,
+					int (*sort)(NODE*, int));
 NBR_API void	nbr_cluster_destroy(CLUSTER c);
 NBR_API int		nbr_cluster_is_master(CLUSTER c);
 NBR_API int		nbr_cluster_is_ready(CLUSTER c);
