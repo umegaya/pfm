@@ -114,7 +114,7 @@ public:
 	class fsm &fsm() { return m_fsm; }
 public:
 	void fin();
-	void poll(UTIME ut);
+	int poll(UTIME ut, bool from_worker);
 	int on_open(const config &cfg);
 	int on_close(int r);
 public:	/* callback */
@@ -125,8 +125,7 @@ public:	/* operation */
 	int	post(const char *url, const char *body, int blen,
 			char *hd[], int hl[], int n_hd);
 	int send_result_code(httprc rc, int cf/* close after sent? */);
-	int send_result_and_body(httprc rc,
-			char *b, int bl, const char *mime);
+	int send_result_and_body(httprc rc, char *b, int bl, const char *mime);
 protected:
 	int send_body();
 	int send_header(char *hd[], int hl[], int n_hd);
@@ -161,7 +160,8 @@ httpfactory<S>::init(const config &cfg)
 			httpfactory<S>::on_open,
 			httpfactory<S>::on_close,
 			httpfactory<S>::on_recv,
-			httpfactory<S>::on_event);
+			httpfactory<S>::on_event,
+			httpfactory<S>::on_poll);
 }
 
 template <class S>

@@ -130,27 +130,27 @@ _prime(int given)
 		TRACE( "_prime:cannot alloc work memory:size=%d", given );
 		return -1;
 	}
-	nbr_mem_zero(p, given);
+	nbr_mem_zero(p, given);/* p[N] correspond to N + 1 is prime or not */
 	for (i = 2; i <= given; i++) {
-		if (i >= (int)(given/i)) {
+		if (i > (int)(given/i)) {
 //			TRACE("_prime:break at %u,(%u)", i, (int)(given/i));
 			break;
 		}
-		if (p[i]) {
+		if (p[i - 1]) {
 			continue;
 		}
 		else {
-			for(j = i; j <= given; j += i) {
-				p[j] = 1;
+			for(j = (i * 2); j <= given; j += i) {
+				p[j - 1] = 1;
 			}
 		}
 	}
 
-	for (i = (given - 1); i > 2; i--) {
+	for (i = (given - 1); i > 0; i--) {
 		if (p[i] == 0) {
 			nbr_mem_free(p);
-			TRACE("_prime:is %u\n", i);
-			return i;
+			TRACE("_prime:is %u\n", i + 1);
+			return i + 1;
 		}
 	}
 

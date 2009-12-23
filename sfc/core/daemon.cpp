@@ -197,7 +197,7 @@ daemon::read_config(int argc, char *argv[])
 int
 daemon::on_signal(int signo)
 {
-	if (signo == SIGTERM) {
+	if (signo == SIGTERM || signo == SIGINT) {
 		return -1;
 	}
 	return NBR_OK;

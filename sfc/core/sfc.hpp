@@ -209,6 +209,22 @@ public:
 			return nbr_search_int_get(s, t);
 		}
 	};
+	template <class C, size_t N>
+	struct	kcont<C,char[N]> {
+		typedef const char *type;
+		static SEARCH init(int max, int opt, int hashsz) {
+			return nbr_search_init_str_engine(max, opt, hashsz, N);
+		}
+		static int regist(SEARCH s, type t, element *v) {
+			return nbr_search_str_regist(s, t, v);
+		}
+		static void unregist(SEARCH s, type t) {
+			nbr_search_str_unregist(s, t);
+		}
+		static element *get(SEARCH s, type t) {
+			return (element *)nbr_search_str_get(s, t);
+		}
+	};
 	typedef typename kcont<V,K>::type key;
 protected:
 	SEARCH	m_s;
@@ -279,7 +295,7 @@ public:
 public:
 	int	load(const char *line);
 	void fin() { delete this; }
-	int client() const { return (m_host[0] != 0) ? 1 : 0; }
+	int client() const { return (m_host[0] == '\0') ? 1 : 0; }
 	static int commentline(const char *line) { return (line[0] == '#' ? 1 : 0); }
 	static int emptyline(const char *line) { return (line[0] == '\0' ? 1 : 0); }
 protected:
@@ -331,7 +347,8 @@ public:
 					int (*aw)(SOCK),
 					int (*cw)(SOCK, int),
 					int (*pp)(SOCK, char*, int),
-					int (*eh)(SOCK, char*, int));
+					int (*eh)(SOCK, char*, int),
+					void (*poll)(SOCK));
 	};
 	template <class S>
 	class factory_impl : public factory {
@@ -347,6 +364,7 @@ public:
 		static int on_close(SOCK, int);
 		static int on_recv(SOCK, char*, int);
 		static int on_event(SOCK, char*, int);
+		static void on_poll(SOCK);
 	};
 	class pingmgr {
 	protected:
@@ -366,23 +384,30 @@ public:
 		}
 	};
 protected:
+	enum {
+		attr_opened	= 0x00000001,/* on_open called and on_close not called yet */
+	};
+protected:
 	SOCK 	m_sk;
 	factory *m_f;
 	pingmgr	m_ping;
 	UTIME	m_last_access;
+	U32		m_attr;
 public:	/* usually dont need to touch */
 	session() : m_ping() {}
 	~session() {}
 	void set(SOCK sk, factory *f) 	{ m_sk = sk; m_f = f; }
 	pingmgr &ping()					{ return m_ping; }
 	void update_access() 			{ m_last_access = nbr_clock(); }
+	void setattr(U32 a, bool on)	{ if (on) { m_attr |= a; } else { m_attr &= ~(a); } }
+	bool attr(U32 a) const			{ return (m_attr & a); }
 	void clear_sock()				{ nbr_sock_clear(&m_sk); }
 	factory *f() 					{ return m_f; }
 	const factory *f() const		{ return m_f; }
 public: /* operation */
 	const config &cfg() const 		{ return f()->cfg(); }
 	UTIME last_access() const		{ return m_last_access; }
-	int valid() const				{ return nbr_sock_valid(m_sk) ? 1 : 0; }
+	int valid() const				{ return attr(attr_opened) ? 1 : 0; }
 	int close() const				{ return nbr_sock_close(m_sk); }
 	int writable() const			{ return nbr_sock_writable(m_sk); }
 	U32 msgid()						{ return f()->msgid(); }
@@ -390,7 +415,7 @@ public: /* operation */
 	int event(const char *p, int l) const	{ return nbr_sock_event(m_sk, (char *)p, l); }
 	const char *remoteaddr(char *b, int bl) const;
 public: /* callback */
-	int poll(UTIME ut);
+	int poll(UTIME ut, bool from_worker) { return NBR_OK; }
 	void fin()						{}
 	int on_open(const config &cfg)	{ return NBR_OK; }
 	int on_close(int reason)		{ return NBR_OK; }

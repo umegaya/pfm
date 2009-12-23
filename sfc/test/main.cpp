@@ -22,7 +22,7 @@ config	*cnf[] =
 {
 	new config (
 		"get",
-		"localhost",
+		"",
 		60,
 		60, 0,
 		4096, 1024,

@@ -423,7 +423,8 @@ main(int argc, char *argv[], char *envp[])
 			acceptwatcher,
 			closewatcher,
 			parser,
-			eventhandler);
+			eventhandler,
+			NULL);
 
 	for (i = 0; i < N_CLIENT; i++) {
 		nbr_sock_clear(&(ska[i]));

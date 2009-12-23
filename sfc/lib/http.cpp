@@ -288,10 +288,10 @@ httpsession::fin()
 {
 }
 
-void
-httpsession::poll(UTIME nt)
+int
+httpsession::poll(UTIME nt, bool from_worker)
 {
-	if (m_fsm.status() == fsm::state_send_body) {
+	if (from_worker && m_fsm.status() == fsm::state_send_body) {
 		if ((nt - last_access()) >= (10 * 1000)) {
 			int r = send_body();
 			if (r < 0) {
@@ -305,13 +305,12 @@ httpsession::poll(UTIME nt)
 			update_access();
 		}
 	}
-	session::poll(nt);
+	return session::poll(nt, from_worker);
 }
 
 int
 httpsession::on_open(const config &cfg)
 {
-	m_fsm.reset(cfg);
 	return NBR_OK;
 }
 

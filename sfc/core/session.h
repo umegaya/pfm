@@ -36,7 +36,8 @@ int session::factory_impl<S>::init(const config &cfg)
 			session::factory_impl<S>::on_open,
 			session::factory_impl<S>::on_close,
 			session::factory_impl<S>::on_recv,
-			session::factory_impl<S>::on_event);
+			session::factory_impl<S>::on_event,
+			session::factory_impl<S>::on_poll);
 }
 
 template <class S>
@@ -49,8 +50,30 @@ void session::factory_impl<S>::fin()
 template <class S>
 void session::factory_impl<S>::poll(UTIME ut)
 {
-	typename array<S>::iterator p = pool().begin();
-	for (;p != pool().end();) { p->poll(ut); }
+	typename array<S>::iterator p = pool().begin(), tmp;
+	for (;p != pool().end();) {
+		tmp = p;
+		p = pool().next(p);
+		if (!tmp->valid()) {
+			int r;
+			if ((r = tmp->poll(ut, false)) < 0) {}
+			else if (tmp->cfg().m_ld_wait <= 0) {
+				r = NBR_EINVAL;
+			}
+			else if ((ut - tmp->last_access()) > tmp->cfg().m_ld_wait) {
+				if (connect(tmp->cfg().m_host, tmp->cfg().proto_p()) < 0) {
+					r = NBR_ECONNECT;
+				}
+				else {
+					tmp->update_access();
+				}
+			}
+			if (r != NBR_OK) {
+				tmp->fin();
+				pool().erase(tmp);
+			}
+		}
+	}
 }
 
 template <class S>
@@ -69,6 +92,7 @@ int session::factory_impl<S>::on_open(SOCK sk)
 		return r;
 	}
 	*s = obj;
+	obj->setattr(session::attr_opened, true);
 	return NBR_OK;
 }
 
@@ -81,6 +105,7 @@ int session::factory_impl<S>::on_close(SOCK sk, int reason)
 	}
 	(*s)->on_close(reason);
 	(*s)->clear_sock();
+	(*s)->setattr(session::attr_opened, false);
 	return NBR_OK;
 
 }
@@ -107,5 +132,21 @@ int session::factory_impl<S>::on_event(SOCK sk, char *p, int l)
 		return NBR_ENOTFOUND;
 	}
 	return (*s)->on_event(p, l);
+}
+
+template <class S>
+void session::factory_impl<S>::on_poll(SOCK sk)
+{
+	S **s = (S**)nbr_sock_get_data(sk, NULL);
+	if (s == NULL) {
+		return;
+	}
+	S *obj = *s;
+	UTIME ut = nbr_clock();
+	if (obj->cfg().m_ping_timeo > 0 && !obj->ping().validate(*obj, ut)) {
+		obj->close();
+		return;
+	}
+	(*s)->poll(ut, true);
 }
 

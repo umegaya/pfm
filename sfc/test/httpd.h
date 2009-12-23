@@ -34,6 +34,7 @@ class testhttpd : public daemon {
 public:
 	testhttpd() : daemon() {}
 	session::factory 	*create_factory(const char *sname);
+	int					boot(int argc, char *argv[]);
 };
 
 #endif //__HTTPD_H__

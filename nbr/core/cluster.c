@@ -513,7 +513,7 @@ nbr_cluster_init(int mcast_port, int max_clst, int multiplex)
 	nbr_sockmgr_set_callback(g_clst.mcast_skm,
 				nbr_sock_rparser_bin16,
 				mcast_acceptwatcher, mcast_closewatcher,
-				mcast_receiver, mcast_event_handler);
+				mcast_receiver, mcast_event_handler, NULL);
 	g_clst.mcast_port = mcast_port;
 	return NBR_OK;
 bad:
@@ -592,7 +592,7 @@ nbr_cluster_create(U16 clst_id, int max_servant, int nrb, int nwb,
 	nbr_sockmgr_set_callback(c->master.skm,
 		nbr_sock_rparser_bin32,
 		master_node_acceptwatcher, master_node_closewatcher,
-		master_node_receiver, master_node_event_handler);
+		master_node_receiver, master_node_event_handler, NULL);
 
 	if (max_servant > 0) {	/* means master node */
 		c->state = NST_M_START;
@@ -605,7 +605,7 @@ nbr_cluster_create(U16 clst_id, int max_servant, int nrb, int nwb,
 		nbr_sockmgr_set_callback(c->servant.skm,
 			nbr_sock_rparser_bin32,
 			servant_node_acceptwatcher, servant_node_closewatcher,
-			servant_node_receiver, servant_node_event_handler);
+			servant_node_receiver, servant_node_event_handler, NULL);
 		/* initialize mynode */
 		if (!(c->mynode = nbr_array_alloc(c->master.node_a))) {
 			CLUSTER_ERROUT(ERROR,EXPIRE,"alloc node_t\n");

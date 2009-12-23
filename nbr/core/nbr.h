@@ -308,7 +308,8 @@ NBR_API void 	nbr_sockmgr_set_callback(SOCKMGR s,
 					int (*aw)(SOCK),
 					int (*cw)(SOCK, int),
 					int (*pp)(SOCK, char*, int),
-					int (*eh)(SOCK, char*, int));
+					int (*eh)(SOCK, char*, int),
+					void (*poll)(SOCK));
 NBR_API int		nbr_sock_send_bin16(SOCK s, char *p, int len);
 NBR_API int		nbr_sock_send_bin32(SOCK s, char *p, int len);
 NBR_API int		nbr_sock_send_text(SOCK s, char *p, int len);

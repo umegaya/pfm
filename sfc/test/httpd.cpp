@@ -32,7 +32,7 @@ get_request_session::process(response &resp)
 int
 get_request_session::send_request()
 {
-	return get("localhost/consv.xml", NULL, NULL, 0);
+	return get("/repos/nbr/", NULL, NULL, 0);
 }
 
 /*-------------------------------------------------------------*/
@@ -42,4 +42,22 @@ session::factory *
 testhttpd::create_factory(const char *sname)
 {
 	return new httpfactory<get_request_session>;
+}
+
+int
+testhttpd::boot(int argc, char *argv[])
+{
+	session::factory *f = m_sl.find("get");
+	config *c = m_cl.find("get");
+	if (!c || !f) {
+		log(LOG_ERROR, "conf or factory not found for 'get'\n");
+		return NBR_ENOTFOUND;
+	}
+	for (int i = 0; i < c->m_max_connection; i++) {
+		if (f->connect("localhost:80") < 0) {
+			log(LOG_ERROR, "connect fail\n");
+			return NBR_EINVAL;
+		}
+	}
+	return NBR_OK;
 }

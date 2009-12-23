@@ -112,6 +112,7 @@ typedef struct	sockmgrdata
 	char		*(*record_parser)	(char *, int *, int*);	/* protocol parcer */
 	int			(*on_recv)			(SOCK, char *, int);	/* protocol callback */
 	int			(*on_event)			(SOCK, char *, int);	/* event watcher */
+	void		(*on_poll)			(SOCK);					/* polling proc */
 }	skmdata_t;
 
 typedef struct 	sockdata
@@ -1081,6 +1082,7 @@ nbr_sockmgr_create(
 	skm->record_parser = nbr_sock_rparser_raw;		/* protocol parcer */
 	skm->on_recv = sockmgr_recv_watcher_noop;		/* protocol callback */
 	skm->on_event = sockmgr_event_watcher_noop;		/* event watcher */
+	skm->on_poll = NULL;
 	/* set default config */
 	skmconf_set_default(&(skm->cf));
 	/* listener socket? */
@@ -1381,7 +1383,8 @@ nbr_sockmgr_set_callback(SOCKMGR s,
 					int (*aw)(SOCK),
 					int (*cw)(SOCK, int),
 					int (*pp)(SOCK, char*, int),
-					int (*eh)(SOCK, char*, int))
+					int (*eh)(SOCK, char*, int),
+					void (*poll)(SOCK))
 {
 	ASSERT(s);
 	skmdata_t *skm = s;
@@ -1390,6 +1393,7 @@ nbr_sockmgr_set_callback(SOCKMGR s,
 	skm->on_close = cw ? cw : sockmgr_close_watcher_noop;
 	skm->on_recv = pp ? pp : sockmgr_recv_watcher_noop;
 	skm->on_event = eh ? eh : sockmgr_event_watcher_noop;
+	skm->on_poll = poll;
 }
 
 /* protocol parser/unparser */
@@ -1589,6 +1593,9 @@ sock_rw(void *ptr, int rf, int wf, int dg)
 			sock_wb_shrink(skd, ssz);
 			break;
 		}
+	}
+	if (skm->on_poll) {
+		skm->on_poll(sockmgr_make_sock(skd));
 	}
 	if (sock_timeout(skm, skd)) {
 		sock_set_close(skd, CLOSED_BY_TIMEOUT);

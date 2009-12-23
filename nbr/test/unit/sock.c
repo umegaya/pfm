@@ -379,7 +379,7 @@ nbr_sock_test(int max_thread, int max_client, int exec_dur, int max_query, char 
 			acceptwatcher,
 			closewatcher,
 			ttparser,
-			NULL);
+			NULL, NULL);
 	if (false == tc_init()) {
 		return FALSE;
 	}
@@ -389,7 +389,7 @@ nbr_sock_test(int max_thread, int max_client, int exec_dur, int max_query, char 
 			acceptwatcher,
 			closewatcher,
 			parser,
-			NULL);
+			NULL, NULL);
 	if ((cpid = nbr_osdep_fork(cmd, argv, NULL)) < 0) {
 		TRACE("fail to invoke client process\n");
 		return FALSE;

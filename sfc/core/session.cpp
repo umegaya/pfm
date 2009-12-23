@@ -21,7 +21,7 @@
 
 int session::factory::connect(const char *addr/*= NULL*/, void *p/* = NULL*/)
 {
-	SOCK sk = nbr_sockmgr_connect(m_skm, addr, p);
+	SOCK sk = nbr_sockmgr_connect(m_skm, addr ? addr : m_cfg->m_host, p);
 	return nbr_sock_valid(sk) ? NBR_OK : NBR_ECONNECT;
 }
 
@@ -34,7 +34,8 @@ int session::factory::init(const config &cfg,
 							int (*aw)(SOCK),
 							int (*cw)(SOCK, int),
 							int (*pp)(SOCK, char*, int),
-							int (*eh)(SOCK, char*, int))
+							int (*eh)(SOCK, char*, int),
+							void (*poll)(SOCK))
 {
 	m_cfg = &cfg;
 	if (!(m_skm = nbr_sockmgr_create(cfg.m_rbuf, cfg.m_wbuf,
@@ -48,8 +49,7 @@ int session::factory::init(const config &cfg,
 		return NBR_ESOCKET;
 	}
 	nbr_sockmgr_set_data(m_skm, this);
-	nbr_sockmgr_set_callback(m_skm,
-			cfg.m_fnp, aw, cw, pp, eh);
+	nbr_sockmgr_set_callback(m_skm, cfg.m_fnp, aw, cw, pp, eh, poll);
 	return NBR_OK;
 }
 
@@ -85,24 +85,3 @@ int session::pingmgr::recv(class session &s, char *p, int l)
 	}
 	return NBR_OK;
 }
-
-int session::poll(UTIME ut)
-{
-	if (valid()) {
-		if (cfg().m_ping_timeo > 0 && !ping().validate(*this, ut)) {
-			close();
-		}
-	}
-	else if (cfg().m_ld_wait <= 0) {
-		return NBR_EINVAL;
-	}
-	else if ((ut - last_access()) > cfg().m_ld_wait) {
-		if (f()->connect(cfg().m_host, cfg().proto_p()) < 0) {
-			return NBR_ECONNECT;
-		}
-		update_access();
-	}
-	return NBR_OK;
-}
-
-
