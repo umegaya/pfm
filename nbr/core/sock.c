@@ -113,6 +113,8 @@ typedef struct	sockmgrdata
 	int			(*on_recv)			(SOCK, char *, int);	/* protocol callback */
 	int			(*on_event)			(SOCK, char *, int);	/* event watcher */
 	void		(*on_poll)			(SOCK);					/* polling proc */
+	void 		(*on_connect)		(SOCK, void*);			/* when connection starts
+															(only from nbr_sockmgr_connect)*/
 }	skmdata_t;
 
 typedef struct 	sockdata
@@ -244,6 +246,13 @@ sockmgr_free_skd(skmdata_t *skm, sockdata_t *skd)
 	}
 }
 
+NBR_INLINE int
+sock_get_wksz(skmdata_t *skm)
+{
+	ASSERT(nbr_array_get_size(skm->skd_a) >= sizeof(sockdata_t));
+	return nbr_array_get_size(skm->skd_a) - sizeof(sockdata_t);
+}
+
 NBR_INLINE sockdata_t *
 sockmgr_alloc_skd(skmdata_t *skm, char *addr, int addrlen)
 {
@@ -264,6 +273,7 @@ sockmgr_alloc_skd(skmdata_t *skm, char *addr, int addrlen)
 	if (!(skd->wb = sockmgr_alloc_wb(skm))) { goto bad; }
 	skd->nrb = 0;
 	skd->nwb = 0;
+	nbr_mem_zero(skd->data, sock_get_wksz(skm));
 	if (!addr) { nbr_mem_zero(skd->addr, sizeof(skd->addr)); }
 	else if (sizeof(skd->addr) < addrlen) {
 		ASSERT(FALSE); goto bad;
@@ -403,13 +413,6 @@ NBR_INLINE int
 sock_get_size(int wks)
 {
 	return (wks + sizeof(sockdata_t));
-}
-
-NBR_INLINE int
-sock_get_wksz(skmdata_t *skm)
-{
-	ASSERT(nbr_array_get_size(skm->skd_a) >= sizeof(sockdata_t));
-	return nbr_array_get_size(skm->skd_a) - sizeof(sockdata_t);
 }
 
 NBR_INLINE int
@@ -1083,6 +1086,7 @@ nbr_sockmgr_create(
 	skm->on_recv = sockmgr_recv_watcher_noop;		/* protocol callback */
 	skm->on_event = sockmgr_event_watcher_noop;		/* event watcher */
 	skm->on_poll = NULL;
+	skm->on_connect = NULL;
 	/* set default config */
 	skmconf_set_default(&(skm->cf));
 	/* listener socket? */
@@ -1151,7 +1155,7 @@ nbr_sockmgr_destroy(SOCKMGR s)
 }
 
 NBR_API SOCK
-nbr_sockmgr_connect(SOCKMGR s, const char *address, void *proto_p)
+nbr_sockmgr_connect(SOCKMGR s, const char *address, void *proto_p, void *p)
 {
 	ASSERT(s);
 	skmdata_t *skm = s;
@@ -1181,6 +1185,10 @@ nbr_sockmgr_connect(SOCKMGR s, const char *address, void *proto_p)
 	if (skm->proto->connect(skd->fd, addr, addrlen) < 0) {
 		SOCK_ERROUT(ERROR,CONNECT,"connect: %s,errno=%d", address,errno);
 		goto bad;
+	}
+	/* if callback specified, call it. */
+	if (skm->on_connect) {
+		skm->on_connect(sockmgr_make_sock(skd), p);
 	}
 	sock_set_stat(skd, SS_CONNECTING);
 	if ((r = sock_addjob(skd)) < 0) {
@@ -1396,6 +1404,14 @@ nbr_sockmgr_set_callback(SOCKMGR s,
 	skm->on_poll = poll;
 }
 
+NBR_API void
+nbr_sockmgr_set_connect_cb(SOCKMGR s,
+					void (*oc)(SOCK, void*))
+{
+	skmdata_t *skm = s;
+	skm->on_connect = oc;
+}
+
 /* protocol parser/unparser */
 NBR_API int
 nbr_sock_send_bin16(SOCK s, char *p, int len)
@@ -1407,6 +1423,7 @@ nbr_sock_send_bin16(SOCK s, char *p, int len)
 	if (!MT_MODE() || nbr_thread_is_current(skd->thrd)) {
 		if (sock_wb_remain(skd->skm, skd) >= dlen) {
 			ccb_bin16(sock_wb_top(skd), p, dlen);
+			skd->nwb += dlen;
 			return len;
 		}
 		return NBR_ESHORT;
@@ -1458,6 +1475,7 @@ nbr_sock_send_raw(SOCK s, char *p, int len)
 	if (!MT_MODE() || nbr_thread_is_current(skd->thrd)) {
 		if (sock_wb_remain(skd->skm, skd) >= len) {
 			nbr_mem_copy(sock_wb_top(skd), p, len);
+			skd->nwb += len;
 			return len;
 		}
 		return NBR_ESHORT;

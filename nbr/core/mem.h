@@ -20,6 +20,9 @@
 #define __MEM_H__
 
 #if defined(_DEBUG)
+#ifdef __cplusplus    /* When the user is Using C++,use C-linkage by this */
+extern "C" {
+#endif
 extern int g_mem_log;
 #define nbr_mem_alloc(s) _nbr_mem_alloc(s, __FILE__, __LINE__)
 void	*_nbr_mem_alloc(size_t s, const char *file, int line);
@@ -28,6 +31,9 @@ void	nbr_mem_zero(void *p, size_t s);
 void	nbr_mem_copy(void *dst, const void *src, size_t s);
 int		nbr_mem_cmp(const void *dst, const void *src, size_t s);
 void	*nbr_mem_move(void *dst, const void *src, size_t s);
+#ifdef __cplusplus    /* When the user is Using C++,use C-linkage by this */
+}
+#endif
 #else
 #include <stdlib.h>
 #include <memory.h>

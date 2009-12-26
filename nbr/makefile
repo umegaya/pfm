@@ -30,7 +30,7 @@ EXLIB = exlib
 LIBSRCS = $(shell find $(LIBDIR) -regex .*\\.c$$ -printf %f\\n)
 LIBOBJS = $(LIBSRCS:%.c=$(OBJS)/$(LIBDIR)/%.o)
 LIBDEPS = $(LIBSRCS:%.c=$(DEPS)/$(LIBDIR)/%.d)
-LIBREQLIBS = pthread
+LIBREQLIBS = pthread gcc_s
 LIBNAME = nbr
 LIBRARY = lib$(LIBNAME).a
 

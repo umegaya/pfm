@@ -22,11 +22,14 @@
 #include "http.h"
 
 class get_request_session : public httpsession {
+	const char *m_url;
 public:
-	get_request_session() : httpsession() {}
+	get_request_session() : httpsession(), m_url(NULL) {}
 	~get_request_session() {}
+	void seturl(const char *url) { m_url = url; }
 public:
 	int send_request();
+	int on_close(int r);
 	int process(response &r);
 };
 
@@ -34,6 +37,7 @@ class testhttpd : public daemon {
 public:
 	testhttpd() : daemon() {}
 	session::factory 	*create_factory(const char *sname);
+	int					create_config(config* cl[], int size);
 	int					boot(int argc, char *argv[]);
 };
 

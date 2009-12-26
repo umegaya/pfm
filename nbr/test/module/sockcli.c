@@ -286,7 +286,7 @@ static int create_connection(SOCKMGR skm, const char *addr, U8 type)
 //			VTRACE("idx=%u is invalid: create new connection\n", i);
 			ASSERT(sent[i] == 0);
 			sent[i] = 0;
-			ska[i] = nbr_sockmgr_connect(skm, addr, NULL);
+			ska[i] = nbr_sockmgr_connect(skm, addr, NULL, NULL);
 			if (nbr_sock_valid(ska[i])) {
 				continue;
 			}
@@ -323,10 +323,10 @@ PROTOCOL *proto_regist_by_name(const char *name, void **proto_pp)
 	if (strcmp(name, "SSL") == 0) {
 		return nbr_proto_ssl(&(g_confs.sslc));
 	}
-	else if (strcmp(name, "TCP")) {
+	else if (strcmp(name, "TCP") == 0) {
 		return nbr_proto_tcp();
 	}
-	else if (strcmp(name, "UDP")) {
+	else if (strcmp(name, "UDP") == 0) {
 		return nbr_proto_udp();
 	}
 	return NULL;
@@ -351,7 +351,7 @@ main(int argc, char *argv[], char *envp[])
 	nbr_get_default(&c);
 	c.sockbuf_size = 16 * 1024 * 1024;
 	c.ndc.mcast_port = 9999;
-	if (nbr_str_atoi(argv[1], &(c.max_thread), 256) < 0) {
+	if (nbr_str_atoi(argv[1], &(c.max_worker), 256) < 0) {
 		TRACE("get args1 fail %s\n", argv[1]);
 		return -3;
 	}
@@ -460,7 +460,7 @@ main(int argc, char *argv[], char *envp[])
 		}
 	}
 	printf("###### sending last result...\n");
-	last = nbr_sockmgr_connect(skm, argv[0], NULL);
+	last = nbr_sockmgr_connect(skm, argv[0], NULL, NULL);
 	tm_last_send_start = time(NULL);
 	while(1) {
 		if (nbr_sock_writable(last) > 0) {

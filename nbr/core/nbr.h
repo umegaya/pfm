@@ -150,6 +150,7 @@ typedef struct	nbr_init_t
 	int	max_sockmgr;
 	int max_nfd;
 	int max_thread;
+	int max_worker;
 	int sockbuf_size;
 	NIOCONF 	ioc;
 	NODECONF	ndc;
@@ -193,6 +194,7 @@ typedef enum {
 NBR_API int		nbr_init(CONFIG *c);
 NBR_API void 	nbr_get_default(CONFIG *c);
 NBR_API void	nbr_fin();
+NBR_API void	nbr_stop_sock_io();
 NBR_API void	nbr_poll();
 
 
@@ -289,7 +291,8 @@ NBR_API SOCKMGR	nbr_sockmgr_create(int nrb, int nwb,
 					void *proto_p,
 					int option);
 NBR_API int		nbr_sockmgr_destroy(SOCKMGR s);
-NBR_API SOCK	nbr_sockmgr_connect(SOCKMGR s, const char *address, void *proto_p);
+NBR_API SOCK	nbr_sockmgr_connect(SOCKMGR s, const char *address,
+					void *proto_p, void *p);
 NBR_API int		nbr_sockmgr_mcast(SOCKMGR s, const char *address, char *data, int len);
 NBR_API void	nbr_sockmgr_set_data(SOCKMGR s, void *p);
 NBR_API void	*nbr_sockmgr_get_data(SOCKMGR s);
@@ -310,6 +313,8 @@ NBR_API void 	nbr_sockmgr_set_callback(SOCKMGR s,
 					int (*pp)(SOCK, char*, int),
 					int (*eh)(SOCK, char*, int),
 					void (*poll)(SOCK));
+NBR_API void	nbr_sockmgr_set_connect_cb(SOCKMGR s,
+					void (*oc)(SOCK, void*));
 NBR_API int		nbr_sock_send_bin16(SOCK s, char *p, int len);
 NBR_API int		nbr_sock_send_bin32(SOCK s, char *p, int len);
 NBR_API int		nbr_sock_send_text(SOCK s, char *p, int len);

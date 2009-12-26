@@ -149,7 +149,7 @@ _prime(int given)
 	for (i = (given - 1); i > 0; i--) {
 		if (p[i] == 0) {
 			nbr_mem_free(p);
-			TRACE("_prime:is %u\n", i + 1);
+			//TRACE("_prime:is %u\n", i + 1);
 			return i + 1;
 		}
 	}
@@ -399,7 +399,7 @@ nbr_search_init_common(int max, int hushsize, int type, int param)
 		}
 	}
 	else { m->lock = NULL; }
-	TRACE("nbr_search_init_common ad:%p,%p,%d\n", m, m->ad, nbr_array_get_size(m->ad));
+	TRACE("nbr_search_init_common ad:%d,%d\n",nbr_array_get_size(m->ad), m->size);
 	ASSERT(m->ad && m->table && m->size > 0);
 	return m;
 }

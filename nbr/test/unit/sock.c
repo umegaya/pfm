@@ -307,10 +307,10 @@ PROTOCOL *proto_regist_by_name(const char *name, void **proto_p)
 	if (strcmp(name, "SSL") == 0) {
 		return nbr_proto_ssl(&(g_confs.sslc));
 	}
-	else if (strcmp(name, "TCP")) {
+	else if (strcmp(name, "TCP") == 0) {
 		return nbr_proto_tcp();
 	}
-	else if (strcmp(name, "UDP")) {
+	else if (strcmp(name, "UDP") == 0) {
 		return nbr_proto_udp();
 	}
 	return NULL;
@@ -336,9 +336,10 @@ nbr_sock_test(int max_thread, int max_client, int exec_dur, int max_query, char 
 	char buf_thnum[256], buf_exedur[256], buf_max_client[256], buf_max_query[256];
 	struct rlimit rl;
 	void *proto_p;
+	PROTOCOL *proto_if;
 
 	nbr_get_default(&c);
-	c.max_thread = max_thread;
+	c.max_worker = max_thread;
 	N_CLIENT = max_client;
 	N_CLIENT_GROUP = (N_CLIENT / 1000) + 1;
 	if (nbr_init(&c) != NBR_OK) {
@@ -350,13 +351,14 @@ nbr_sock_test(int max_thread, int max_client, int exec_dur, int max_query, char 
 
 	f_udp = (strcmp(proto, "UDP") == 0 ? 1 : 0);
 
+	proto_if = proto_regist_by_name(proto, &proto_p);
 	/* server */
 	SOCKMGR skm = nbr_sockmgr_create(4 * 1024, 4 * 1024,
 						N_CLIENT + 1,
 						sizeof(workbuf_t),
 						f_udp ? 10 : 500 * 1000,
 						"0.0.0.0:1978",
-						proto_regist_by_name(proto, &proto_p), proto_p,
+						proto_if, proto_p,
 						0/* non-expandable */);
 	if (skm == NULL) {
 		TRACE("fail to create skm\n");

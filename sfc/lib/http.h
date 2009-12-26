@@ -62,7 +62,7 @@ public:
 	protected:
 		struct context {
 			U8		method, version, n_hd, padd;
-			U16		state, res;
+			S16		state, res;
 			const char	*hd[MAX_HEADER], *bd;
 			U32		bl;
 			U16		hl[MAX_HEADER];
@@ -78,11 +78,16 @@ public:
 	public:
 		state	status() const { return (state)m_ctx.state; }
 		void	setprocessed() { m_ctx.state = state_recv_processed; }
+		bool	error() const { return status() == state_error; }
+		bool 	processed() const { return status() == state_recv_processed; }
+		void	setrc(httprc rc) { m_ctx.res = (S16)rc; }
+		void	setrc_from_close_reason(int reason);
 	public:	/* for processing reply */
 		int			version() const { return m_ctx.version; }
 		char 		*hdrstr(const char *key, char *b, int l) const;
 		int 		hdrint(const char *key, int &out) const;
 		const char 	*body() const { return m_ctx.bd; }
+		httprc		rc() const { return (httprc)m_ctx.res; }
 		int			bodylen() const { return m_ctx.bl; }
 	public:	/* for sending */
 		void		set_send_body(const char *p, int l) {
@@ -106,6 +111,7 @@ public:
 		const char *current() const { return m_p + m_len; }
 		context	&recvctx() { return m_ctx; }
 		context &sendctx() { return m_ctx; }
+		httprc	putrc();
 	} m_fsm;
 	typedef fsm request, response;
 public:
@@ -118,17 +124,22 @@ public:
 	int on_open(const config &cfg);
 	int on_close(int r);
 public:	/* callback */
-	int process(class fsm &r);
-	int send_request();
+	int process(class fsm &r) { return NBR_OK; }
+	int send_request() { return NBR_OK; }
 public:	/* operation */
-	int	get(const char *url, char *hd[], int hl[], int n_hd);
-	int	post(const char *url, const char *body, int blen,
-			char *hd[], int hl[], int n_hd);
+	char *host(char *buff, int len) const;
+	int	get(const char *url, const char *hd[], const char *hv[],
+			int n_hd, int chunked = 0);
+	int	post(const char *url, const char *hd[], const char *hv[],
+			const char *body, int blen, int n_hd, int chunked = 0);
+	int send_request_common(const char *method,
+			const char *url, const char *body, int blen,
+			const char *hd[], const char *hv[], int n_hd, int chunked);
 	int send_result_code(httprc rc, int cf/* close after sent? */);
 	int send_result_and_body(httprc rc, char *b, int bl, const char *mime);
 protected:
 	int send_body();
-	int send_header(char *hd[], int hl[], int n_hd);
+	int send_header(const char *hd[], const char *hv[], int n_hd, int chunked);
 };
 
 /*-------------------------------------------------------------*/
@@ -161,6 +172,7 @@ httpfactory<S>::init(const config &cfg)
 			httpfactory<S>::on_close,
 			httpfactory<S>::on_recv,
 			httpfactory<S>::on_event,
+			httpfactory<S>::on_connect,
 			httpfactory<S>::on_poll);
 }
 
@@ -194,7 +206,8 @@ int httpfactory<S>::on_close(SOCK sk, int reason)
 		return NBR_ENOTFOUND;
 	}
 	S *obj = *s;
-	if (obj->fsm().status() == S::fsm::state_recv_finish) {
+	if (!obj->fsm().processed()) {
+		obj->fsm().setrc_from_close_reason(reason);
 		obj->process(obj->fsm());
 		obj->fsm().setprocessed();
 	}
@@ -212,10 +225,16 @@ int httpfactory<S>::on_open(SOCK sk)
 		return NBR_ENOTFOUND;
 	}
 	super *f = (super *)nbr_sockmgr_get_data(nbr_sock_get_mgr(sk));
-	obj = f->pool().alloc();
+	obj = *s;
+	if (obj == NULL) {
+		obj = f->pool().alloc();
+	}
+	if (obj == NULL) {
+		return NBR_EEXPIRE;
+	}
 	obj->set(sk, f);
-	int r = NBR_EEXPIRE;
-	if (!obj || (r = obj->on_open(f->cfg())) < 0) {
+	int r;
+	if ((r = obj->on_open(f->cfg())) < 0) {
 		return r;
 	}
 	*s = obj;

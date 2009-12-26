@@ -18,10 +18,26 @@
  ****************************************************************/
 #include "sfc.hpp"
 #include "nbr_pkt.h"
+#include <stdarg.h>
 
-int session::factory::connect(const char *addr/*= NULL*/, void *p/* = NULL*/)
+int session::factory::log(int lv, const char *fmt, ...)
 {
-	SOCK sk = nbr_sockmgr_connect(m_skm, addr ? addr : m_cfg->m_host, p);
+	char buff[4096];
+
+	va_list v;
+	va_start(v, fmt);
+	vsnprintf(buff, sizeof(buff) - 1, fmt, v);
+	va_end(v);
+
+	fprintf(stdout, "[%s]%u:%s", cfg().m_name, lv, buff);
+	return NBR_OK;
+}
+
+
+int session::factory::connect(session *s,
+		const char *addr/*= NULL*/, void *p/* = NULL*/)
+{
+	SOCK sk = nbr_sockmgr_connect(m_skm, addr ? addr : m_cfg->m_host, p, s);
 	return nbr_sock_valid(sk) ? NBR_OK : NBR_ECONNECT;
 }
 
@@ -35,6 +51,7 @@ int session::factory::init(const config &cfg,
 							int (*cw)(SOCK, int),
 							int (*pp)(SOCK, char*, int),
 							int (*eh)(SOCK, char*, int),
+							void (*oc)(SOCK, void*),
 							void (*poll)(SOCK))
 {
 	m_cfg = &cfg;
@@ -42,7 +59,7 @@ int session::factory::init(const config &cfg,
 							cfg.m_max_connection,
 							sizeof(session*),
 							cfg.m_timeout,
-							cfg.m_host,
+							cfg.client() ? NULL : cfg.m_host,
 							nbr_proto_from_name(cfg.m_proto_name),
 							cfg.proto_p(),
 							cfg.m_option))) {
@@ -50,6 +67,7 @@ int session::factory::init(const config &cfg,
 	}
 	nbr_sockmgr_set_data(m_skm, this);
 	nbr_sockmgr_set_callback(m_skm, cfg.m_fnp, aw, cw, pp, eh, poll);
+	nbr_sockmgr_set_connect_cb(m_skm, oc);
 	return NBR_OK;
 }
 
@@ -83,5 +101,18 @@ int session::pingmgr::recv(class session &s, char *p, int l)
 	if (msgid != m_last_msgid) {
 		return NBR_EINVAL;
 	}
+	return NBR_OK;
+}
+
+int session::log(int lv, const char *fmt, ...)
+{
+	char buff[4096];
+
+	va_list v;
+	va_start(v, fmt);
+	vsnprintf(buff, sizeof(buff) - 1, fmt, v);
+	va_end(v);
+
+	fprintf(stdout, "[%s:%p]%u:%s", f()->cfg().m_name, this, lv, buff);
 	return NBR_OK;
 }

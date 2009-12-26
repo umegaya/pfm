@@ -53,6 +53,9 @@ nbr_init(CONFIG *c)
 		c = &dc;
 		nbr_get_default(c);
 	}
+#if defined(_DEBUG)
+	nbr_osdep_rlimit_set(NBR_LIMIT_TYPE_CORESIZE, -1);
+#endif
 	nbr_err_init();
 	INIT_OR_DIE(r, nbr_clock_init());
 	INIT_OR_DIE(r, nbr_sig_init());
@@ -63,7 +66,7 @@ nbr_init(CONFIG *c)
 	INIT_OR_DIE(r, nbr_search_init(c->max_search));
 	INIT_OR_DIE(r, nbr_proto_init(c->max_proto));
 	INIT_OR_DIE(r, nbr_sock_init(c->max_sockmgr,
-		c->max_nfd, c->max_thread, c->sockbuf_size));
+		c->max_nfd, c->max_worker, c->sockbuf_size));
 	INIT_OR_DIE(r, nbr_cluster_init(c->ndc.mcast_port,
 		c->ndc.max_node, c->ndc.multiplex));
 	nbr_sock_set_nioconf(c->ioc);
@@ -78,7 +81,8 @@ nbr_get_default(CONFIG *c)
 	c->max_proto = 3;
 	c->max_sockmgr = 16;
 	c->max_nfd = 1024;
-	c->max_thread = 3;
+	c->max_thread = 5;
+	c->max_worker = 3;
 	c->sockbuf_size = 1 * 1024 * 1024; /* 1MB */
 	/* NIOCONF */
 	c->ioc.epoll_timeout_ms = 50;	/* 50ms */
@@ -90,10 +94,16 @@ nbr_get_default(CONFIG *c)
 }
 
 NBR_API void
-nbr_fin()
+nbr_stop_sock_io()
 {
 	nbr_cluster_fin();
 	nbr_sock_fin();
+}
+
+NBR_API void
+nbr_fin()
+{
+	nbr_stop_sock_io();
 	nbr_search_fin();
 	nbr_thread_fin();
 	nbr_proto_fin();

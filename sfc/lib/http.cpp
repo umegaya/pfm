@@ -21,6 +21,7 @@
 #include "nbr_pkt.h"
 #include "common.h"
 #include "str.h"
+#include "mem.h"
 
 /*-------------------------------------------------------------*/
 /* sfc::httpsession::fsm									   */
@@ -39,14 +40,17 @@ httpsession::fsm::reset(const config &cfg)
 httpsession::fsm::state
 httpsession::fsm::append(char *b, int bl)
 {
+	TRACE("append %u byte\n", bl);
 	state s = status();
 	char *w = b;
+	U32 limit = (m_max - 1);
 	while (s != state_error && s != state_recv_finish) {
-		if (m_len >= m_max) {
+		if (m_len >= limit) {
 			s = state_error;
 			break;
 		}
 		m_p[m_len++] = *w++;
+		m_p[m_len] = '\0';
 		switch(s) {
 		case state_recv_header:
 			s = recv_header(); break;
@@ -130,47 +134,68 @@ int
 httpsession::fsm::recv_lf() const
 {
 	const char *p = current();
-	return (m_len > 0 && *p == '\n') ||
-			(m_len > 1 && GET_16(p - 1) == crlf);
+//	if (m_len > 1) {
+//		TRACE("now last 2byte=<%s:%u>%u\n", (p - 2), GET_16(p - 2), htons(crlf));
+//	}
+	if (m_len > 2 && GET_16(p - 2) == htons(crlf)) {
+		return 2;
+	}
+	if (m_len > 1 && *(p - 1) == '\n') {
+		return 1;
+	}
+	return 0;
 }
 
 int
 httpsession::fsm::recv_lflf() const
 {
 	const char *p = current();
-	return (m_len > 1 && GET_16(p - 1) == lflf) ||
-			(m_len > 3 && GET_32(p - 3) == crlfcrlf);
+	if (m_len > 4 && GET_32(p - 4) == htonl(crlfcrlf)) {
+		return 4;
+	}
+	if (m_len > 2 && GET_16(p - 2) == htons(lflf)) {
+		return 2;
+	}
+	return 0;
 }
 
 httpsession::fsm::state
 httpsession::fsm::recv_header()
 {
 	char *p = current();
-	if (recv_lf()) {
+	int nlf, tmp;
+	if ((nlf = recv_lf())) {
 		/* lf found but line is empty. means \n\n or \r\n\r\n */
-		if (p == m_buf) {
+		tmp = nlf;
+		for (;tmp > 0; tmp--) {
+			*(p - tmp) = '\0';
+		}
+		if ((p - nlf) == m_buf) {
 			int cl; char tok[8];
+			/* get result code */
+			m_ctx.res = putrc();
 			/* if content length is exist, no chunk encoding */
 			if (hdrint("Content-Length", cl) >= 0) {
-				recvctx().bd = (p + 1);
+				recvctx().bd = p;
 				recvctx().bl = cl;
 				return state_recv_body_nochunk;
 			}
 			/* if chunk encoding, process as chunk */
 			else if (hdrstr("Transfer-Encoding", tok, sizeof(tok)) != NULL &&
-						nbr_str_cmp(tok, sizeof(tok), "chunked", 7)) {
+						nbr_mem_cmp(tok, "chunked", sizeof("chunked") - 1) == 0) {
+				m_buf = recvctx().bd = p;
 				return state_recv_bodylen;
 			}
-			else {
+			else if (rc() == HRC_OK){
 				return state_error;
 			}
+			else { return state_recv_finish; }
 		}
 		/* lf found. */
 		else if (recvctx().n_hd < MAX_HEADER) {
 			recvctx().hd[recvctx().n_hd] = m_buf;
-			recvctx().hl[recvctx().n_hd] = (p - m_buf);
-			*p = '\0';
-			m_buf = (p + 1);
+			recvctx().hl[recvctx().n_hd] = (p - m_buf) - nlf;
+			m_buf = p;
 			recvctx().n_hd++;
 		}
 		else {	/* too much header. */
@@ -183,11 +208,21 @@ httpsession::fsm::recv_header()
 httpsession::fsm::state
 httpsession::fsm::recv_body()
 {
-	if (recv_lf()) {
-		if ((recvctx().bd + recvctx().bl) != (m_p + m_len)) {
+	int nlf;
+	if ((nlf = recv_lf())) {
+		/* some stupid web server contains \n in its response...
+		 * so we check actual length is received */
+		int n_diff = (recvctx().bd + recvctx().bl) - (m_p + m_len - nlf);
+		if (n_diff > 0) {
+			/* maybe \r\n will come next */
+			return state_recv_body;
+		}
+		else if (n_diff < 0) {
+			/* it should not happen even if \n is contained */
 			return state_error;
 		}
-		m_buf = current() + 1;
+		m_len -= nlf;
+		m_buf = current();
 		return state_recv_bodylen;
 	}
 	return state_recv_body;
@@ -196,7 +231,12 @@ httpsession::fsm::recv_body()
 httpsession::fsm::state
 httpsession::fsm::recv_body_nochunk()
 {
-	if (recv_lflf()) {
+	int nlf;
+	if ((nlf = recv_lflf())) {
+		char *p = current();
+		for (;nlf > 0; nlf--) {
+			*(p - nlf) = '\0';
+		}
 		return state_recv_finish;
 	}
 	return state_recv_body_nochunk;
@@ -208,21 +248,26 @@ httpsession::fsm::recv_bodylen()
 	char *p = current();
 	state s = state_recv_bodylen;
 
-	if (recv_lf()) {
+	int nlf;
+	if ((nlf = recv_lf())) {
 		s = state_recv_body;
 	}
-	if (*p == ';') {
+	else if (*p == ';') {
 		/* comment is specified after length */
+		nlf = 1;
 		s = state_recv_comment;
 	}
 	if (s != state_recv_bodylen) {
 		int cl;
-		*p = '\0';
-		if (nbr_str_atoi(m_buf, &cl, (p - m_buf)) < 0) {
+		for (;nlf > 0; nlf--) {
+			*(p - nlf) = '\0';
+		}
+		if (nbr_str_htoi(m_buf, &cl, (p - m_buf)) < 0) {
 			return state_error;
 		}
 		/* 0-length chunk means chunk end -> next footer */
 		if (cl == 0) {
+			m_buf = p;
 			return state_recv_footer;
 		}
 		recvctx().bl += cl;
@@ -235,17 +280,22 @@ httpsession::fsm::state
 httpsession::fsm::recv_footer()
 {
 	char *p = current();
-	if (recv_lf()) {
+	int nlf, tmp;
+	if ((nlf = recv_lf())) {
+		tmp = nlf;
+		for (;tmp > 0; tmp--) {
+			*(p - tmp) = '\0';
+		}
 		/* lf found but line is empty. means \n\n or \r\n\r\n */
-		if (p == m_buf) {
+		if ((p - nlf) == m_buf) {
 			return state_recv_finish;
 		}
 		/* lf found. */
 		else if (recvctx().n_hd < MAX_HEADER) {
 			recvctx().hd[recvctx().n_hd] = m_buf;
-			recvctx().hl[recvctx().n_hd] = (p - m_buf);
+			recvctx().hl[recvctx().n_hd] = (p - m_buf) - nlf;
 			*p = '\0';
-			m_buf = (p + 1);
+			m_buf = p;
 			recvctx().n_hd++;
 		}
 		else {	/* too much footer + header. */
@@ -258,7 +308,10 @@ httpsession::fsm::recv_footer()
 httpsession::fsm::state
 httpsession::fsm::recv_comment()
 {
-	if (recv_lf()) {
+	int nlf;
+	if ((nlf = recv_lf())) {
+		char *p = current();
+		m_len -= (p - m_buf);
 		return state_recv_body;
 	}
 	return state_recv_comment;
@@ -276,6 +329,70 @@ httpsession::fsm::bodysent(int len)
 	}
 	m_buf += len;
 	return m_len;
+}
+
+void
+httpsession::fsm::setrc_from_close_reason(int reason)
+{
+	switch(reason) {
+	case CLOSED_BY_INVALID:
+		setrc(HRC_SERVER_ERROR); break;
+	case CLOSED_BY_REMOTE:
+		break;	/* may success? */
+	case CLOSED_BY_APPLICATION:
+		setrc(HRC_BAD_REQUEST); break;
+	case CLOSED_BY_ERROR:
+		setrc(HRC_BAD_REQUEST); break;
+	case CLOSED_BY_TIMEOUT:
+		setrc(HRC_REQUEST_TIMEOUT); break;
+	default:
+		ASSERT(false);
+		break;
+	}
+}
+
+
+httprc
+httpsession::fsm::putrc()
+{
+	const char *w = m_ctx.hd[0], *s = w;
+	w += 5;	/* skip first 5 character (HTTP/) */
+	if (nbr_mem_cmp(w, "1.1", sizeof("1.1") - 1) == 0) {
+		m_ctx.version = 11;
+		w += 3;
+	}
+	else if (nbr_mem_cmp(w, "1.0", sizeof("1.0") - 1) == 0) {
+		m_ctx.version = 10;
+		w += 3;
+	}
+	else {
+		return HRC_ERROR;
+	}
+	char tok[256];
+	char *t = tok;
+	while(*w) {
+		w++;
+		if (*w != ' ') { break; }
+		if ((w - s) > m_ctx.hl[0]) {
+			return HRC_ERROR;
+		}
+	}
+	while(*w) {
+		if (*w == ' ') { break; }
+		*t++ = *w++;
+		if ((w - s) > m_ctx.hl[0]) {
+			return HRC_ERROR;
+		}
+		if ((unsigned int )(t - tok) >= sizeof(tok)) {
+			return HRC_ERROR;
+		}
+	}
+	int sc;
+	*t = '\0';
+	if (nbr_str_atoi(tok, &sc, sizeof(tok)) < 0) {
+		return HRC_ERROR;
+	}
+	return (httprc)sc;
 }
 
 
@@ -320,50 +437,90 @@ httpsession::on_close(int r)
 	return NBR_OK;
 }
 
-int
-httpsession::get(const char *url, char *hd[], int hl[], int n_hd)
+char*
+httpsession::host(char *buff, int len) const
 {
-	char data[1024], host[1024];
-	int r, len = nbr_str_printf(data, sizeof(data),
-		"GET %s HTTP/1.1\r\n"
-		"Host: %s\r\n\r\n",
-		url, remoteaddr(host, sizeof(host)));
-	if ((r = send(data, len)) < 0) {
-		return r;
+	char addr[256];
+	const char *p = remoteaddr(addr, sizeof(addr));
+	if (*p == '\0') {
+		return "";
 	}
-	len = r;
-	if ((r = send_header(hd, hl, n_hd)) < 0) {
-		return r;
+	if (!nbr_str_divide_tag_and_val(':', addr, buff, len)) {
+		return "";
 	}
-	len += r;
-	return len;
+	return buff;
 }
 
 int
-httpsession::post(const char *url, const char *body, int blen,
-		char *hd[], int hl[], int n_hd)
+httpsession::get(const char *url, const char *hd[], const char *hv[],
+		int n_hd, int chunked)
 {
-	char data[1024], host[1024];
-	int r, len = nbr_str_printf(data, sizeof(data),
-		"GET %s HTTP/1.1\r\n"
-		"Host: %s\r\n\r\n",
-		url, remoteaddr(host, sizeof(host)));
-	if ((r = send(data, len)) < 0) {
+	return send_request_common("GET", url, "", 0, hd, hv, n_hd, chunked);
+}
+
+int
+httpsession::post(const char *url, const char *hd[], const char *hv[],
+		const char *body, int blen, int n_hd, int chunked/* = 0 */)
+{
+	return send_request_common("POST", url, body, blen, hd, hv, n_hd, chunked);
+}
+
+int
+httpsession::send_request_common(const char *method,
+		const char *url, const char *body, int blen,
+		const char *hd[], const char *hv[], int n_hd, int chunked/* = 0 */)
+{
+	char data[1024], host[1024], path[1024];
+	U16 port;
+	int r, len;
+	if ((r = nbr_str_parse_url(url, sizeof(host), host, &port, path)) < 0) {
 		return r;
 	}
-	len = r;
-	if ((r = send_header(hd, hl, n_hd)) < 0) {
+	if (path[0] == '\0') {
+		len = nbr_str_printf(data, sizeof(data),
+				"%s %s HTTP/1.1\r\n"
+				"Host: %s\r\n",
+				method, path, remoteaddr(host, sizeof(host)));
+	}
+	else {
+		len = nbr_str_printf(data, sizeof(data),
+				"%s %s HTTP/1.1\r\n"
+				"Host: %s:%hu\r\n",
+				method, path, host, port);
+	}
+	if ((len = send(data, len)) < 0) {
+		log(LOG_ERROR, "send request fail (%d)\n", len);
+		return len;
+	}
+	TRACE("request header: <%s", data);
+	if ((r = send_header(hd, hv, n_hd, chunked)) < 0) {
+		log(LOG_ERROR, "send emptyline1 fail (%d)\n", r);
 		return r;
 	}
 	len += r;
-	if (writable() < blen) {
+	if ((r = send("\r\n", 2)) < 0) {
+		return r;
+	}
+	len += r;
+	TRACE(":%u>\n", len);
+	if (chunked) {
+		TRACE("body transfer as chunk (%d)\n", blen);
 		m_fsm.set_send_body(body, blen);
 		return len + blen;
 	}
-	else if ((r = send(body, blen)) < 0) {
-		return r;
+	else if (blen > 0) {
+		if ((r = send(body, blen)) < 0) {
+			log(LOG_ERROR, "send body fail (%d)\n", r);
+			return r;
+		}
+		len += r;
+		if ((r = send("\r\n\r\n", 4)) < 0) {
+			log(LOG_ERROR, "send last crlfcrlf fail (%d)\n", r);
+			return r;
+		}
+		len += r;
 	}
-	return len + r;
+	return len;
 }
 
 int
@@ -371,14 +528,21 @@ httpsession::send_body()
 {
 	char length[16];
 	int n_send = m_fsm.send_body_len();
-	int n_length = nbr_str_printf(length,
-			sizeof(length) - 1, "%08x\r\n", n_send);
-	int n_limit = (writable() - n_length - 2/* for last \r\n */);
+	int n_limit = (writable()
+			- 8/* chunk max is FFFFFFFF */ - 2/* for last \r\n */);
 	if (n_send > n_limit) {
 		n_send = n_limit;
 	}
+	int n_length = nbr_str_printf(length,
+			sizeof(length) - 1, "%08x\r\n", n_send);
 	if ((n_length = send(length, n_length)) < 0) {
 		return n_length;
+	}
+	if (n_send <= 0) { /* chunk transfer but body is 0 byte */
+		if ((n_send = send("\r\n", 2)) < 0) {/* send last empty line */
+			return n_send;
+		}
+		return 0;
 	}
 	if ((n_send = send(m_fsm.send_body_ptr(), n_send)) < 0) {
 		return n_send;
@@ -387,17 +551,35 @@ httpsession::send_body()
 	if ((n_send = send("\r\n", 2)) < 0) {
 		return n_send;
 	}
+	if (m_fsm.bodylen() == 0) {
+		/* send last 0 byte chunk and empty line */
+		if ((n_send = send("0\r\n\r\n", 5)) < 0) {
+			return n_send;
+		}
+		return 0;
+	}
 	return m_fsm.bodylen();
 }
 
 int
-httpsession::send_header(char *hd[], int hl[], int n_hd)
+httpsession::send_header(const char *hd[], const char *hv[], int n_hd, int chunked)
 {
-	int r, len = 0;
-	for (int i = 0; i < n_hd; i++) {
-		if ((r = send(hd[i], hl[i])) < 0) {
+	int r, len = 0, hl;
+	char header[4096];
+	if (chunked) {
+		const char chunk_header[] = "Transfer-Encoding: chunked\r\n";
+		if ((r = send(chunk_header, sizeof(chunk_header) - 1)) < 0) {
 			return r;
 		}
+		TRACE("%s", chunk_header);
+	}
+	for (int i = 0; i < n_hd; i++) {
+		hl = nbr_str_printf(header, sizeof(header) - 1,
+				"%s: %s\r\n", hd[i], hv[i]);
+		if ((r = send(header, hl)) < 0) {
+			return r;
+		}
+		TRACE("%s", header);
 		len += r;
 	}
 	return len;

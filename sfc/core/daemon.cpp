@@ -62,33 +62,30 @@ daemon::run()
 }
 
 int
-daemon::init(int argc, char *argv[], config *list[], int n_list)
+daemon::init(int argc, char *argv[])
 {
-	int r;
-	CONFIG libcfg;
-	nbr_get_default(&libcfg);
-	if ((r = initlib(libcfg)) < 0) {
+	int r, n_list;
+	config *list[MAX_CONFIG_LIST];
+	CONFIG nbrcfg;
+	nbr_get_default(&nbrcfg);
+	if ((r = initlib(nbrcfg)) < 0) {
 		log(LOG_ERROR, "fail to library parameter (%d)\n", r);
 		return r;
 	}
-	if ((r = nbr_init(&libcfg)) < 0) {
+	if ((r = nbr_init(&nbrcfg)) < 0) {
 		log(LOG_ERROR, "fail to init library(%d)\n", r);
 		return r;
+	}
+	if (!(n_list = create_config(list, MAX_CONFIG_LIST))) {
+		log(LOG_ERROR, "fail to create config (%d)\n", n_list);
+		return n_list;
 	}
 	if (!m_cl.init(n_list, n_list)) {
 		log(LOG_ERROR, "config list too big? (%d)\n", m_cl.size());
 		return NBR_EEXPIRE;
 	}
-	cmap::iterator c;
 	for (int i = 0; i < n_list; i++) {
-		config *cfg;
-		if (!(cfg = create_config(list[i]->m_name))) {
-			log(LOG_ERROR, "%s: fail to create config\n", list[i]->m_name);
-			return NBR_EINVAL;
-		}
-		cfg->set(*list[i]);
-		c = m_cl.insert(cfg, list[i]->m_name);
-		if (c == m_cl.end()) {
+		if (m_cl.insert(list[i], list[i]->m_name) == m_cl.end()) {
 			return NBR_EEXPIRE;
 		}
 	}
@@ -100,7 +97,7 @@ daemon::init(int argc, char *argv[], config *list[], int n_list)
 		log(LOG_ERROR, "session factory list too big? (%d)\n", m_cl.size());
 		return NBR_EEXPIRE;
 	}
-	smap::iterator s;
+	cmap::iterator c;
 	for (c = m_cl.begin(); c != m_cl.end(); c = m_cl.next(c)) {
 		session::factory *f;
 		if (!(f = create_factory(c->m_name))) {
@@ -111,8 +108,7 @@ daemon::init(int argc, char *argv[], config *list[], int n_list)
 			log(LOG_ERROR, "%s: init error %d\n", c->m_name, r);
 			return r;
 		}
-		s = m_sl.insert(f, c->m_name);
-		if (s == m_sl.end()) {
+		if (m_sl.insert(f, c->m_name) == m_sl.end()) {
 			return NBR_EEXPIRE;
 		}
 	}
@@ -125,6 +121,9 @@ daemon::init(int argc, char *argv[], config *list[], int n_list)
 void
 daemon::fin()
 {
+	/* stop network IO */
+	nbr_stop_sock_io();
+	/* acleanup related memory resource */
 	smap::iterator s;
 	for (s = m_sl.begin(); s != m_sl.end(); s = m_sl.next(s)) {
 		s->fin();
@@ -135,6 +134,7 @@ daemon::fin()
 		c->fin();
 	}
 	m_cl.fin();
+	/* clean up library */
 	nbr_fin();
 }
 
@@ -148,7 +148,7 @@ daemon::log(int prio, const char *fmt, ...)
 	vsnprintf(buff, sizeof(buff) - 1, fmt, v);
 	va_end(v);
 
-	fprintf(stderr, "%u:%s", prio, buff);
+	fprintf(stdout, "%u:%s", prio, buff);
 	return NBR_OK;
 }
 
@@ -188,6 +188,7 @@ daemon::read_config(int argc, char *argv[])
 				log(LOG_INFO, "%s: invalid config\n", line);
 				continue;
 			}
+			log(LOG_INFO, "apply config<%s>\n", line);
 		}
 		if (fp) { fclose(fp); }
 	}
@@ -215,10 +216,14 @@ daemon::initlib(CONFIG &c)
 	return NBR_OK;
 }
 
-config*
-daemon::create_config(const char *sname)
+int
+daemon::create_config(config *cl[], int size)
 {
-	return new util::config;
+	if (size <= 0) {
+		return NBR_ESHORT;
+	}
+	cl[0] = new config;
+	return 1;
 }
 
 session::factory*

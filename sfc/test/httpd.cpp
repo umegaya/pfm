@@ -24,15 +24,44 @@
 int
 get_request_session::process(response &resp)
 {
-	fprintf(stdout, "response len : %u\n", resp.bodylen());
-	fprintf(stdout, "%s\n", resp.body());
+	if (resp.error()) {
+		log(LOG_ERROR, "internal error\n");
+		return NBR_OK;
+	}
+	log(LOG_INFO, "http result : %d\n", resp.rc());
+	log(LOG_INFO, "response len : %u\n", resp.bodylen());
+	char mime[256];
+	if (!resp.hdrstr("Content-Type", mime, sizeof(mime))) {
+		log(LOG_INFO, "Content-Type unknown\n");
+		return NBR_OK;
+	}
+	log(LOG_INFO, "content-type: %s\n", mime);
+	char type[256], file[256];
+	const char *ext;
+	if ((ext = nbr_str_divide_tag_and_val('/', mime, type, sizeof(type)))) {
+		snprintf(file, sizeof(file) - 1, "resp.%s", ext);
+		FILE *fp = fopen(file, "w+");
+		if (fp) {
+			fwrite(resp.body(),1,resp.bodylen(),fp);
+			fclose(fp);
+		}
+	}
+	return NBR_OK;
+}
+
+int
+get_request_session::on_close(int r)
+{
+	log(LOG_INFO, "connection closed (%d)\n", r);
 	return NBR_OK;
 }
 
 int
 get_request_session::send_request()
 {
-	return get("/repos/nbr/", NULL, NULL, 0);
+	int r = get(m_url, NULL, NULL, 0);
+	TRACE("get_request_session::send_request get result %d\n", r);
+	return r;
 }
 
 /*-------------------------------------------------------------*/
@@ -45,16 +74,46 @@ testhttpd::create_factory(const char *sname)
 }
 
 int
+testhttpd::create_config(config *cl[], int size)
+{
+	if (size <= 0) {
+		return NBR_ESHORT;
+	}
+	cl[0] = new config (
+			"get",
+			"",
+			60,
+			60, 0,
+			1280 * 1024, 1024,
+			0, 0,	/* no ping */
+			"TCP",
+			1 * 1000 * 1000/* 1sec task span */,
+			0/* never wait ld recovery */,
+			nbr_sock_rparser_raw,
+			nbr_sock_send_raw
+			);
+	return 1;
+}
+
+int
 testhttpd::boot(int argc, char *argv[])
 {
-	session::factory *f = m_sl.find("get");
+	httpfactory<get_request_session> *f =
+			(httpfactory<get_request_session> *)m_sl.find("get");
 	config *c = m_cl.find("get");
 	if (!c || !f) {
 		log(LOG_ERROR, "conf or factory not found for 'get'\n");
 		return NBR_ENOTFOUND;
 	}
-	for (int i = 0; i < c->m_max_connection; i++) {
-		if (f->connect("localhost:80") < 0) {
+	get_request_session *s;
+	for (int i = 0; i < 1 /*c->m_max_connection*/; i++) {
+		if (!(s = f->pool().alloc())) {
+			log(LOG_ERROR, "allocate session fail\n");
+			return NBR_EINVAL;
+		}
+		s->seturl("sol-web.gamecity.ne.jp:8080"
+				"/wpxy/1?method_id=55233&MsgID=0&StartIndex=0&Num=300");
+		if (f->connect(s, "sol-web.gamecity.ne.jp:8080") < 0) {
 			log(LOG_ERROR, "connect fail\n");
 			return NBR_EINVAL;
 		}

@@ -52,6 +52,7 @@ TESTREQLIBS = z bz2 rt m ssl crypto
 TESTLIBS = $(foreach lib,$(TESTREQLIBS),$(shell echo "-l$(lib)"))
 UNITTEST = ut
 RUNTEST = all
+TESTRESULT = resp.*
 
 #-----------------------------------------------------------------------
 #	lib setting
@@ -108,7 +109,7 @@ $(UNITTEST) : $(TESTOBJS)
 	$(CC) -o $(TESTDIR)/$(UNITTEST) $(CFLAG) $(LNKOPT) $(DEFS) $(INCS) $(TESTOBJS) $(LIBS) $(TESTLIBS) $(PLUGIN_LIBS)
 
 clean:
-	rm -f $(LIBOBJS) $(TESTOBJS) $(TESTDIR)/$(UNITTEST) $(LIBRARY) $(COREFILE) $(PLUGIN)
+	rm -f $(LIBOBJS) $(TESTOBJS) $(TESTDIR)/$(UNITTEST) $(LIBRARY) $(COREFILE) $(PLUGIN) $(TESTRESULT)
 	
 cleanup: clean
 	rm -rf $(OBJS) $(DEPS)

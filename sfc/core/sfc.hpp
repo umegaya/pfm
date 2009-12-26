@@ -309,7 +309,14 @@ protected:
 using namespace util;
 
 
-
+/* log level definition */
+enum {
+	LOG_DEBUG = 1,
+	LOG_INFO = 2,
+	LOG_WARN = 3,
+	LOG_ERROR = 4,
+	LOG_FATAL = 5,
+};
 /*-------------------------------------------------------------*/
 /* sfc::session												   */
 /*-------------------------------------------------------------*/
@@ -329,8 +336,9 @@ public:
 		virtual int init(const config &cfg) = 0;
 		virtual void fin() = 0;
 		virtual void poll(UTIME ut) = 0;
+		int log(int lv, const char *fmt, ...);
 		const config &cfg() const { return *m_cfg; }
-		int connect(const char *addr = NULL, void *p = NULL);
+		int connect(session *s, const char *addr = NULL, void *p = NULL);
 		int mcast(const char *addr, char *p, int l);
 		inline U32 msgid() {
 			++m_msgid_seed;
@@ -348,15 +356,18 @@ public:
 					int (*cw)(SOCK, int),
 					int (*pp)(SOCK, char*, int),
 					int (*eh)(SOCK, char*, int),
+					void (*oc)(SOCK, void*),
 					void (*poll)(SOCK));
 	};
 	template <class S>
 	class factory_impl : public factory {
-		array<S>		m_pool;
+	public:
+		typedef	array<S> sspool;
+		sspool		m_pool;
 	public:
 		factory_impl() : factory(), m_pool() {}
 		~factory_impl() { fin(); }
-		array<S> &pool() { return m_pool; }
+		sspool &pool() { return m_pool; }
 		int init(const config &cfg);
 		void fin();
 		void poll(UTIME ut);
@@ -364,6 +375,7 @@ public:
 		static int on_close(SOCK, int);
 		static int on_recv(SOCK, char*, int);
 		static int on_event(SOCK, char*, int);
+		static void on_connect(SOCK, void *);
 		static void on_poll(SOCK);
 	};
 	class pingmgr {
@@ -394,7 +406,7 @@ protected:
 	UTIME	m_last_access;
 	U32		m_attr;
 public:	/* usually dont need to touch */
-	session() : m_ping() {}
+	session() : m_f(NULL), m_ping(), m_last_access(0LL), m_attr(0) { clear_sock(); }
 	~session() {}
 	void set(SOCK sk, factory *f) 	{ m_sk = sk; m_f = f; }
 	pingmgr &ping()					{ return m_ping; }
@@ -405,6 +417,7 @@ public:	/* usually dont need to touch */
 	factory *f() 					{ return m_f; }
 	const factory *f() const		{ return m_f; }
 public: /* operation */
+	int log(int lv, const char *fmt, ...);
 	const config &cfg() const 		{ return f()->cfg(); }
 	UTIME last_access() const		{ return m_last_access; }
 	int valid() const				{ return attr(attr_opened) ? 1 : 0; }
@@ -430,13 +443,6 @@ public: /* callback */
 /*-------------------------------------------------------------*/
 /* sfc::daemon												   */
 /*-------------------------------------------------------------*/
-enum {
-	LOG_DEBUG = 1,
-	LOG_INFO = 2,
-	LOG_WARN = 3,
-	LOG_ERROR = 4,
-	LOG_FATAL = 5,
-};
 class daemon {
 protected:
 	typedef map<session::factory*, char[config::MAX_SESSION_NAME]>	smap;
@@ -445,16 +451,16 @@ protected:
 	cmap		m_cl;
 	static U32	m_sigflag;
 public:
-	static const int DEFAULT_SIZE = 16;
+	static const int MAX_CONFIG_LIST = 16;
 public:
 	daemon() : m_sl(), m_cl() {}
 	virtual ~daemon() {}
 	int run();
-	int	init(int argc, char *argv[], config *list[], int n_list);
+	int	init(int argc, char *argv[]);
 	int read_config(int argc, char *argv[]);
 	void fin();
 public:
-	int log(int prio, const char *fmt, ...);
+	int log(int lv, const char *fmt, ...);
 	int bg() { return nbr_osdep_daemonize(); }
 	static void sigfunc(int signo);
 	int alive();
@@ -462,7 +468,7 @@ public:
 	virtual int					on_signal(int signo);
 	virtual int					boot(int argc, char *argv[]);
 	virtual int				 	initlib(CONFIG &c);
-	virtual config				*create_config(const char *sname);
+	virtual int					create_config(config *cl[], int size);
 	virtual session::factory 	*create_factory(const char *sname);
 };
 

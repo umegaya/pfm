@@ -195,7 +195,7 @@ nodeset_reconstruct(cluster_t *c, nodeset_t *nds, node_t **list, int n_list)
 	cnt = nbr_cluster_is_master(c) ? n_list : g_clst.multiplex;
 	for (i = 0, nd = nds->list; nd && i < cnt; i++, nd = nd->next) {
 		if (!nbr_sock_valid(nd->conn)) {
-			nd->conn = nbr_sockmgr_connect(c->master.skm, nd->addr, NULL);
+			nd->conn = nbr_sockmgr_connect(c->master.skm, nd->addr, NULL, NULL);
 			if (!nbr_sock_valid(nd->conn)) {
 				return NBR_ECONNECT;
 			}

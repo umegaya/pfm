@@ -37,6 +37,7 @@ int session::factory_impl<S>::init(const config &cfg)
 			session::factory_impl<S>::on_close,
 			session::factory_impl<S>::on_recv,
 			session::factory_impl<S>::on_event,
+			session::factory_impl<S>::on_connect,
 			session::factory_impl<S>::on_poll);
 }
 
@@ -61,7 +62,8 @@ void session::factory_impl<S>::poll(UTIME ut)
 				r = NBR_EINVAL;
 			}
 			else if ((ut - tmp->last_access()) > tmp->cfg().m_ld_wait) {
-				if (connect(tmp->cfg().m_host, tmp->cfg().proto_p()) < 0) {
+				S &rs = *tmp;
+				if (connect(&rs, tmp->cfg().m_host, tmp->cfg().proto_p()) < 0) {
 					r = NBR_ECONNECT;
 				}
 				else {
@@ -83,15 +85,17 @@ int session::factory_impl<S>::on_open(SOCK sk)
 	if (s == NULL) {
 		return NBR_ENOTFOUND;
 	}
-	factory_impl<S> *f =
-		(factory_impl<S> *)nbr_sockmgr_get_data(nbr_sock_get_mgr(sk));
-	obj = f->pool().alloc();
+	obj = *s;
+	session::factory_impl<S> *f =
+		(session::factory_impl<S> *)nbr_sockmgr_get_data(nbr_sock_get_mgr(sk));
+	if (obj == NULL) {
+		obj = f->pool().alloc();
+	}
 	obj->set(sk, f);
-	int r = NBR_EEXPIRE;
-	if (!obj || (r = obj->on_open(f->cfg())) < 0) {
+	int r;
+	if ((r = obj->on_open(f->cfg())) < 0) {
 		return r;
 	}
-	*s = obj;
 	obj->setattr(session::attr_opened, true);
 	return NBR_OK;
 }
@@ -103,10 +107,23 @@ int session::factory_impl<S>::on_close(SOCK sk, int reason)
 	if (s == NULL) {
 		return NBR_ENOTFOUND;
 	}
-	(*s)->on_close(reason);
-	(*s)->clear_sock();
-	(*s)->setattr(session::attr_opened, false);
+	S *obj = *s;
+	obj->on_close(reason);
+	obj->clear_sock();
+	obj->setattr(session::attr_opened, false);
 	return NBR_OK;
+
+}
+
+template <class S>
+void session::factory_impl<S>::on_connect(SOCK sk, void *p)
+{
+	S **s = (S**)nbr_sock_get_data(sk, NULL);
+	if (s == NULL) {
+		return;
+	}
+	*s = (S *)p;
+	return;
 
 }
 
@@ -117,11 +134,12 @@ int session::factory_impl<S>::on_recv(SOCK sk, char *p, int l)
 	if (s == NULL) {
 		return NBR_ENOTFOUND;
 	}
-	if ((*s)->ping().recv((**s), p, l) < 0) {
+	S *obj = *s;
+	if (obj->ping().recv((**s), p, l) < 0) {
 		return NBR_EINVAL;	/* invalid ping result received */
 	}
-	(*s)->update_access();
-	return (*s)->on_recv(p, l);
+	obj->update_access();
+	return obj->on_recv(p, l);
 }
 
 template <class S>
@@ -147,6 +165,6 @@ void session::factory_impl<S>::on_poll(SOCK sk)
 		obj->close();
 		return;
 	}
-	(*s)->poll(ut, true);
+	obj->poll(ut, true);
 }
 
