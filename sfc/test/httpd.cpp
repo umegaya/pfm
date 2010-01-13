@@ -17,33 +17,63 @@
  * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
  ****************************************************************/
 #include "httpd.h"
+#include "common.h"
+#include "mem.h"
+#include "str.h"
+#include <sys/stat.h>
+
+using namespace sfc;
 
 /*-------------------------------------------------------------*/
 /* get_request_session										   */
 /*-------------------------------------------------------------*/
+int get_request_session::m_done = 0;
+UTIME get_request_session::m_start = 0LL, get_request_session::m_end = 0LL;
+
 int
 get_request_session::process(response &resp)
 {
 	if (resp.error()) {
-		log(LOG_ERROR, "internal error\n");
+		log(ERROR, "internal error\n");
 		return NBR_OK;
 	}
-	log(LOG_INFO, "http result : %d\n", resp.rc());
-	log(LOG_INFO, "response len : %u\n", resp.bodylen());
+	log(INFO, "http result : %d\n", resp.rc());
+	log(INFO, "response len : %u\n", resp.bodylen());
 	char mime[256];
 	if (!resp.hdrstr("Content-Type", mime, sizeof(mime))) {
-		log(LOG_INFO, "Content-Type unknown\n");
+		log(INFO, "content-type unknown\n");
 		return NBR_OK;
 	}
-	log(LOG_INFO, "content-type: %s\n", mime);
-	char type[256], file[256];
+	log(INFO, "content-type: %s\n", mime);
+	char path[256], file[256];
 	const char *ext;
-	if ((ext = nbr_str_divide_tag_and_val('/', mime, type, sizeof(type)))) {
-		snprintf(file, sizeof(file) - 1, "resp.%s", ext);
-		FILE *fp = fopen(file, "w+");
+	if ((ext = nbr_str_divide_tag_and_val('/', m_url, path, sizeof(path)))) {
+		snprintf(file, sizeof(file) - 1, "./%s", ext);
+		FILE *fp = fopen(file, "r");
 		if (fp) {
-			fwrite(resp.body(),1,resp.bodylen(),fp);
+			struct stat st;
+			fstat(fileno(fp), &st);
+			ASSERT(st.st_size == resp.bodylen());
+
+			char buffer[st.st_size];
+			fread(buffer,1,st.st_size,fp);
+			ASSERT(nbr_mem_cmp(buffer, resp.body(), resp.bodylen()) == 0);
+			log(INFO, "<%s> get test ok!\n", file);
+			m_done++;
+			if (m_done >= 1000) {
+				if (m_end == 0LL) {
+					m_end = nbr_clock();
+					log(INFO, "###### take %u us to handle 1000 request (%f qps) ######\n",
+							(U32)(m_end - m_start),
+							(float)((float)m_done * 1000 * 1000 / (float)(m_end - m_start)));
+					daemon::stop();
+				}
+			}
 			fclose(fp);
+		}
+		else {
+			log(ERROR, "file %s not found\n", file);
+			ASSERT(false);
 		}
 	}
 	return NBR_OK;
@@ -52,16 +82,123 @@ get_request_session::process(response &resp)
 int
 get_request_session::on_close(int r)
 {
-	log(LOG_INFO, "connection closed (%d)\n", r);
+	ASSERT(m_end != 0LL || fsm().get_state() == fsm::state_recv_finish);
+	log(INFO, "on_close (%d)\n", r);
 	return NBR_OK;
 }
 
 int
 get_request_session::send_request()
 {
-	int r = get(m_url, NULL, NULL, 0);
-	TRACE("get_request_session::send_request get result %d\n", r);
+	int r = get(m_url, NULL, NULL, 0, true);
+	log(INFO, "send_request get(%s) result %d\n", m_url, r);
 	return r;
+}
+
+
+#define PORT "12345"
+void
+get_request_session::set_random_url()
+{
+	static const char *urls[] = {
+		"localhost:"PORT"/test/files/eyes0164.jpg",
+		"localhost:"PORT"/test/files/eyes0168.jpg",
+		"localhost:"PORT"/test/files/eyes0172.jpg",
+		"localhost:"PORT"/test/files/eyes0176.jpg",
+		"localhost:"PORT"/test/files/eyes0182.jpg",
+	};
+	m_url = urls[nbr_rand32() % 5];
+}
+
+/*-------------------------------------------------------------*/
+/* get_request_session										   */
+/*-------------------------------------------------------------*/
+map<get_response_session::fmem, char[256]>	get_response_session::m_res;
+
+int
+get_response_session::process(request &r)
+{
+	char buf[256], path[256];
+	if (r.url(buf, sizeof(buf)) < 0) {
+		log(ERROR, "cannot get url\n");
+		return NBR_OK;
+	}
+	log(INFO, "url=<%s>\n", buf);
+	snprintf(path, sizeof(path) - 1, "./%s", buf);
+	fmem *fm = get_fmem(path);
+	if (!fm) {
+		log(INFO, "<%s> not found\n", path);
+		send_result_code(HRC_NOT_FOUND, 1);
+		return NBR_OK;
+	}
+	int len = send_result_and_body(HRC_OK, (const char *)fm->p, fm->l, "image/jpg");
+	log(INFO, "send %u byte\n", len);
+	return NBR_OK;
+}
+
+get_response_session::fmem *
+get_response_session::get_fmem(const char *path)
+{
+	map<fmem, char[256]>::iterator it;
+	fmem *p = m_res.find(path);
+	if (p) {
+//		TRACE("%s already loaded on memory (%p)\n", path, p);
+		return p;
+	}
+	fmem fm = { NULL, 0 };
+	FILE *fp = fopen(path, "r");
+	if (!fp) {
+		daemon::log(ERROR, "%s cannot open\n", path);
+		goto error;
+	}
+	struct stat st;
+	fstat(fileno(fp), &st);
+	fm.p = (U8 *)nbr_mem_alloc(st.st_size);
+	if (!(fm.p)) {
+		daemon::log(ERROR, "memory cannot allocate %llu byte\n", (U64)st.st_size);
+		goto error;
+	}
+	fm.l = st.st_size;
+	fread(fm.p, 1, fm.l, fp);
+	fclose(fp);
+	if ((it = m_res.insert(fm, path)) == m_res.end()) {
+		daemon::log(ERROR, "%s search engine full\n", path);
+		goto error;
+	}
+	return &(*it);
+error:
+	if (fm.p) {
+		nbr_mem_free(fm.p);
+	}
+	if (fp) {
+		fclose(fp);
+	}
+	return NULL;
+}
+
+int
+get_response_session::init_res()
+{
+	int r;
+	if ((r = m_res.init(1000, 100, -1,
+			opt_expandable | opt_threadsafe)) < 0) {
+		return r;
+	}
+	return NBR_OK;
+}
+
+void
+get_response_session::fin_res()
+{
+	if (m_res.initialized()) {
+		map<fmem, char[256]>::iterator p = m_res.begin();
+		for (; p != m_res.end(); p = m_res.next(p)) {
+			if (p->p) {
+				nbr_mem_free(p->p);
+			}
+		}
+		m_res.fin();
+	}
 }
 
 /*-------------------------------------------------------------*/
@@ -70,53 +207,87 @@ get_request_session::send_request()
 session::factory *
 testhttpd::create_factory(const char *sname)
 {
-	return new httpfactory<get_request_session>;
+	TRACE("create_factory: sname=<%s>\n", sname);
+	if (nbr_str_cmp(sname, sizeof("rget") - 1, "rget", sizeof("rget") - 1) == 0) {
+		return new httpsession::factory<get_response_session>;
+	}
+	return new httpsession::factory<get_request_session>;
 }
 
 int
 testhttpd::create_config(config *cl[], int size)
 {
-	if (size <= 0) {
+	if (size <= 1) {
 		return NBR_ESHORT;
 	}
 	cl[0] = new config (
 			"get",
-			"",
+			"localhost:"PORT,
 			60,
-			60, 0,
-			1280 * 1024, 1024,
+			60, opt_not_set,
+			128 * 1024, 1024,
+			0, 0,	/* no ping */
+			"TCP",
+			1 * 1000 * 1000/* 1sec task span */,
+			1/* after 10ms, again try to connect */,
+			nbr_sock_rparser_raw,
+			nbr_sock_send_raw,
+			config::cfg_flag_not_set
+			);
+	cl[1] = new config (
+			"rget",
+			"0.0.0.0:"PORT,
+			60,
+			60, opt_not_set,
+			1024, 32 * 1024,
 			0, 0,	/* no ping */
 			"TCP",
 			1 * 1000 * 1000/* 1sec task span */,
 			0/* never wait ld recovery */,
 			nbr_sock_rparser_raw,
-			nbr_sock_send_raw
+			nbr_sock_send_raw,
+			config::cfg_flag_server
 			);
-	return 1;
+	return 2;
 }
 
 int
 testhttpd::boot(int argc, char *argv[])
 {
-	httpfactory<get_request_session> *f =
-			(httpfactory<get_request_session> *)m_sl.find("get");
-	config *c = m_cl.find("get");
+	httpsession::factory<get_request_session> *f =
+			find_session< httpsession::factory<get_request_session> >("get");
+	config *c = find_config<config>("get");
 	if (!c || !f) {
-		log(LOG_ERROR, "conf or factory not found for 'get'\n");
-		return NBR_ENOTFOUND;
+		m_server = 1;
+		return get_response_session::init_res();	/* maybe server session. ok */
 	}
 	get_request_session *s;
-	for (int i = 0; i < 1 /*c->m_max_connection*/; i++) {
+	c = find_config<config>("rget");
+	if (!c) {
+		log(ERROR, "server mode but config not found\n");
+		return NBR_ENOTFOUND;
+	}
+	get_request_session::m_start = nbr_clock();
+	for (int i = 0; i < c->m_max_connection; i++) {
 		if (!(s = f->pool().alloc())) {
-			log(LOG_ERROR, "allocate session fail\n");
+			log(ERROR, "allocate session fail\n");
 			return NBR_EINVAL;
 		}
-		s->seturl("sol-web.gamecity.ne.jp:8080"
-				"/wpxy/1?method_id=55233&MsgID=0&StartIndex=0&Num=300");
-		if (f->connect(s, "sol-web.gamecity.ne.jp:8080") < 0) {
-			log(LOG_ERROR, "connect fail\n");
+		s->set_random_url();
+		if (f->connect(s) < 0) {
+			log(ERROR, "connect fail\n");
 			return NBR_EINVAL;
 		}
 	}
 	return NBR_OK;
 }
+
+void
+testhttpd::shutdown()
+{
+	if (m_server) {
+		get_response_session::fin_res();
+	}
+}
+
+

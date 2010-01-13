@@ -113,7 +113,7 @@ typedef struct	sockmgrdata
 	int			(*on_recv)			(SOCK, char *, int);	/* protocol callback */
 	int			(*on_event)			(SOCK, char *, int);	/* event watcher */
 	void		(*on_poll)			(SOCK);					/* polling proc */
-	void 		(*on_connect)		(SOCK, void*);			/* when connection starts
+	int 		(*on_connect)		(SOCK, void*);			/* when connection starts
 															(only from nbr_sockmgr_connect)*/
 }	skmdata_t;
 
@@ -1188,7 +1188,7 @@ nbr_sockmgr_connect(SOCKMGR s, const char *address, void *proto_p, void *p)
 	}
 	/* if callback specified, call it. */
 	if (skm->on_connect) {
-		skm->on_connect(sockmgr_make_sock(skd), p);
+		if (skm->on_connect(sockmgr_make_sock(skd), p) < 0) { goto bad; }
 	}
 	sock_set_stat(skd, SS_CONNECTING);
 	if ((r = sock_addjob(skd)) < 0) {
@@ -1350,9 +1350,9 @@ nbr_sock_get_addr(SOCK s, char *buf, int len)
 {
 	ASSERT(s.p);
 	sockdata_t *skd = s.p;
-	if (!skd) { return "(null)"; }
+	if (!skd) { return ""; }
 	if (skd->skm->proto->addr2str(skd->addr, skd->alen, buf, len) < 0) {
-		return "(error)";
+		return "";
 	}
 	return buf;
 }
@@ -1406,7 +1406,7 @@ nbr_sockmgr_set_callback(SOCKMGR s,
 
 NBR_API void
 nbr_sockmgr_set_connect_cb(SOCKMGR s,
-					void (*oc)(SOCK, void*))
+					int (*oc)(SOCK, void*))
 {
 	skmdata_t *skm = s;
 	skm->on_connect = oc;
@@ -1613,7 +1613,9 @@ sock_rw(void *ptr, int rf, int wf, int dg)
 		}
 	}
 	if (skm->on_poll) {
-		skm->on_poll(sockmgr_make_sock(skd));
+		if (sock_get_stat(skd) != SS_CLOSING) {
+			skm->on_poll(sockmgr_make_sock(skd));
+		}
 	}
 	if (sock_timeout(skm, skd)) {
 		sock_set_close(skd, CLOSED_BY_TIMEOUT);
@@ -1712,6 +1714,13 @@ sock_accept(skmdata_t *skm)
 			sockmgr_free_skd(skm, skd);
 		}
 	}
+	if (skm->on_connect) {
+		if (skm->on_connect(sockmgr_make_sock(skd), NULL) < 0) {
+			skm->proto->close(fd);
+			sockmgr_free_skd(skm, skd);
+			return;
+		}
+	}
 	/* this pass skd to thread, so need to put after on_accept
 	 * otherwise nbr_sock_get_addr returns NULL inside of it */
 	if (sock_addjob(skd) < 0) {
@@ -1739,7 +1748,7 @@ nbr_sock_io(void *ptr)
 		if (r == 0){ break; }
 		sock_set_stat(skd, SS_CONNECT);
 		if ((r = skd->skm->on_accept(sockmgr_make_sock(skd))) < 0) {
-			SOCK_LOG(INFO,"accept blocked by app: result=%d", r);
+			SOCK_LOG(INFO,"accept blocked by app: result=%d\n", r);
 			sock_set_close(skd, CLOSED_BY_APPLICATION);
 		}
 		break;

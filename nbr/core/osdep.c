@@ -173,6 +173,12 @@ error:
 	return ret;
 }
 
+NBR_API int
+nbr_osdep_getpid()
+{
+	return getpid();
+}
+
 /* process operation */
 NBR_API int
 nbr_osdep_daemonize()

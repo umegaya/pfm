@@ -26,6 +26,8 @@ extern "C" {
 extern int g_mem_log;
 #define nbr_mem_alloc(s) _nbr_mem_alloc(s, __FILE__, __LINE__)
 void	*_nbr_mem_alloc(size_t s, const char *file, int line);
+#define nbr_mem_calloc(n, s) _nbr_mem_calloc(n, s, __FILE__, __LINE__)
+void	*_nbr_mem_calloc(size_t n, size_t s, const char *file, int line);
 void	nbr_mem_free(void *p);
 void	nbr_mem_zero(void *p, size_t s);
 void	nbr_mem_copy(void *dst, const void *src, size_t s);
@@ -38,6 +40,7 @@ void	*nbr_mem_move(void *dst, const void *src, size_t s);
 #include <stdlib.h>
 #include <memory.h>
 #define nbr_mem_alloc	malloc
+#define nbr_mem_calloc	calloc
 #define nbr_mem_free	free
 #define nbr_mem_zero	bzero
 #define nbr_mem_copy	memcpy

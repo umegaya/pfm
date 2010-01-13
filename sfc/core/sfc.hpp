@@ -36,8 +36,14 @@ namespace util {
 /*-------------------------------------------------------------*/
 /* sfc::util::array											   */
 /*-------------------------------------------------------------*/
+enum {
+	opt_not_set	   = 0,
+	opt_threadsafe = NBR_PRIM_THREADSAFE,
+	opt_expandable = NBR_PRIM_EXPANDABLE,
+};
 template <class E>
 class array {
+public:
 public:
 	/* specialization */
 	template<typename T>
@@ -53,7 +59,7 @@ public:
 				return nbr_array_alloc(a);
 			}
 			void	operator	delete	(void*) {}
-			void	set(value v) { *this = v; }
+			void	set(value v) { ((value)*this) = v; }
 			retval	*get() { return this; }
 		};
 	};
@@ -78,7 +84,7 @@ public:
 	};
 	template<typename T, size_t N>
 	struct 	vcont<T[N]> {
-		typedef T *value;
+		typedef const T *value;
 		typedef T retval;
 		class	element {
 		public:
@@ -117,7 +123,7 @@ public:
 	array();
 	~array();
 	inline int 		init(int max, int size = -1,
-						int opt = NBR_PRIM_EXPANDABLE);
+						int opt = opt_expandable);
 	inline void 	fin();
 	inline iterator insert(value v);
 	inline retval	*create();
@@ -130,6 +136,7 @@ public:
 	inline iterator	end() const;
 	inline iterator	next(iterator p) const;
 	inline element	*alloc();
+	inline bool		initialized() { return m_a != NULL; }
 };
 
 /*-------------------------------------------------------------*/
@@ -233,11 +240,12 @@ public:
 	~map();
 	inline int 		init(int max, int hashsz,
 						int size = -1,
-						int opt = NBR_PRIM_EXPANDABLE);
+						int opt = opt_expandable);
 	inline void 	fin();
 	inline iterator	insert(value v, key k);
 	inline retval	*find(key k) const;
 	inline void		erase(key k);
+	inline bool		initialized() { return super::initialized() && m_s != NULL; }
 protected:
 	inline element	*findelem(key k) const;
 	inline element	*alloc(key k);
@@ -253,6 +261,11 @@ public:
 	static const int MAX_SESSION_NAME = 32;
 	static const int MAX_HOST_NAME = 256;
 	static const int MAX_VALUE_STR = 256;
+	enum {
+		cfg_flag_not_set = 0x0,
+		cfg_flag_server = 0x00000001,
+		cfg_flag_disabled = 0x00000002,
+	};
 public:
 	char m_name[MAX_SESSION_NAME];
 	char m_host[MAX_HOST_NAME];
@@ -264,6 +277,7 @@ public:
 	UTIME m_taskspan, m_ld_wait;
 	parser m_fnp;
 	sender m_fns;
+	U32 m_flag;
 public:
 	/* macro for inheritant class */
 #define BASE_CONFIG_PLIST				\
@@ -275,13 +289,13 @@ public:
 	int ping_timeo, int ping_intv,		\
 	const char *proto_name,				\
 	UTIME taskspan, UTIME ld_wait,		\
-	parser fnp, sender fns
+	parser fnp, sender fns, U32 flag
 #define BASE_CONFIG_CTOR()				\
 	config(name, host, max_connection,	\
 	timeout, option, rbuf, wbuf, 		\
 	ping_timeo, ping_intv,				\
 	proto_name, taskspan, ld_wait,		\
-	fnp, fns)
+	fnp, fns, flag)
 
 	config();
 	config(BASE_CONFIG_PLIST);
@@ -295,7 +309,8 @@ public:
 public:
 	int	load(const char *line);
 	void fin() { delete this; }
-	int client() const { return (m_host[0] == '\0') ? 1 : 0; }
+	bool disabled() const { return (m_flag & cfg_flag_disabled) != 0; }
+	bool client() const { return (m_flag & cfg_flag_server) == 0; }
 	static int commentline(const char *line) { return (line[0] == '#' ? 1 : 0); }
 	static int emptyline(const char *line) { return (line[0] == '\0' ? 1 : 0); }
 protected:
@@ -309,22 +324,31 @@ protected:
 using namespace util;
 
 
-/* log level definition */
-enum {
-	LOG_DEBUG = 1,
-	LOG_INFO = 2,
-	LOG_WARN = 3,
-	LOG_ERROR = 4,
-	LOG_FATAL = 5,
+/*-------------------------------------------------------------*/
+/* sfc::kernel												   */
+/*-------------------------------------------------------------*/
+class kernel {
+public:
+	/* log level definition */
+	typedef enum {
+		DEBUG = 1,
+		INFO = 2,
+		WARN = 3,
+		ERROR = 4,
+		FATAL = 5,
+	} loglevel;
 };
+
+
+
 /*-------------------------------------------------------------*/
 /* sfc::session												   */
 /*-------------------------------------------------------------*/
-class session {
+class session : public kernel {
 public:
-	class factory {
+	class factory : public kernel {
 		static const U32	MSGID_LIMIT = 2000000000;
-		static const U16	MSGID_COMPACT_LIMIT = 60000;;
+		static const U16	MSGID_COMPACT_LIMIT = 60000;
 	public:
 		const config	*m_cfg;
 		SOCKMGR			m_skm;
@@ -336,7 +360,7 @@ public:
 		virtual int init(const config &cfg) = 0;
 		virtual void fin() = 0;
 		virtual void poll(UTIME ut) = 0;
-		int log(int lv, const char *fmt, ...);
+		int log(loglevel lv, const char *fmt, ...);
 		const config &cfg() const { return *m_cfg; }
 		int connect(session *s, const char *addr = NULL, void *p = NULL);
 		int mcast(const char *addr, char *p, int l);
@@ -356,7 +380,7 @@ public:
 					int (*cw)(SOCK, int),
 					int (*pp)(SOCK, char*, int),
 					int (*eh)(SOCK, char*, int),
-					void (*oc)(SOCK, void*),
+					int (*oc)(SOCK, void*),
 					void (*poll)(SOCK));
 	};
 	template <class S>
@@ -375,7 +399,7 @@ public:
 		static int on_close(SOCK, int);
 		static int on_recv(SOCK, char*, int);
 		static int on_event(SOCK, char*, int);
-		static void on_connect(SOCK, void *);
+		static int on_connect(SOCK, void *);
 		static void on_poll(SOCK);
 	};
 	class pingmgr {
@@ -397,30 +421,45 @@ public:
 	};
 protected:
 	enum {
-		attr_opened	= 0x00000001,/* on_open called and on_close not called yet */
+		attr_opened	= 0x0001,/* on_open called and on_close not called yet */
+		attr_ping_fail = 0x0002,/* remote peer does not reply ping */
 	};
+	static const size_t SOCK_ADDR_SIZE = 32;
 protected:
 	SOCK 	m_sk;
 	factory *m_f;
 	pingmgr	m_ping;
 	UTIME	m_last_access;
-	U32		m_attr;
+	U16		m_attr;
+	U8		m_conn_failure, m_padd;
+	char	m_addr[SOCK_ADDR_SIZE];
 public:	/* usually dont need to touch */
-	session() : m_f(NULL), m_ping(), m_last_access(0LL), m_attr(0) { clear_sock(); }
+	session() : m_f(NULL), m_ping(), m_last_access(0LL),
+		m_attr(0), m_conn_failure(0) {
+		m_addr[0] = '\0';
+		clear_sock();
+	}
 	~session() {}
 	void set(SOCK sk, factory *f) 	{ m_sk = sk; m_f = f; }
 	pingmgr &ping()					{ return m_ping; }
+public: /* attributes */
 	void update_access() 			{ m_last_access = nbr_clock(); }
 	void setattr(U32 a, bool on)	{ if (on) { m_attr |= a; } else { m_attr &= ~(a); } }
 	bool attr(U32 a) const			{ return (m_attr & a); }
+	void setaddr()					{ nbr_sock_get_addr(m_sk, m_addr, sizeof(m_addr)); }
+	const char *addr() const		{ return m_addr; }
 	void clear_sock()				{ nbr_sock_clear(&m_sk); }
 	factory *f() 					{ return m_f; }
 	const factory *f() const		{ return m_f; }
+	void set_factory(factory *f)	{ m_f = f; }
+	void incr_conn_failure()		{ if (m_conn_failure < 0xFF) { m_conn_failure++; } }
+	void clear_conn_failure()		{ m_conn_failure = 0; }
+	int conn_failure() const		{ return m_conn_failure; }
 public: /* operation */
-	int log(int lv, const char *fmt, ...);
+	int log(loglevel lv, const char *fmt, ...);
 	const config &cfg() const 		{ return f()->cfg(); }
 	UTIME last_access() const		{ return m_last_access; }
-	int valid() const				{ return attr(attr_opened) ? 1 : 0; }
+	bool valid() const				{ return attr(attr_opened); }
 	int close() const				{ return nbr_sock_close(m_sk); }
 	int writable() const			{ return nbr_sock_writable(m_sk); }
 	U32 msgid()						{ return f()->msgid(); }
@@ -443,7 +482,7 @@ public: /* callback */
 /*-------------------------------------------------------------*/
 /* sfc::daemon												   */
 /*-------------------------------------------------------------*/
-class daemon {
+class daemon : public kernel {
 protected:
 	typedef map<session::factory*, char[config::MAX_SESSION_NAME]>	smap;
 	typedef map<config*, char[config::MAX_SESSION_NAME]>			cmap;
@@ -459,21 +498,30 @@ public:
 	int	init(int argc, char *argv[]);
 	int read_config(int argc, char *argv[]);
 	void fin();
-public:
-	int log(int lv, const char *fmt, ...);
-	int bg() { return nbr_osdep_daemonize(); }
-	static void sigfunc(int signo);
 	int alive();
+	static void stop();
+public:
+	template <class S> S *find_session(const char *name) {
+		return (S *)m_sl.find(name);
+	}
+	template <class C> C *find_config(const char *name) {
+		return (C *)m_cl.find(name);
+	}
+public:
+	static int log(loglevel lv, const char *fmt, ...);
+	static int bg() { return nbr_osdep_daemonize(); }
+	static int fork(char *cmd, char *argv[], char *envp[]) {
+		return nbr_osdep_fork(cmd, argv, envp);
+	}
+	static void sigfunc(int signo);
 public:
 	virtual int					on_signal(int signo);
 	virtual int					boot(int argc, char *argv[]);
+	virtual void				shutdown() {}
 	virtual int				 	initlib(CONFIG &c);
 	virtual int					create_config(config *cl[], int size);
 	virtual session::factory 	*create_factory(const char *sname);
 };
 
 }	//namespace sfc
-
-using namespace sfc;
-
 #endif	//__SFC_H__

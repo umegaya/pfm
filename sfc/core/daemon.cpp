@@ -20,12 +20,21 @@
 #include <stdarg.h>
 #include <signal.h>
 
+using namespace sfc;
+
 U32 daemon::m_sigflag = 0;
 
 void
 daemon::sigfunc(int signo)
 {
 	m_sigflag |= (1 << signo);
+}
+
+void
+daemon::stop()
+{
+	daemon::log(INFO, "application terminate\n");
+	daemon::sigfunc(SIGTERM);
 }
 
 int
@@ -69,19 +78,19 @@ daemon::init(int argc, char *argv[])
 	CONFIG nbrcfg;
 	nbr_get_default(&nbrcfg);
 	if ((r = initlib(nbrcfg)) < 0) {
-		log(LOG_ERROR, "fail to library parameter (%d)\n", r);
+		log(ERROR, "fail to library parameter (%d)\n", r);
 		return r;
 	}
 	if ((r = nbr_init(&nbrcfg)) < 0) {
-		log(LOG_ERROR, "fail to init library(%d)\n", r);
+		log(ERROR, "fail to init library(%d)\n", r);
 		return r;
 	}
 	if (!(n_list = create_config(list, MAX_CONFIG_LIST))) {
-		log(LOG_ERROR, "fail to create config (%d)\n", n_list);
+		log(ERROR, "fail to create config (%d)\n", n_list);
 		return n_list;
 	}
 	if (!m_cl.init(n_list, n_list)) {
-		log(LOG_ERROR, "config list too big? (%d)\n", m_cl.size());
+		log(ERROR, "config list too big? (%d)\n", m_cl.size());
 		return NBR_EEXPIRE;
 	}
 	for (int i = 0; i < n_list; i++) {
@@ -90,22 +99,25 @@ daemon::init(int argc, char *argv[])
 		}
 	}
 	if ((r = read_config(argc, argv)) < 0) {
-		log(LOG_ERROR, "read_config fail (%d)\n", r);
+		log(ERROR, "read_config fail (%d)\n", r);
 		return NBR_ECONFIGURE;
 	}
 	if (!m_sl.init(m_cl.size(), m_cl.size())) {
-		log(LOG_ERROR, "session factory list too big? (%d)\n", m_cl.size());
+		log(ERROR, "session factory list too big? (%d)\n", m_cl.size());
 		return NBR_EEXPIRE;
 	}
 	cmap::iterator c;
 	for (c = m_cl.begin(); c != m_cl.end(); c = m_cl.next(c)) {
 		session::factory *f;
+		if (c->disabled()) {
+			continue;	/* skip to create factory */
+		}
 		if (!(f = create_factory(c->m_name))) {
-			log(LOG_ERROR, "%s: fail to create factory\n", c->m_name);
+			log(ERROR, "%s: fail to create factory\n", c->m_name);
 			return NBR_EINVAL;
 		}
 		if ((r = f->init(*c)) < 0) {
-			log(LOG_ERROR, "%s: init error %d\n", c->m_name, r);
+			log(ERROR, "%s: init error %d\n", c->m_name, r);
 			return r;
 		}
 		if (m_sl.insert(f, c->m_name) == m_sl.end()) {
@@ -121,9 +133,11 @@ daemon::init(int argc, char *argv[])
 void
 daemon::fin()
 {
+	/* app defined finalization */
+	shutdown();
 	/* stop network IO */
 	nbr_stop_sock_io();
-	/* acleanup related memory resource */
+	/* cleanup related memory resource */
 	smap::iterator s;
 	for (s = m_sl.begin(); s != m_sl.end(); s = m_sl.next(s)) {
 		s->fin();
@@ -139,7 +153,7 @@ daemon::fin()
 }
 
 int
-daemon::log(int prio, const char *fmt, ...)
+daemon::log(loglevel prio, const char *fmt, ...)
 {
 	char buff[4096];
 
@@ -148,7 +162,7 @@ daemon::log(int prio, const char *fmt, ...)
 	vsnprintf(buff, sizeof(buff) - 1, fmt, v);
 	va_end(v);
 
-	fprintf(stdout, "%u:%s", prio, buff);
+	fprintf(stdout, "%u:%u:%s", nbr_osdep_getpid(), prio, buff);
 	return NBR_OK;
 }
 
@@ -166,7 +180,7 @@ daemon::read_config(int argc, char *argv[])
 	for (i = 0; i < n_files; i++) {
 		FILE *fp = fopen(a_files[i], "r");
 		if (fp == NULL) {
-			log(LOG_INFO, "%s: cannot open\n", a_files[i]);
+			log(INFO, "%s: cannot open\n", a_files[i]);
 			continue;	/* –³‚©‚Á‚½‚çdefaultÝ’è‚Ås‚­‚Ì‚Å‚n‚j */
 		}
 		char work[1024], sname[config::MAX_SESSION_NAME], *buff;
@@ -176,19 +190,19 @@ daemon::read_config(int argc, char *argv[])
 			if (config::emptyline(buff)) { continue; }
 			else if (config::commentline(buff)) { continue; }
 			if (!(line = nbr_str_divide_tag_and_val('.', buff, sname, sizeof(sname)))) {
-				log(LOG_INFO, "%s: no sname specified\n", buff);
+				log(INFO, "%s: no sname specified\n", buff);
 				continue;
 			}
 			config *cfg = m_cl.find(sname);
 			if (!cfg) {
-				log(LOG_INFO, "%s: no such sname\n", sname);
+				log(INFO, "%s: no such sname\n", sname);
 				continue;
 			}
 			if (cfg->load(line) < 0) {
-				log(LOG_INFO, "%s: invalid config\n", line);
+				log(INFO, "%s: invalid config\n", line);
 				continue;
 			}
-			log(LOG_INFO, "apply config<%s>\n", line);
+			log(INFO, "apply config<%s.%s>\n", sname, line);
 		}
 		if (fp) { fclose(fp); }
 	}

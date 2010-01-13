@@ -20,7 +20,9 @@
 #include "nbr_pkt.h"
 #include <stdarg.h>
 
-int session::factory::log(int lv, const char *fmt, ...)
+using namespace sfc;
+
+int session::factory::log(loglevel lv, const char *fmt, ...)
 {
 	char buff[4096];
 
@@ -29,16 +31,21 @@ int session::factory::log(int lv, const char *fmt, ...)
 	vsnprintf(buff, sizeof(buff) - 1, fmt, v);
 	va_end(v);
 
-	fprintf(stdout, "[%s]%u:%s", cfg().m_name, lv, buff);
+	fprintf(stdout, "%u[%s]%u:%s", nbr_osdep_getpid(), cfg().m_name, lv, buff);
 	return NBR_OK;
 }
 
 
 int session::factory::connect(session *s,
-		const char *addr/*= NULL*/, void *p/* = NULL*/)
+		const char *address/*= NULL*/, void *p/* = NULL*/)
 {
-	SOCK sk = nbr_sockmgr_connect(m_skm, addr ? addr : m_cfg->m_host, p, s);
-	return nbr_sock_valid(sk) ? NBR_OK : NBR_ECONNECT;
+	const char *a = s->addr();
+	if (!(*a)) { a = address ? address : m_cfg->m_host; }
+	SOCK sk = nbr_sockmgr_connect(m_skm, a, p, s);
+	if (nbr_sock_valid(sk)) {
+		return NBR_OK;
+	}
+	return NBR_ECONNECT;
 }
 
 int session::factory::mcast(const char *addr, char *p, int l)
@@ -51,7 +58,7 @@ int session::factory::init(const config &cfg,
 							int (*cw)(SOCK, int),
 							int (*pp)(SOCK, char*, int),
 							int (*eh)(SOCK, char*, int),
-							void (*oc)(SOCK, void*),
+							int (*oc)(SOCK, void*),
 							void (*poll)(SOCK))
 {
 	m_cfg = &cfg;
@@ -96,7 +103,7 @@ int session::pingmgr::recv(class session &s, char *p, int l)
 	U8 cmd;
 	U32 msgid;
 	POP_START(p, l);
-	POP_8(cmd)
+	POP_8(cmd);
 	POP_32(msgid);
 	if (msgid != m_last_msgid) {
 		return NBR_EINVAL;
@@ -104,7 +111,7 @@ int session::pingmgr::recv(class session &s, char *p, int l)
 	return NBR_OK;
 }
 
-int session::log(int lv, const char *fmt, ...)
+int session::log(loglevel lv, const char *fmt, ...)
 {
 	char buff[4096];
 
@@ -113,6 +120,7 @@ int session::log(int lv, const char *fmt, ...)
 	vsnprintf(buff, sizeof(buff) - 1, fmt, v);
 	va_end(v);
 
-	fprintf(stdout, "[%s:%p]%u:%s", f()->cfg().m_name, this, lv, buff);
+	fprintf(stdout, "%u[%s:%p]%u:%s", nbr_osdep_getpid(),
+			f()->cfg().m_name, this, lv, buff);
 	return NBR_OK;
 }

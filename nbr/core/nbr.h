@@ -69,6 +69,7 @@ enum {
 	NBR_ESEND		= -30,
 	NBR_ECBFAIL		= -31,
 	NBR_ECONFIGURE	= -32,
+	NBR_EFULL		= -33,
 };
 
 enum {
@@ -207,6 +208,7 @@ NBR_API void	nbr_err_set_fp(int lv, FILE *fp);
 /* osdep.c */
 NBR_API int		nbr_osdep_get_macaddr(char *ifname, U8 *addr);
 NBR_API int		nbr_osdep_daemonize();
+NBR_API int		nbr_osdep_getpid();
 NBR_API int		nbr_osdep_fork(char *cmd, char *argv[], char *envp[]);
 NBR_API UTIME	nbr_clock();
 
@@ -253,6 +255,7 @@ NBR_API void	*nbr_array_get_from_index_if_used(ARRAY ad, int index);
 NBR_API int		nbr_array_is_used(ARRAY ad, void *p);
 NBR_API int		nbr_array_max(ARRAY ad);
 NBR_API int		nbr_array_use(ARRAY ad);
+NBR_API int		nbr_array_full(ARRAY ad);
 NBR_API int		nbr_array_get_size(ARRAY ad);
 #define ARRAY_SCAN(__array,__p)									\
 		for (__p = nbr_array_get_first(__array); __p != NULL;	\
@@ -314,7 +317,7 @@ NBR_API void 	nbr_sockmgr_set_callback(SOCKMGR s,
 					int (*eh)(SOCK, char*, int),
 					void (*poll)(SOCK));
 NBR_API void	nbr_sockmgr_set_connect_cb(SOCKMGR s,
-					void (*oc)(SOCK, void*));
+					int (*oc)(SOCK, void*));
 NBR_API int		nbr_sock_send_bin16(SOCK s, char *p, int len);
 NBR_API int		nbr_sock_send_bin32(SOCK s, char *p, int len);
 NBR_API int		nbr_sock_send_text(SOCK s, char *p, int len);

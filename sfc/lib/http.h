@@ -38,11 +38,13 @@ public:
 		version_1_1 = 11,
 	};
 	class fsm {
+	friend class httpsession;
 	public:
 		enum state { /* http fsm state */
+			state_invalid,
 			/* send state */
-			state_send_body,
-			state_send_finish,
+			state_send_body,		/* client */
+			state_resp_send_body,	/* server */
 			/* recv state */
 			state_recv_header,
 			state_recv_body,
@@ -51,7 +53,6 @@ public:
 			state_recv_footer,
 			state_recv_comment,
 			state_recv_finish,
-			state_recv_processed,
 			/* error */
 			state_error = -1,
 		};
@@ -76,10 +77,8 @@ public:
 		state 	append(char *b, int bl);
 		void 	reset(const config &cfg);
 	public:
-		state	status() const { return (state)m_ctx.state; }
-		void	setprocessed() { m_ctx.state = state_recv_processed; }
-		bool	error() const { return status() == state_error; }
-		bool 	processed() const { return status() == state_recv_processed; }
+		state	get_state() const { return (state)m_ctx.state; }
+		bool	error() const { return get_state() == state_error; }
 		void	setrc(httprc rc) { m_ctx.res = (S16)rc; }
 		void	setrc_from_close_reason(int reason);
 	public:	/* for processing reply */
@@ -89,14 +88,19 @@ public:
 		const char 	*body() const { return m_ctx.bd; }
 		httprc		rc() const { return (httprc)m_ctx.res; }
 		int			bodylen() const { return m_ctx.bl; }
-	public:	/* for sending */
-		void		set_send_body(const char *p, int l) {
+		int			url(char *b, int l);
+	protected:	/* for sending */
+		void		set_send_body(const char *p, int l, bool resp = false) {
 			m_buf = p; m_len = l;
-			m_ctx.state = state_send_body;
+			m_ctx.state = resp ? state_resp_send_body : state_send_body;
+		}
+		bool		send_phase() const {
+			state s = get_state();
+			return s == state_send_body || s == state_resp_send_body;
 		}
 		const char	*send_body_ptr() { return m_buf; }
 		int			send_body_len() const { return m_len; }
-		int			bodysent(int len);
+		int			body_sent(int len);
 	protected: /* receiving */
 		state 	recv_header();
 		state	recv_body_nochunk();
@@ -112,12 +116,34 @@ public:
 		context	&recvctx() { return m_ctx; }
 		context &sendctx() { return m_ctx; }
 		httprc	putrc();
-	} m_fsm;
+	} *m_fsm;
 	typedef fsm request, response;
 public:
-	httpsession() : session(), m_fsm() {}
+	template <class S>
+	class factory : public session::factory_impl<S> {
+	protected:
+		ARRAY m_fsm_a;
+	public:
+		typedef session::factory_impl<S> super;
+	public:
+		factory() : super(), m_fsm_a() {}
+		~factory() {}
+		int init(const config &cfg);
+		void fin();
+		void attach_fsm(httpsession &s) {
+			if (!s.has_fsm()) { s.set_fsm(nbr_array_alloc(m_fsm_a)); }
+		}
+		ARRAY allocator() { return m_fsm_a; }
+		static int on_open(SOCK sk);
+		static int on_connect(SOCK sk, void *p);
+		static int on_recv(SOCK sk, char *p, int l);
+	};
+public:
+	httpsession() : session() {}
 	~httpsession() {}
-	class fsm &fsm() { return m_fsm; }
+	class fsm &fsm() { return *m_fsm; }
+	void set_fsm(void *p) { m_fsm = (class fsm *)p; }
+	bool has_fsm() const { return m_fsm != NULL; }
 public:
 	void fin();
 	int poll(UTIME ut, bool from_worker);
@@ -129,55 +155,55 @@ public:	/* callback */
 public:	/* operation */
 	char *host(char *buff, int len) const;
 	int	get(const char *url, const char *hd[], const char *hv[],
-			int n_hd, int chunked = 0);
+			int n_hd, bool chunked = false);
 	int	post(const char *url, const char *hd[], const char *hv[],
-			const char *body, int blen, int n_hd, int chunked = 0);
+			const char *body, int blen, int n_hd, bool chunked = false);
 	int send_request_common(const char *method,
 			const char *url, const char *body, int blen,
-			const char *hd[], const char *hv[], int n_hd, int chunked);
+			const char *hd[], const char *hv[], int n_hd, bool chunked);
 	int send_result_code(httprc rc, int cf/* close after sent? */);
-	int send_result_and_body(httprc rc, char *b, int bl, const char *mime);
+	int send_result_and_body(httprc rc, const char *b, int bl, const char *mime);
+	inline int send_lf() { return send("\r\n", 2); }
 protected:
 	int send_body();
-	int send_header(const char *hd[], const char *hv[], int n_hd, int chunked);
+	int send_header(const char *hd[], const char *hv[], int n_hd, bool chunked);
 };
 
 /*-------------------------------------------------------------*/
-/* sfc::httpfactory											   */
+/* sfc::httpsession::factory											   */
 /*-------------------------------------------------------------*/
-template <class S>
-class httpfactory : public session::factory_impl<S>
-{
-public:
-	typedef session::factory_impl<S> super;
-public:
-	httpfactory() : super() {}
-	~httpfactory() {}
-	int init(const config &cfg);
-	static int on_open(SOCK sk);
-	static int on_close(SOCK sk, int r);
-	static int on_recv(SOCK sk, char *p, int l);
-};
-
 template <class S> int
-httpfactory<S>::init(const config &cfg)
+httpsession::factory<S>::init(const config &cfg)
 {
-	if (!super::pool().init(
-		cfg.m_max_connection,
-		sizeof(S) + cfg.m_rbuf, cfg.m_option)) {
+	if (!super::pool().init(cfg.m_max_connection, sizeof(S),
+		cfg.m_option)) {
+		return NBR_ESHORT;
+	}
+	if (!(m_fsm_a = nbr_array_create(cfg.m_max_connection,
+			sizeof(class httpsession::fsm) + cfg.m_rbuf,
+			cfg.m_option))) {
 		return NBR_ESHORT;
 	}
 	return session::factory::init(cfg,
-			httpfactory<S>::on_open,
-			httpfactory<S>::on_close,
-			httpfactory<S>::on_recv,
-			httpfactory<S>::on_event,
-			httpfactory<S>::on_connect,
-			httpfactory<S>::on_poll);
+			httpsession::factory<S>::on_open,
+			httpsession::factory<S>::on_close,
+			httpsession::factory<S>::on_recv,
+			httpsession::factory<S>::on_event,
+			httpsession::factory<S>::on_connect,
+			httpsession::factory<S>::on_poll);
 }
 
-template <class S>
-int httpfactory<S>::on_recv(SOCK sk, char *p, int l)
+template <class S> void
+httpsession::factory<S>::fin()
+{
+	if (m_fsm_a) {
+		nbr_array_destroy(m_fsm_a);
+	}
+	super::fin();
+}
+
+template <class S> int
+httpsession::factory<S>::on_recv(SOCK sk, char *p, int l)
 {
 	S **s = (S**)nbr_sock_get_data(sk, NULL);
 	if (s == NULL) {
@@ -189,7 +215,6 @@ int httpfactory<S>::on_recv(SOCK sk, char *p, int l)
 	case S::fsm::state_recv_finish:
 	case S::fsm::state_error:
 		obj->process(obj->fsm());
-		obj->fsm().setprocessed();
 		break;
 	default:
 		break;
@@ -197,49 +222,41 @@ int httpfactory<S>::on_recv(SOCK sk, char *p, int l)
 	return NBR_OK;
 }
 
-
-template <class S>
-int httpfactory<S>::on_close(SOCK sk, int reason)
+template <class S> int
+httpsession::factory<S>::on_connect(SOCK sk, void *p)
 {
 	S **s = (S**)nbr_sock_get_data(sk, NULL);
-	if (s == NULL) {
+	httpsession::factory<S> *f =
+		(httpsession::factory<S> *)nbr_sockmgr_get_data(nbr_sock_get_mgr(sk));
+	if (s == NULL || f == NULL) {
 		return NBR_ENOTFOUND;
 	}
-	S *obj = *s;
-	if (!obj->fsm().processed()) {
-		obj->fsm().setrc_from_close_reason(reason);
-		obj->process(obj->fsm());
-		obj->fsm().setprocessed();
+	*s = (S *)(p ? p : f->pool().alloc());
+	if (!(*s)) {
+		return NBR_EEXPIRE;
 	}
-	obj->on_close(reason);
-	obj->clear_sock();
+	(*s)->setattr(session::attr_opened, true);
+	(*s)->set(sk, f);
+	f->attach_fsm(**s);
 	return NBR_OK;
-
 }
 
-template <class S>
-int httpfactory<S>::on_open(SOCK sk)
+
+template <class S> int
+httpsession::factory<S>::on_open(SOCK sk)
 {
 	S **s = (S**)nbr_sock_get_data(sk, NULL), *obj;
 	if (s == NULL) {
 		return NBR_ENOTFOUND;
 	}
-	super *f = (super *)nbr_sockmgr_get_data(nbr_sock_get_mgr(sk));
 	obj = *s;
-	if (obj == NULL) {
-		obj = f->pool().alloc();
-	}
-	if (obj == NULL) {
-		return NBR_EEXPIRE;
-	}
-	obj->set(sk, f);
 	int r;
-	if ((r = obj->on_open(f->cfg())) < 0) {
+	if ((r = obj->on_open(obj->cfg())) < 0) {
 		return r;
 	}
-	*s = obj;
-	obj->fsm().reset(f->cfg());
-	if (f->cfg().client()) {
+	obj->fsm().reset(obj->cfg());
+	obj->clear_conn_failure();
+	if (obj->cfg().client()) {
 		return obj->send_request();
 	}
 	return NBR_OK;

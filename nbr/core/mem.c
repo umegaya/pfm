@@ -39,6 +39,17 @@ _nbr_mem_alloc(size_t s, const char *file, int line)
 	return p;
 }
 
+void*
+_nbr_mem_calloc(size_t n, size_t s, const char *file, int line)
+{
+	void *p = calloc(n, s);
+	if (g_mem_log) {
+		TRACE("alloc %p at %s(%u)\n", p, file, line);
+	}
+	return p;
+}
+
+
 void
 nbr_mem_free(void *p)
 {

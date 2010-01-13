@@ -96,6 +96,7 @@ array<E>::insert(value v)
 template<class E> typename array<E>::element*
 array<E>::alloc()
 {
+	if (nbr_array_full(m_a)) { return NULL; }
 	return new(m_a)	element;
 }
 

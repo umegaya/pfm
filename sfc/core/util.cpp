@@ -20,6 +20,8 @@
 #include "common.h"
 #include "str.h"
 
+using namespace sfc;
+
 config::config()
 {
 	m_name[0] = '\0';
@@ -29,7 +31,9 @@ config::config()
 	m_rbuf = m_wbuf = 0;
 	m_proto_name = "";
 	m_taskspan = m_ld_wait = 0;
+	m_option = opt_not_set;
 	m_ping_timeo = m_ping_intv = 0;
+	m_flag = config::cfg_flag_not_set;
 }
 
 config::config(BASE_CONFIG_PLIST) :
@@ -40,7 +44,7 @@ config::config(BASE_CONFIG_PLIST) :
 		m_proto_name(proto_name),
 		m_taskspan(taskspan), m_ld_wait(ld_wait),
 		m_fnp(fnp),
-		m_fns(fns)
+		m_fns(fns), m_flag(flag)
 {
 	nbr_str_copy(m_name, sizeof(m_name), name, sizeof(m_name));
 	nbr_str_copy(m_host, sizeof(m_host), host, sizeof(m_host));
@@ -93,8 +97,17 @@ int	config::bignum(const char *k, U64 &v) const
 
 int	config::set(const char *k, const char *v)
 {
-	if (cmp("name", k)) {
-		nbr_str_copy(m_name, sizeof(m_name), v, MAX_VALUE_STR);
+	int f;
+	if (cmp("disabled", k)) {
+		if (nbr_str_atoi(v, &f, MAX_VALUE_STR) >= 0 && v != 0) {
+			m_flag |= cfg_flag_disabled;
+		}
+		return NBR_OK;
+	}
+	if (cmp("server", k)) {
+		if (nbr_str_atoi(v, &f, MAX_VALUE_STR) >= 0 && v != 0) {
+			m_flag |= cfg_flag_server;
+		}
 		return NBR_OK;
 	}
 	else if (cmp("host", k)) {

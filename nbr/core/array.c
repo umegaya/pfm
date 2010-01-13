@@ -300,7 +300,7 @@ array_alloc_elm(array_t *a)
 	element_t *e;
 	if (!a->free) {
 		if (a->option & NBR_PRIM_EXPANDABLE) {
-			if (!(e = nbr_mem_alloc(element_get_size(a->size)))) {
+			if (!(e = nbr_mem_calloc(1, element_get_size(a->size)))) {
 				return NULL;
 			}
 			element_set_flag(e, 1, ELEM_FROM_HEAP);
@@ -632,6 +632,14 @@ nbr_array_use(ARRAY ad)
 	ARRAY_READ_UNLOCK(a);
 #endif
 	return a->use;
+}
+
+NBR_API int
+nbr_array_full(ARRAY ad)
+{
+	ASSERT(ad);
+	array_t *a = ad;
+	return (!(a->option & NBR_PRIM_EXPANDABLE)) && (a->max <= a->use);
 }
 
 NBR_API int

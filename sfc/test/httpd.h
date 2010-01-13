@@ -21,24 +21,51 @@
 
 #include "http.h"
 
+namespace sfc {
+
 class get_request_session : public httpsession {
 	const char *m_url;
+public:
+	static int m_done;
+	static UTIME m_start, m_end;
 public:
 	get_request_session() : httpsession(), m_url(NULL) {}
 	~get_request_session() {}
 	void seturl(const char *url) { m_url = url; }
+	void set_random_url();
 public:
 	int send_request();
 	int on_close(int r);
 	int process(response &r);
 };
 
-class testhttpd : public daemon {
+class get_response_session : public httpsession {
+protected:
+	struct fmem {
+		U8 *p;
+		size_t l;
+	};
+	static map<fmem, char[256]>	m_res;
 public:
-	testhttpd() : daemon() {}
+	get_response_session() : httpsession() {}
+	~get_response_session() {}
+public:
+	int process(request &r);
+	static int init_res();
+	static void fin_res();
+	static fmem *get_fmem(const char *path);
+};
+
+class testhttpd : public daemon {
+	int m_server;
+public:
+	testhttpd() : daemon(), m_server(0) {}
 	session::factory 	*create_factory(const char *sname);
 	int					create_config(config* cl[], int size);
 	int					boot(int argc, char *argv[]);
+	void				shutdown();
 };
+
+}
 
 #endif //__HTTPD_H__

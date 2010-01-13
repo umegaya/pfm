@@ -23,6 +23,8 @@
 #include "str.h"
 #include "mem.h"
 
+using namespace sfc;
+
 /*-------------------------------------------------------------*/
 /* sfc::httpsession::fsm									   */
 /*-------------------------------------------------------------*/
@@ -40,8 +42,8 @@ httpsession::fsm::reset(const config &cfg)
 httpsession::fsm::state
 httpsession::fsm::append(char *b, int bl)
 {
-	TRACE("append %u byte\n", bl);
-	state s = status();
+//	TRACE("append %u byte <%s>\n", bl, b);
+	state s = get_state();
 	char *w = b;
 	U32 limit = (m_max - 1);
 	while (s != state_error && s != state_recv_finish) {
@@ -51,6 +53,9 @@ httpsession::fsm::append(char *b, int bl)
 		}
 		m_p[m_len++] = *w++;
 		m_p[m_len] = '\0';
+#if defined(_DEBUG)
+//		if ((m_len % 100) == 0) { TRACE("."); }
+#endif
 		switch(s) {
 		case state_recv_header:
 			s = recv_header(); break;
@@ -184,6 +189,7 @@ httpsession::fsm::recv_header()
 			else if (hdrstr("Transfer-Encoding", tok, sizeof(tok)) != NULL &&
 						nbr_mem_cmp(tok, "chunked", sizeof("chunked") - 1) == 0) {
 				m_buf = recvctx().bd = p;
+				recvctx().bl = 0;
 				return state_recv_bodylen;
 			}
 			else if (rc() == HRC_OK){
@@ -231,15 +237,14 @@ httpsession::fsm::recv_body()
 httpsession::fsm::state
 httpsession::fsm::recv_body_nochunk()
 {
-	int nlf;
-	if ((nlf = recv_lflf())) {
-		char *p = current();
-		for (;nlf > 0; nlf--) {
-			*(p - nlf) = '\0';
-		}
-		return state_recv_finish;
+	int diff = (recvctx().bd + recvctx().bl) - (m_p + m_len);
+	if (diff > 0) {
+		return state_recv_body_nochunk;
 	}
-	return state_recv_body_nochunk;
+	else if (diff < 0) {
+		return state_error;
+	}
+	return state_recv_finish;
 }
 
 httpsession::fsm::state
@@ -318,7 +323,7 @@ httpsession::fsm::recv_comment()
 }
 
 int
-httpsession::fsm::bodysent(int len)
+httpsession::fsm::body_sent(int len)
 {
 	if ((int)m_len < len) {
 		len = m_len;
@@ -351,6 +356,32 @@ httpsession::fsm::setrc_from_close_reason(int reason)
 	}
 }
 
+int
+httpsession::fsm::url(char *b, int l)
+{
+	const char *w = m_ctx.hd[0];
+	/* skip first spaces */
+	while (*w != ' ') {
+		w++;
+		if ((w - m_ctx.hd[0]) > m_ctx.hl[0]) {
+			return NBR_EFULL;
+		}
+		/* reach to end of string: format error */
+		if (*w == '\0') { return NBR_EFORMAT; }
+	}
+	w++;
+	if (*w == '/') { w++; }
+	char *wb = b;
+	while (*w != ' ') {
+		*wb++ = *w++;
+		if ((wb - b) > l) {
+			return NBR_EFULL;
+		}
+		if (*w == '\0') { return NBR_EFORMAT; }
+	}
+	*wb = '\0';
+	return wb - b;
+}
 
 httprc
 httpsession::fsm::putrc()
@@ -408,16 +439,22 @@ httpsession::fin()
 int
 httpsession::poll(UTIME nt, bool from_worker)
 {
-	if (from_worker && m_fsm.status() == fsm::state_send_body) {
+	if (from_worker && fsm().send_phase()) {
 		if ((nt - last_access()) >= (10 * 1000)) {
 			int r = send_body();
 			if (r < 0) {
+				log(ERROR, "send body fails %d\n", r);
 				if (send_result_code(HRC_SERVER_ERROR, 1) < 0) {
 					close();
 				}
 			}
 			else if (r == 0) {
-				m_fsm.reset(m_f->cfg());
+				if (fsm().get_state() == fsm::state_resp_send_body) {
+					close();	/* send finish */
+				}
+				else {	/* waiting for reply from server */
+					fsm().reset(m_f->cfg());
+				}
 			}
 			update_access();
 		}
@@ -453,14 +490,14 @@ httpsession::host(char *buff, int len) const
 
 int
 httpsession::get(const char *url, const char *hd[], const char *hv[],
-		int n_hd, int chunked)
+		int n_hd, bool chunked/* = false */)
 {
 	return send_request_common("GET", url, "", 0, hd, hv, n_hd, chunked);
 }
 
 int
 httpsession::post(const char *url, const char *hd[], const char *hv[],
-		const char *body, int blen, int n_hd, int chunked/* = 0 */)
+		const char *body, int blen, int n_hd, bool chunked/* = false */)
 {
 	return send_request_common("POST", url, body, blen, hd, hv, n_hd, chunked);
 }
@@ -468,7 +505,7 @@ httpsession::post(const char *url, const char *hd[], const char *hv[],
 int
 httpsession::send_request_common(const char *method,
 		const char *url, const char *body, int blen,
-		const char *hd[], const char *hv[], int n_hd, int chunked/* = 0 */)
+		const char *hd[], const char *hv[], int n_hd, bool chunked/* = false */)
 {
 	char data[1024], host[1024], path[1024];
 	U16 port;
@@ -489,33 +526,33 @@ httpsession::send_request_common(const char *method,
 				method, path, host, port);
 	}
 	if ((len = send(data, len)) < 0) {
-		log(LOG_ERROR, "send request fail (%d)\n", len);
+		log(ERROR, "send request fail (%d)\n", len);
 		return len;
 	}
 	TRACE("request header: <%s", data);
 	if ((r = send_header(hd, hv, n_hd, chunked)) < 0) {
-		log(LOG_ERROR, "send emptyline1 fail (%d)\n", r);
+		log(ERROR, "send emptyline1 fail (%d)\n", r);
 		return r;
 	}
 	len += r;
-	if ((r = send("\r\n", 2)) < 0) {
+	if ((r = send_lf()) < 0) {
 		return r;
 	}
 	len += r;
 	TRACE(":%u>\n", len);
 	if (chunked) {
-		TRACE("body transfer as chunk (%d)\n", blen);
-		m_fsm.set_send_body(body, blen);
+//		TRACE("body transfer as chunk (%d)\n", blen);
+		fsm().set_send_body(body, blen, false);
 		return len + blen;
 	}
 	else if (blen > 0) {
 		if ((r = send(body, blen)) < 0) {
-			log(LOG_ERROR, "send body fail (%d)\n", r);
+			log(ERROR, "send body fail (%d)\n", r);
 			return r;
 		}
 		len += r;
 		if ((r = send("\r\n\r\n", 4)) < 0) {
-			log(LOG_ERROR, "send last crlfcrlf fail (%d)\n", r);
+			log(ERROR, "send last crlfcrlf fail (%d)\n", r);
 			return r;
 		}
 		len += r;
@@ -527,42 +564,51 @@ int
 httpsession::send_body()
 {
 	char length[16];
-	int n_send = m_fsm.send_body_len();
+	int n_send = fsm().send_body_len();
 	int n_limit = (writable()
-			- 8/* chunk max is FFFFFFFF */ - 2/* for last \r\n */);
+			- 10/* chunk max is FFFFFFFF\r\n */ - 2/* for last \r\n after body */
+			- 5/* if send finish, we need to sent 0\r\n\r\n also */);
+	if (n_limit <= 0) {
+		return n_send;
+	}
+//	TRACE("writable limit = %d\n", n_limit);
 	if (n_send > n_limit) {
 		n_send = n_limit;
 	}
 	int n_length = nbr_str_printf(length,
-			sizeof(length) - 1, "%08x\r\n", n_send);
+			sizeof(length) - 1, "%x\r\n", n_send);
 	if ((n_length = send(length, n_length)) < 0) {
+		log(ERROR, "send_body: too long chunk prefix %u\n", n_length);
 		return n_length;
 	}
 	if (n_send <= 0) { /* chunk transfer but body is 0 byte */
-		if ((n_send = send("\r\n", 2)) < 0) {/* send last empty line */
+		if ((n_send = send_lf()) < 0) {/* send last empty line */
 			return n_send;
 		}
+//		TRACE("no more chunk need to transfer\n");
 		return 0;
 	}
-	if ((n_send = send(m_fsm.send_body_ptr(), n_send)) < 0) {
+	if ((n_send = send(fsm().send_body_ptr(), n_send)) < 0) {
+		log(ERROR, "send_body: too long body %u\n", n_send);
 		return n_send;
 	}
-	m_fsm.bodysent(n_send);
-	if ((n_send = send("\r\n", 2)) < 0) {
+	fsm().body_sent(n_send);
+	if ((n_send = send_lf()) < 0) {
 		return n_send;
 	}
-	if (m_fsm.bodylen() == 0) {
+	if (fsm().send_body_len() == 0) {
 		/* send last 0 byte chunk and empty line */
 		if ((n_send = send("0\r\n\r\n", 5)) < 0) {
 			return n_send;
 		}
+//		TRACE("no more chunk need to transfer2\n");
 		return 0;
 	}
-	return m_fsm.bodylen();
+	return fsm().send_body_len();
 }
 
 int
-httpsession::send_header(const char *hd[], const char *hv[], int n_hd, int chunked)
+httpsession::send_header(const char *hd[], const char *hv[], int n_hd, bool chunked)
 {
 	int r, len = 0, hl;
 	char header[4096];
@@ -589,8 +635,8 @@ int
 httpsession::send_result_code(httprc rc, int cf)
 {
 	char buffer[1024];
-	int len = sprintf(buffer, "HTTP/%u.%u %03u\r\n",
-			m_fsm.version() / 10, m_fsm.version() % 10, rc);
+	int len = sprintf(buffer, "HTTP/%u.%u %03u\r\n\r\n",
+			fsm().version() / 10, fsm().version() % 10, rc);
 	int r = send(buffer, len);
 	if (r > 0 && cf) {
 		close();
@@ -601,27 +647,33 @@ httpsession::send_result_code(httprc rc, int cf)
 
 int
 httpsession::send_result_and_body(httprc rc,
-		char *b, int bl, const char *mime)
+		const char *b, int bl, const char *mime)
 {
 	char hd[1024], *phd = hd;
-	int hl = 0, r, tl = 0;
+	int hl = 0, hl2, r, tl = 0;
 	hl += snprintf(phd + hl, sizeof(hd) - hl, "HTTP/%u.%u %03u\r\n",
-			m_fsm.version() / 10, m_fsm.version() % 10, rc);
-	hl += snprintf(phd + hl, sizeof(hd) - hl, "Content-Length: %u\r\n", bl);
-	hl += snprintf(phd + hl, sizeof(hd) - hl, "Content-Type: %s\r\n\r\n", mime);
+			fsm().version() / 10, fsm().version() % 10, rc);
+	hl += snprintf(phd + hl, sizeof(hd) - hl, "Content-Type: %s\r\n", mime);
 	int limit = writable();
 	if (limit < hl) {
 		return NBR_ESHORT;
 	}
 	if ((r = send(hd, hl)) < 0) { return r; }
 	tl += r;
-	if (limit >= (hl + bl)) {
+	hl2 = snprintf(hd, sizeof(hd) - 1, "Content-Length: %u\r\n\r\n", bl);
+	if (limit >= (hl + hl2 + bl)) {
+		if ((r = send(hd, hl2)) < 0) { return r; }
+		tl += r;
 		if ((r = send(b, bl)) < 0) { return r; }
 		tl += r;
 		close();
 	}
 	else {
-		m_fsm.set_send_body(b, bl);
+//		TRACE("body length too long %d, chunk sending\n", bl);
+		const char chunk_header[] = "Transfer-Encoding: chunked\r\n\r\n";
+		if ((r = send(chunk_header, sizeof(chunk_header) - 1)) < 0) { return r; }
+		tl += r;
+		fsm().set_send_body(b, bl, true);
 		return tl + bl;
 	}
 	return tl;
