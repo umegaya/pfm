@@ -404,6 +404,21 @@ nbr_str_chop(char *buffer)
 	return buffer;
 }
 
+NBR_API const char*
+nbr_str_rchr(const char *in, char sep, int max)
+{
+	const char *w = in, *p = NULL;
+	while(*w) {
+		if (*w == sep) {
+			p = w;
+		}
+		if ((w - in) > max) {
+			return NULL;
+		}
+	}
+	return p;
+}
+
 static const char SEP_EQUAL = '=';
 static const char SEP_AMP = '&';
 

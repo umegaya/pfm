@@ -19,9 +19,9 @@
 #include "http.h"
 #include <ctype.h>
 #include "nbr_pkt.h"
-#include "common.h"
+#include "typedef.h"
+#include "macro.h"
 #include "str.h"
-#include "mem.h"
 
 using namespace sfc;
 
@@ -436,7 +436,7 @@ httpsession::fin()
 {
 }
 
-int
+session::pollret
 httpsession::poll(UTIME nt, bool from_worker)
 {
 	if (from_worker && fsm().send_phase()) {
@@ -450,6 +450,7 @@ httpsession::poll(UTIME nt, bool from_worker)
 			}
 			else if (r == 0) {
 				if (fsm().get_state() == fsm::state_resp_send_body) {
+//					log(INFO, "close connection to %s\n", (const char *)addr());
 					close();	/* send finish */
 				}
 				else {	/* waiting for reply from server */
@@ -477,12 +478,7 @@ httpsession::on_close(int r)
 char*
 httpsession::host(char *buff, int len) const
 {
-	char addr[256];
-	const char *p = remoteaddr(addr, sizeof(addr));
-	if (*p == '\0') {
-		return "";
-	}
-	if (!nbr_str_divide_tag_and_val(':', addr, buff, len)) {
+	if (!nbr_str_divide_tag_and_val(':', addr(), buff, len)) {
 		return "";
 	}
 	return buff;
@@ -517,7 +513,7 @@ httpsession::send_request_common(const char *method,
 		len = nbr_str_printf(data, sizeof(data),
 				"%s %s HTTP/1.1\r\n"
 				"Host: %s\r\n",
-				method, path, remoteaddr(host, sizeof(host)));
+				method, path, (const char *)addr());
 	}
 	else {
 		len = nbr_str_printf(data, sizeof(data),

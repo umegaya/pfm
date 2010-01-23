@@ -45,9 +45,12 @@ static int acceptwatcher(SOCK sk)
 	int len;
 	char addr[256];
 	workbuf_t *wkb;
-	TRACE("sv: access from %s\n", nbr_sock_get_addr(sk, addr, sizeof(addr)));
+	nbr_sock_get_addr(sk, addr, sizeof(addr));
+	TRACE("sv: access from %s\n", addr);
 	wkb = nbr_sock_get_data(sk, &len);
-	strcpy(wkb->addr, nbr_sock_get_addr(sk, addr, sizeof(addr)));
+	if (nbr_sock_get_addr(sk, addr, sizeof(addr)) >= 0) {
+		strcpy(wkb->addr, addr);
+	}
 	return 0;
 }
 
@@ -104,7 +107,8 @@ static int parser(SOCK sk, char *p, int l)
 	char strbuf[256];
 	U8 type;
 	U16 val;
-	VTRACE("%p: recv %u byte from %s\n", sk.p, l, nbr_sock_get_addr(sk, strbuf, sizeof(strbuf)));
+	nbr_sock_get_addr(sk, strbuf, sizeof(strbuf));
+	VTRACE("%p: recv %u byte from %s\n", sk.p, l, strbuf);
 	POP_START(p, l);
 	POP_8(type);
 	switch(type) {

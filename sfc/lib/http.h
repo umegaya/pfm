@@ -120,11 +120,11 @@ public:
 	typedef fsm request, response;
 public:
 	template <class S>
-	class factory : public session::factory_impl<S> {
+	class factory : public session::factory_impl< S, arraypool<S> > {
 	protected:
 		ARRAY m_fsm_a;
 	public:
-		typedef session::factory_impl<S> super;
+		typedef session::factory_impl<S, arraypool<S> > super;
 	public:
 		factory() : super(), m_fsm_a() {}
 		~factory() {}
@@ -146,7 +146,7 @@ public:
 	bool has_fsm() const { return m_fsm != NULL; }
 public:
 	void fin();
-	int poll(UTIME ut, bool from_worker);
+	pollret poll(UTIME ut, bool from_worker);
 	int on_open(const config &cfg);
 	int on_close(int r);
 public:	/* callback */
@@ -175,8 +175,7 @@ protected:
 template <class S> int
 httpsession::factory<S>::init(const config &cfg)
 {
-	if (!super::pool().init(cfg.m_max_connection, sizeof(S),
-		cfg.m_option)) {
+	if (!super::init_pool(cfg)) {
 		return NBR_ESHORT;
 	}
 	if (!(m_fsm_a = nbr_array_create(cfg.m_max_connection,
@@ -189,6 +188,7 @@ httpsession::factory<S>::init(const config &cfg)
 			httpsession::factory<S>::on_close,
 			httpsession::factory<S>::on_recv,
 			httpsession::factory<S>::on_event,
+			NULL, /* use default */
 			httpsession::factory<S>::on_connect,
 			httpsession::factory<S>::on_poll);
 }
@@ -207,6 +207,7 @@ httpsession::factory<S>::on_recv(SOCK sk, char *p, int l)
 {
 	S **s = (S**)nbr_sock_get_data(sk, NULL);
 	if (s == NULL) {
+		ASSERT(false);
 		return NBR_ENOTFOUND;
 	}
 	S *obj = *s;
@@ -229,14 +230,17 @@ httpsession::factory<S>::on_connect(SOCK sk, void *p)
 	httpsession::factory<S> *f =
 		(httpsession::factory<S> *)nbr_sockmgr_get_data(nbr_sock_get_mgr(sk));
 	if (s == NULL || f == NULL) {
+		ASSERT(false);
 		return NBR_ENOTFOUND;
 	}
 	*s = (S *)(p ? p : f->pool().alloc());
 	if (!(*s)) {
+		ASSERT(false);
 		return NBR_EEXPIRE;
 	}
-	(*s)->setattr(session::attr_opened, true);
+	(*s)->setstate(session::ss_connecting);
 	(*s)->set(sk, f);
+	(*s)->setaddr();
 	f->attach_fsm(**s);
 	return NBR_OK;
 }
@@ -247,15 +251,18 @@ httpsession::factory<S>::on_open(SOCK sk)
 {
 	S **s = (S**)nbr_sock_get_data(sk, NULL), *obj;
 	if (s == NULL) {
+		ASSERT(false);
 		return NBR_ENOTFOUND;
 	}
 	obj = *s;
 	int r;
 	if ((r = obj->on_open(obj->cfg())) < 0) {
+		ASSERT(false);
 		return r;
 	}
 	obj->fsm().reset(obj->cfg());
-	obj->clear_conn_failure();
+	obj->setstate(session::ss_connected);
+	obj->clear_conn_retry();
 	if (obj->cfg().client()) {
 		return obj->send_request();
 	}

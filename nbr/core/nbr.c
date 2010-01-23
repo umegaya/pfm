@@ -66,9 +66,10 @@ nbr_init(CONFIG *c)
 	INIT_OR_DIE(r, nbr_search_init(c->max_search));
 	INIT_OR_DIE(r, nbr_proto_init(c->max_proto));
 	INIT_OR_DIE(r, nbr_sock_init(c->max_sockmgr,
-		c->max_nfd, c->max_worker, c->sockbuf_size));
-	INIT_OR_DIE(r, nbr_cluster_init(c->ndc.mcast_port,
-		c->ndc.max_node, c->ndc.multiplex));
+		c->max_nfd, c->max_worker,
+		c->sockbuf_size, c->sockbuf_size_main));
+//	INIT_OR_DIE(r, nbr_cluster_init(c->ndc.mcast_port,
+//		c->ndc.max_node, c->ndc.multiplex));
 	nbr_sock_set_nioconf(c->ioc);
 	return NBR_OK;
 }
@@ -84,6 +85,7 @@ nbr_get_default(CONFIG *c)
 	c->max_thread = 5;
 	c->max_worker = 3;
 	c->sockbuf_size = 1 * 1024 * 1024; /* 1MB */
+	c->sockbuf_size_main = c->sockbuf_size;
 	/* NIOCONF */
 	c->ioc.epoll_timeout_ms = 50;	/* 50ms */
 	c->ioc.job_idle_sleep_us = 10; /* 10us */
@@ -96,7 +98,7 @@ nbr_get_default(CONFIG *c)
 NBR_API void
 nbr_stop_sock_io()
 {
-	nbr_cluster_fin();
+//	nbr_cluster_fin();
 	nbr_sock_fin();
 }
 

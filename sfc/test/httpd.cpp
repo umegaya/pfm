@@ -17,8 +17,8 @@
  * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
  ****************************************************************/
 #include "httpd.h"
-#include "common.h"
-#include "mem.h"
+#include "typedef.h"
+#include "macro.h"
 #include "str.h"
 #include <sys/stat.h>
 
@@ -37,20 +37,21 @@ get_request_session::process(response &resp)
 		log(ERROR, "internal error\n");
 		return NBR_OK;
 	}
-	log(INFO, "http result : %d\n", resp.rc());
-	log(INFO, "response len : %u\n", resp.bodylen());
+//	log(INFO, "http result : %d\n", resp.rc());
+//	log(INFO, "response len : %u\n", resp.bodylen());
 	char mime[256];
 	if (!resp.hdrstr("Content-Type", mime, sizeof(mime))) {
 		log(INFO, "content-type unknown\n");
 		return NBR_OK;
 	}
-	log(INFO, "content-type: %s\n", mime);
+//	log(INFO, "content-type: %s\n", mime);
 	char path[256], file[256];
 	const char *ext;
 	if ((ext = nbr_str_divide_tag_and_val('/', m_url, path, sizeof(path)))) {
 		snprintf(file, sizeof(file) - 1, "./%s", ext);
 		FILE *fp = fopen(file, "r");
 		if (fp) {
+#if 1
 			struct stat st;
 			fstat(fileno(fp), &st);
 			ASSERT(st.st_size == resp.bodylen());
@@ -58,12 +59,13 @@ get_request_session::process(response &resp)
 			char buffer[st.st_size];
 			fread(buffer,1,st.st_size,fp);
 			ASSERT(nbr_mem_cmp(buffer, resp.body(), resp.bodylen()) == 0);
-			log(INFO, "<%s> get test ok!\n", file);
+#endif
+			log(INFO, "%u:<%s> get test ok!\n", m_rid, file);
 			m_done++;
 			if (m_done >= 1000) {
 				if (m_end == 0LL) {
 					m_end = nbr_clock();
-					log(INFO, "###### take %u us to handle 1000 request (%f qps) ######\n",
+					log(FATAL, "### take %u us to handle 1000 request (%f qps) ###\n",
 							(U32)(m_end - m_start),
 							(float)((float)m_done * 1000 * 1000 / (float)(m_end - m_start)));
 					daemon::stop();
@@ -82,16 +84,21 @@ get_request_session::process(response &resp)
 int
 get_request_session::on_close(int r)
 {
+//	address a;
+//	localaddr(a);
+	log(INFO, "on_close (%d:%d)\n", r, m_rid);
 	ASSERT(m_end != 0LL || fsm().get_state() == fsm::state_recv_finish);
-	log(INFO, "on_close (%d)\n", r);
 	return NBR_OK;
 }
 
 int
 get_request_session::send_request()
 {
+//	address a;
+//	localaddr(a);
+	m_rid = f()->msgid();
 	int r = get(m_url, NULL, NULL, 0, true);
-	log(INFO, "send_request get(%s) result %d\n", m_url, r);
+	log(INFO, "send_request(%u) get(%s) result %d\n", m_rid, m_url, r);
 	return r;
 }
 
@@ -132,7 +139,7 @@ get_response_session::process(request &r)
 		return NBR_OK;
 	}
 	int len = send_result_and_body(HRC_OK, (const char *)fm->p, fm->l, "image/jpg");
-	log(INFO, "send %u byte\n", len);
+//	log(INFO, "send %u byte\n", len);
 	return NBR_OK;
 }
 
@@ -227,9 +234,11 @@ testhttpd::create_config(config *cl[], int size)
 			60, opt_not_set,
 			128 * 1024, 1024,
 			0, 0,	/* no ping */
+			-1,0,	/* no query buffer */
 			"TCP",
-			1 * 1000 * 1000/* 1sec task span */,
+			1 * 10 * 1000/* 100msec task span */,
 			1/* after 10ms, again try to connect */,
+			kernel::INFO,
 			nbr_sock_rparser_raw,
 			nbr_sock_send_raw,
 			config::cfg_flag_not_set
@@ -241,9 +250,11 @@ testhttpd::create_config(config *cl[], int size)
 			60, opt_not_set,
 			1024, 32 * 1024,
 			0, 0,	/* no ping */
+			-1,0,	/* no query buffer */
 			"TCP",
-			1 * 1000 * 1000/* 1sec task span */,
+			1 * 10 * 1000/* 100msec task span */,
 			0/* never wait ld recovery */,
+			kernel::INFO,
 			nbr_sock_rparser_raw,
 			nbr_sock_send_raw,
 			config::cfg_flag_server
@@ -262,14 +273,9 @@ testhttpd::boot(int argc, char *argv[])
 		return get_response_session::init_res();	/* maybe server session. ok */
 	}
 	get_request_session *s;
-	c = find_config<config>("rget");
-	if (!c) {
-		log(ERROR, "server mode but config not found\n");
-		return NBR_ENOTFOUND;
-	}
 	get_request_session::m_start = nbr_clock();
-	for (int i = 0; i < c->m_max_connection; i++) {
-		if (!(s = f->pool().alloc())) {
+	for (int i = 0; i < 10 /*c->m_max_connection*/; i++) {
+		if (!(s = f->pool().create())) {
 			log(ERROR, "allocate session fail\n");
 			return NBR_EINVAL;
 		}

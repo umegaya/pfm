@@ -239,8 +239,10 @@ cluster_addr_from_remote_sock(U16 clst_id, SOCK sk, char *buff, int len)
 {
 	char addr[256], url[256];
 	U16 port;
-	if (nbr_str_parse_url(nbr_sock_get_addr(sk, buff, len),
-			sizeof(addr), addr, &port, url) < 0) {
+	if (nbr_sock_get_addr(sk, buff, len) < 0) {
+		return "";
+	}
+	if (nbr_str_parse_url(buff, sizeof(addr), addr, &port, url) < 0) {
 		ASSERT(FALSE);
 		return "";
 	}

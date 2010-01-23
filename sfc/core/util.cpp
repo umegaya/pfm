@@ -17,11 +17,51 @@
  * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
  ****************************************************************/
 #include "sfc.hpp"
-#include "common.h"
+#include "typedef.h"
+#include "macro.h"
 #include "str.h"
 
 using namespace sfc;
 
+/*-------------------------------------------------------------*/
+/* sfc::util::address										   */
+/*-------------------------------------------------------------*/
+int address::from(const char *a){
+	m_len = nbr_str_copy(m_a, SIZE, a, SIZE);
+	return m_len;
+}
+
+/*-------------------------------------------------------------*/
+/* sfc::util::ringbuffer									   */
+/*-------------------------------------------------------------*/
+void
+ringbuffer::fin()
+{
+	if (m_p) {nbr_mem_free(m_p); }
+	if (m_lk) { nbr_rwlock_destroy(m_lk); }
+}
+
+bool
+ringbuffer::init(U32 size)
+{
+	if (!(m_lk = nbr_rwlock_create())) {
+		fin();
+		return false;
+	}
+	m_l = size;
+	if (!(m_p = (U8 *)nbr_mem_alloc(m_l))) {
+		fin();
+		return false;
+	}
+	m_wp = m_rp = m_p;
+	return true;
+}
+
+
+
+/*-------------------------------------------------------------*/
+/* sfc::util::config										   */
+/*-------------------------------------------------------------*/
 config::config()
 {
 	m_name[0] = '\0';
@@ -37,14 +77,7 @@ config::config()
 }
 
 config::config(BASE_CONFIG_PLIST) :
-		m_max_connection(max_connection),
-		m_timeout(timeout), m_option(option),
-		m_rbuf(rbuf), m_wbuf(wbuf),
-		m_ping_timeo(ping_timeo), m_ping_intv(ping_intv),
-		m_proto_name(proto_name),
-		m_taskspan(taskspan), m_ld_wait(ld_wait),
-		m_fnp(fnp),
-		m_fns(fns), m_flag(flag)
+		BASE_CONFIG_SETPARAM
 {
 	nbr_str_copy(m_name, sizeof(m_name), name, sizeof(m_name));
 	nbr_str_copy(m_host, sizeof(m_host), host, sizeof(m_host));
@@ -195,5 +228,30 @@ config::sender_from(const char *str)
 	}
 	ASSERT(FALSE);
 	return nbr_sock_send_raw;
+}
+
+
+
+/*-------------------------------------------------------------*/
+/* sfc::finder::property									   */
+/*-------------------------------------------------------------*/
+finder::property::property(BASE_CONFIG_PLIST,
+	const char *mcastgrp, U16 mcastport, int ttl) :
+	config(BASE_CONFIG_CALL), m_mcastport(mcastport)
+{
+	if (!(*mcastgrp)) { mcastgrp = MCAST_GROUP; }
+	nbr_str_copy(m_mcastaddr, sizeof(m_mcastaddr),
+		mcastgrp, sizeof(m_mcastaddr));
+	m_mcastconf.mcast_addr = m_mcastaddr;
+	m_mcastconf.ttl = ttl;
+}
+
+
+
+/*-------------------------------------------------------------*/
+/* sfc::node::nodefinder									   */
+/*-------------------------------------------------------------*/
+bool node::nodefinder::check_sym(const char *sym_a, const char *sym_b) {
+	return 0 == nbr_str_cmp(sym_a, SYM_SIZE, sym_b, SYM_SIZE);
 }
 

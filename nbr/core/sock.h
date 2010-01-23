@@ -20,7 +20,8 @@
 #define __SOCK_H__
 
 /* extern function declaration */
-extern int		nbr_sock_init(int max, int max_nfd, int worker, int skbsz);
+extern int		nbr_sock_init(int max, int max_nfd,
+					int worker, int skbsz, int skbmain);
 extern int		nbr_sock_fin();
 extern void 	nbr_sock_poll();
 extern void 	*nbr_sock_io(void *skd);

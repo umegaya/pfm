@@ -25,11 +25,12 @@ namespace sfc {
 
 class get_request_session : public httpsession {
 	const char *m_url;
+	U32 m_rid;
 public:
 	static int m_done;
 	static UTIME m_start, m_end;
 public:
-	get_request_session() : httpsession(), m_url(NULL) {}
+	get_request_session() : httpsession(), m_url(NULL), m_rid(0) {}
 	~get_request_session() {}
 	void seturl(const char *url) { m_url = url; }
 	void set_random_url();

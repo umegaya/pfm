@@ -116,6 +116,10 @@ daemon::init(int argc, char *argv[])
 			log(ERROR, "%s: fail to create factory\n", c->m_name);
 			return NBR_EINVAL;
 		}
+		if ((r = f->base_init()) < 0) {
+			log(ERROR, "%s: base_init error %d\n", c->m_name, r);
+			return r;
+		}
 		if ((r = f->init(*c)) < 0) {
 			log(ERROR, "%s: init error %d\n", c->m_name, r);
 			return r;
@@ -141,6 +145,7 @@ daemon::fin()
 	smap::iterator s;
 	for (s = m_sl.begin(); s != m_sl.end(); s = m_sl.next(s)) {
 		s->fin();
+		s->base_fin();
 	}
 	m_sl.fin();
 	cmap::iterator c;
@@ -236,7 +241,7 @@ daemon::create_config(config *cl[], int size)
 	if (size <= 0) {
 		return NBR_ESHORT;
 	}
-	cl[0] = new config;
+	cl[0] = new session::property;
 	return 1;
 }
 

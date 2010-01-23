@@ -20,19 +20,106 @@
 #define __SFC_H__
 
 #include "nbr.h"
+#include <stdlib.h>
 
 namespace sfc {
 
-#if defined(_DEBUG)
-#include <assert.h>
-#define ASSERT(c) 	assert(c)
-#define TRACE(...)	fprintf(stderr, __VA_ARGS__)
-#else
-#define ASSERT(c)
-#define TRACE(...)
-#endif
+#include "defs.h"
 
 namespace util {
+/*-------------------------------------------------------------*/
+/* sfc::util::address										   */
+/*-------------------------------------------------------------*/
+class address {
+public:
+	static const size_t SIZE = 32;
+private:
+	U8 m_len, padd[3];
+	char m_a[SIZE];
+public:
+	address(const char *p) { from(p); }
+	address() : m_len(0) { m_a[0] = '\0'; }
+	operator const char*() const { return m_a; }
+	char *a() { return m_a; }
+	int len() const { return m_len; }
+	void setlen(int len) { m_len = (U8)len; }
+	int from(const char *a);
+	int from(SOCKMGR skm) {
+		int r = nbr_sockmgr_get_addr(skm, m_a, SIZE);
+		if (r < 0) { return r; }
+		else { m_len = (U8)r; }
+		return r;
+	}
+	int from(SOCK sk) {
+		int r = nbr_sock_get_addr(sk, m_a, SIZE);
+		if (r < 0) { return r; }
+		else { m_len = (U8)r; }
+		return r;
+	}
+	/* address for ipv4, ipv6 specific... */
+	int addrpart(char *p, int l) {
+		const char *b = nbr_str_rchr(m_a, ':', SIZE);
+		if (!b) { return NBR_EFORMAT; }
+		if ((b - m_a) >= l) { return NBR_ESHORT; }
+		nbr_mem_copy(p, m_a, (b - m_a));
+		p[(b - m_a)] = '\0';
+		return (b - m_a);
+	}
+};
+
+/*-------------------------------------------------------------*/
+/* sfc::util::lock											   */
+/*-------------------------------------------------------------*/
+class lock {
+	RWLOCK m_lk;
+	bool m_locked;
+public:
+	lock(RWLOCK lk, bool rl) : m_lk(lk) {
+		int r;
+		if (!lk)		{ m_locked = false; }
+		else {
+			if (rl)	{ r = nbr_rwlock_rdlock(m_lk); }
+			else 	{ r = nbr_rwlock_wrlock(m_lk); }
+			m_locked = (r >= 0);
+		}
+	}
+	~lock() {
+		if (m_locked) { nbr_rwlock_unlock(m_lk); }
+	}
+	int unlock() {
+		if (m_locked) {
+			nbr_rwlock_unlock(m_lk);
+			m_locked = false;
+		}
+		return NBR_OK;
+	}
+};
+
+/*-------------------------------------------------------------*/
+/* sfc::util::ringbuffer									   */
+/*-------------------------------------------------------------*/
+class ringbuffer {
+protected:
+	U8	*m_p, *m_wp, *m_rp;
+	U32	m_l;
+	RWLOCK m_lk;
+public:
+	ringbuffer() : m_l(0), m_lk(NULL) {}
+	~ringbuffer() { fin(); };
+	void fin();
+	bool init(U32 size);
+public:
+	inline const U8 *rp() const { return m_rp; }
+	inline const U8 *wp() const { return m_wp; }
+	inline int size() const { return m_l; }
+	/* direct read/write */
+	inline U8 *write(const U8 *p, U32 l, U32 &wsz);
+	inline U8 *read(U8 *p, U32 l, U32 &rsz);
+	/* write/read data with length information of data */
+	inline U8 *write_chunk(const U8 *p, U32 l, U32 &wsz);
+	inline U8 *read_chunk(U8 *p, U32 l, U32 &rsz);
+};
+
 /*-------------------------------------------------------------*/
 /* sfc::util::array											   */
 /*-------------------------------------------------------------*/
@@ -122,7 +209,7 @@ protected:
 public:
 	array();
 	~array();
-	inline int 		init(int max, int size = -1,
+	inline bool		init(int max, int size = -1,
 						int opt = opt_expandable);
 	inline void 	fin();
 	inline iterator insert(value v);
@@ -137,6 +224,8 @@ public:
 	inline iterator	next(iterator p) const;
 	inline element	*alloc();
 	inline bool		initialized() { return m_a != NULL; }
+private:
+	array(const array &a);
 };
 
 /*-------------------------------------------------------------*/
@@ -166,6 +255,22 @@ public:
 		}
 		static element *get(SEARCH s, type t) {
 			return (element *)nbr_search_mem_get(s, &t, sizeof(T));
+		}
+	};
+	template <class C>
+	struct 	kcont<C,address> {
+		typedef const address &type;
+		static SEARCH init(int max, int opt, int hashsz) {
+			return nbr_search_init_mem_engine(max, opt, hashsz, sizeof(address::SIZE));
+		}
+		static int regist(SEARCH s, type t, element *v) {
+			return nbr_search_mem_regist(s, t, t.len(), v);
+		}
+		static void unregist(SEARCH s, type t) {
+			nbr_search_mem_unregist(s, t, t.len());
+		}
+		static element *get(SEARCH s, type t) {
+			return (element *)nbr_search_mem_get(s, t, t.len());
 		}
 	};
 	template <class C, typename T, size_t N>
@@ -201,19 +306,19 @@ public:
 		}
 	};
 	template <class C>
-	struct	kcont<C,int> {
-		typedef int type;
+	struct	kcont<C,U32> {
+		typedef U32 type;
 		static SEARCH init(int max, int opt, int hashsz) {
 			return nbr_search_init_int_engine(max, opt, hashsz);
 		}
 		static int regist(SEARCH s, type t, element *v) {
-			return nbr_search_int_regist(s, t, v);
+			return nbr_search_int_regist(s, (int)t, v);
 		}
 		static void unregist(SEARCH s, type t) {
-			nbr_search_int_unregist(s, t);
+			nbr_search_int_unregist(s, (int)t);
 		}
 		static element *get(SEARCH s, type t) {
-			return nbr_search_int_get(s, t);
+			return (element *)nbr_search_int_get(s, (int)t);
 		}
 	};
 	template <class C, size_t N>
@@ -235,26 +340,45 @@ public:
 	typedef typename kcont<V,K>::type key;
 protected:
 	SEARCH	m_s;
+	RWLOCK 	m_lk;
 public:
 	map();
 	~map();
-	inline int 		init(int max, int hashsz,
+	inline bool		init(int max, int hashsz,
 						int size = -1,
 						int opt = opt_expandable);
 	inline void 	fin();
 	inline iterator	insert(value v, key k);
 	inline retval	*find(key k) const;
+	inline retval	*create(key k);
 	inline void		erase(key k);
 	inline bool		initialized() { return super::initialized() && m_s != NULL; }
 protected:
 	inline element	*findelem(key k) const;
 	inline element	*alloc(key k);
+private:
+	map(const map &m);
+};
+
+/*-------------------------------------------------------------*/
+/* sfc::kernel												   */
+/*-------------------------------------------------------------*/
+class kernel {
+public:
+	/* log level definition */
+	typedef enum {
+		DEBUG = 1,
+		INFO = 2,
+		WARN = 3,
+		ERROR = 4,
+		FATAL = 5,
+	} loglevel;
 };
 
 /*-------------------------------------------------------------*/
 /* sfc::util::config										   */
 /*-------------------------------------------------------------*/
-class config {
+class config : public kernel {
 public:
 	typedef char *(*parser)(char*, int*, int*);
 	typedef int (*sender)(SOCK, char *, int);
@@ -273,8 +397,10 @@ public:
 	int m_timeout, m_option;
 	int m_rbuf, m_wbuf;
 	int m_ping_timeo, m_ping_intv;
+	int m_max_query, m_query_bufsz;
 	const char *m_proto_name;
 	UTIME m_taskspan, m_ld_wait;
+	loglevel m_verbosity;
 	parser m_fnp;
 	sender m_fns;
 	U32 m_flag;
@@ -287,15 +413,30 @@ public:
 	int timeout, int option,			\
 	int rbuf, int wbuf,					\
 	int ping_timeo, int ping_intv,		\
+	int max_query, int query_bufsz,		\
 	const char *proto_name,				\
 	UTIME taskspan, UTIME ld_wait,		\
+	loglevel verbosity,					\
 	parser fnp, sender fns, U32 flag
-#define BASE_CONFIG_CTOR()				\
-	config(name, host, max_connection,	\
+#define BASE_CONFIG_CALL				\
+	name, host, max_connection,			\
 	timeout, option, rbuf, wbuf, 		\
 	ping_timeo, ping_intv,				\
+	max_query, query_bufsz,				\
 	proto_name, taskspan, ld_wait,		\
-	fnp, fns, flag)
+	verbosity,							\
+	fnp, fns, flag
+#define BASE_CONFIG_SETPARAM							\
+	m_max_connection(max_connection),					\
+	m_timeout(timeout), m_option(option),				\
+	m_rbuf(rbuf), m_wbuf(wbuf),							\
+	m_ping_timeo(ping_timeo), m_ping_intv(ping_intv),	\
+	m_max_query(max_query), m_query_bufsz(query_bufsz),	\
+	m_proto_name(proto_name),							\
+	m_taskspan(taskspan), m_ld_wait(ld_wait),			\
+	m_verbosity(verbosity),								\
+	m_fnp(fnp),											\
+	m_fns(fns), m_flag(flag)
 
 	config();
 	config(BASE_CONFIG_PLIST);
@@ -324,22 +465,6 @@ protected:
 using namespace util;
 
 
-/*-------------------------------------------------------------*/
-/* sfc::kernel												   */
-/*-------------------------------------------------------------*/
-class kernel {
-public:
-	/* log level definition */
-	typedef enum {
-		DEBUG = 1,
-		INFO = 2,
-		WARN = 3,
-		ERROR = 4,
-		FATAL = 5,
-	} loglevel;
-};
-
-
 
 /*-------------------------------------------------------------*/
 /* sfc::session												   */
@@ -347,23 +472,39 @@ public:
 class session : public kernel {
 public:
 	class factory : public kernel {
+		friend class lock;
 		static const U32	MSGID_LIMIT = 2000000000;
 		static const U16	MSGID_COMPACT_LIMIT = 60000;
+	public:
+		struct query {
+			char data[0];
+		};
+		typedef map<query,U32> qmap;
 	public:
 		const config	*m_cfg;
 		SOCKMGR			m_skm;
 		UTIME			m_last_poll;
 		U32				m_msgid_seed;
+		RWLOCK			m_lk;
+		qmap			m_ql;
 	public:
-		factory() : m_cfg(NULL), m_skm(NULL), m_last_poll(0), m_msgid_seed(0) {}
+		factory() : m_cfg(NULL), m_skm(NULL), m_last_poll(0),
+					m_msgid_seed(0), m_lk(NULL), m_ql() {}
 		virtual ~factory() {}
 		virtual int init(const config &cfg) = 0;
 		virtual void fin() = 0;
 		virtual void poll(UTIME ut) = 0;
 		int log(loglevel lv, const char *fmt, ...);
+		int base_init();
+		void base_fin();
+		RWLOCK lk() { return m_lk; }
 		const config &cfg() const { return *m_cfg; }
+		qmap &querymap() { return m_ql; }
 		int connect(session *s, const char *addr = NULL, void *p = NULL);
+		int get(address &a) const { return a.from((SOCKMGR)m_skm); }
 		int mcast(const char *addr, char *p, int l);
+		int event(int t, const char *p, int l) {
+			return nbr_sockmgr_event(m_skm, t, (char *)p, l); }
 		inline U32 msgid() {
 			++m_msgid_seed;
 			if (m_msgid_seed > MSGID_LIMIT) { m_msgid_seed = 1; }
@@ -380,19 +521,71 @@ public:
 					int (*cw)(SOCK, int),
 					int (*pp)(SOCK, char*, int),
 					int (*eh)(SOCK, char*, int),
+					void (*meh)(SOCKMGR, int, char*, int),
 					int (*oc)(SOCK, void*),
 					void (*poll)(SOCK));
 	};
 	template <class S>
-	class factory_impl : public factory {
+	class arraypool {
+	protected:
+		typedef array<S> sspool;
+		typedef typename sspool::iterator iterator;
+		sspool m_pool;
 	public:
-		typedef	array<S> sspool;
-		sspool		m_pool;
-	public:
-		factory_impl() : factory(), m_pool() {}
-		~factory_impl() { fin(); }
+		arraypool() : m_pool() {}
+		~arraypool() {}
 		sspool &pool() { return m_pool; }
+		void erase(iterator it) {
+			it->fin();
+			m_pool.erase(it);
+		}
+		S *create(SOCK sk) {
+			return m_pool.create();
+		}
+		bool init_pool(const config &cfg) {
+			return m_pool.init(cfg.m_max_connection,
+				sizeof(S), cfg.m_option);
+		}
+		void fin() { m_pool.fin(); }
+	};
+	template <class S>
+	class mappool {
+	protected:
+		typedef map<S, address> sspool;
+		typedef typename sspool::iterator iterator;
+	private:
+		sspool m_pool;
+	public:
+		mappool() : m_pool() {}
+		~mappool() {}
+		sspool &pool() { return m_pool; }
+		void erase(iterator it) {
+			address a = it->addr();
+			it->fin();
+			pool().erase(a);
+		}
+		S *create(SOCK sk) {
+			address a;
+			return a.from(sk) > 0 ? m_pool.create(a) : NULL;
+		}
+		bool init_pool(const config &cfg) {
+			return m_pool.init(cfg.m_max_connection, cfg.m_max_connection,
+				sizeof(S), cfg.m_option);
+		}
+		void fin() { m_pool.fin(); }
+	};
+	template < class S, class P = mappool<S> >
+	class factory_impl : public factory, P {
+	public:
+		typedef	typename P::sspool sspool;
+		typedef typename P::iterator iterator;
+	public:
+		factory_impl() : factory(), P() {}
+		~factory_impl() { fin(); }
+		sspool &pool() { return P::pool(); }
+		int broadcast(char *p, int l);
 		int init(const config &cfg);
+		bool init_pool(const config &cfg) { return P::init_pool(cfg); }
 		void fin();
 		void poll(UTIME ut);
 		static int on_open(SOCK);
@@ -419,55 +612,79 @@ public:
 			return intv > s.cfg().m_ping_timeo ? 0 : 1;
 		}
 	};
-protected:
-	enum {
-		attr_opened	= 0x0001,/* on_open called and on_close not called yet */
-		attr_ping_fail = 0x0002,/* remote peer does not reply ping */
-	};
-	static const size_t SOCK_ADDR_SIZE = 32;
+	typedef config property;
+public:
+	typedef enum {
+		ss_invalid,
+		ss_connecting,
+		ss_connected,
+		ss_closing,
+		ss_closed,
+	} ssstate;
+	typedef enum {
+		pr_continue = 1,
+		pr_server_stop_client_continue = 0,
+		pr_stop = -1,
+	} pollret;
+	static const size_t SOCK_ADDR_SIZE = address::SIZE;
 protected:
 	SOCK 	m_sk;
 	factory *m_f;
 	pingmgr	m_ping;
 	UTIME	m_last_access;
-	U16		m_attr;
-	U8		m_conn_failure, m_padd;
-	char	m_addr[SOCK_ADDR_SIZE];
+	U16		m_padd;
+	U8		m_conn_retry, m_state;
+	address	m_addr;
 public:	/* usually dont need to touch */
 	session() : m_f(NULL), m_ping(), m_last_access(0LL),
-		m_attr(0), m_conn_failure(0) {
-		m_addr[0] = '\0';
+		m_conn_retry(0), m_state(ss_invalid), m_addr() {
 		clear_sock();
 	}
 	~session() {}
 	void set(SOCK sk, factory *f) 	{ m_sk = sk; m_f = f; }
 	pingmgr &ping()					{ return m_ping; }
-public: /* attributes */
-	void update_access() 			{ m_last_access = nbr_clock(); }
-	void setattr(U32 a, bool on)	{ if (on) { m_attr |= a; } else { m_attr &= ~(a); } }
-	bool attr(U32 a) const			{ return (m_attr & a); }
-	void setaddr()					{ nbr_sock_get_addr(m_sk, m_addr, sizeof(m_addr)); }
-	const char *addr() const		{ return m_addr; }
-	void clear_sock()				{ nbr_sock_clear(&m_sk); }
+	const config &cfg() const 		{ return f()->cfg(); }
 	factory *f() 					{ return m_f; }
 	const factory *f() const		{ return m_f; }
-	void set_factory(factory *f)	{ m_f = f; }
-	void incr_conn_failure()		{ if (m_conn_failure < 0xFF) { m_conn_failure++; } }
-	void clear_conn_failure()		{ m_conn_failure = 0; }
-	int conn_failure() const		{ return m_conn_failure; }
+public: /* attributes */
+	void update_access() 			{ m_last_access = nbr_clock(); }
+	UTIME last_access() const		{ return m_last_access; }
+	bool valid() const				{ return m_state != ss_invalid && m_state != ss_closed; }
+	bool closed() const				{ return m_state == ss_closed; }
+	void setstate(ssstate s)		{ m_state = s; }
+	void setaddr(char *a = NULL);
+	const address &addr() const		{ return m_addr; }
+	address &addr() 				{ return m_addr; }
+	int localaddr(address &a)		{
+		int r;
+		if ((r = nbr_sock_get_local_addr(m_sk, a.a(), address::SIZE)) > 0) {
+			a.setlen(r);
+		}
+		return r;
+	}
+	void clear_sock()				{ nbr_sock_clear(&m_sk); }
+	void incr_conn_retry()			{ if (m_conn_retry < 0xFF) { m_conn_retry++; } }
+	void clear_conn_retry()			{ m_conn_retry = 0; }
+	int conn_retry() const			{ return m_conn_retry; }
 public: /* operation */
 	int log(loglevel lv, const char *fmt, ...);
-	const config &cfg() const 		{ return f()->cfg(); }
-	UTIME last_access() const		{ return m_last_access; }
-	bool valid() const				{ return attr(attr_opened); }
-	int close() const				{ return nbr_sock_close(m_sk); }
+#if defined(_DEBUG)
+#define close() close_dbg(__FILE__,__LINE__)
+	int close_dbg(const char *file, int line) {
+		TRACE("%u:session::close call from %s(%u)\n", nbr_osdep_getpid(), file, line);
+#else
+	int close() {
+#endif
+		int r = nbr_sock_close(m_sk);
+		if (r >= 0) { setstate(ss_closing); }
+		return r;
+	}
 	int writable() const			{ return nbr_sock_writable(m_sk); }
 	U32 msgid()						{ return f()->msgid(); }
 	int send(const char *p, int l) const	{ return cfg().m_fns(m_sk, (char *)p, l); }
 	int event(const char *p, int l) const	{ return nbr_sock_event(m_sk, (char *)p, l); }
-	const char *remoteaddr(char *b, int bl) const;
 public: /* callback */
-	int poll(UTIME ut, bool from_worker) { return NBR_OK; }
+	pollret poll(UTIME ut, bool from_worker) { return pr_server_stop_client_continue; }
 	void fin()						{}
 	int on_open(const config &cfg)	{ return NBR_OK; }
 	int on_close(int reason)		{ return NBR_OK; }
@@ -475,6 +692,328 @@ public: /* callback */
 	int on_event(char *p, int l)	{ return NBR_OK; }
 };
 
+
+
+/*-------------------------------------------------------------*/
+/* sfc::finder												   */
+/*-------------------------------------------------------------*/
+class finder : public kernel {
+public:
+	static const char 	MCAST_GROUP[];
+	static const size_t MAX_OPT_LEN = 1024;
+	static const size_t SYM_SIZE = 32;
+	static const int	DEFAULT_REGISTER = 3;
+	static const int 	DEFAULT_HASHSZ = 16;
+public:
+	class factory : public session::factory {
+	public:
+		typedef map<session::factory*, char[SYM_SIZE]> smap;
+		typedef session::factory super;
+	protected:
+		smap	m_sl;
+	public:
+		factory() : super(), m_sl() {}
+		~factory() {}
+		int init(const config &cfg);
+		int init(const config &cfg, int (*pp)(SOCK, char*, int));
+		void poll(UTIME ut) {}
+		void fin() {}
+		int inquiry(const char *sym);
+		session::factory *find_factory(const char *sym) { return m_sl.find(sym); }
+		bool register_factory(session::factory *fc, const char *sym) {
+			return m_sl.insert(fc, sym) != m_sl.end();
+		}
+		template <class F> static int on_recv(SOCK, char*, int);
+	};
+	class property : public config {
+	public:
+		char 	m_mcastaddr[session::SOCK_ADDR_SIZE];
+		U16		m_mcastport, m_padd;
+		UDPCONF m_mcastconf;
+	public:
+		property(BASE_CONFIG_PLIST, const char *mcastgrp, U16 mcastport, int ttl);
+		virtual int	set(const char *k, const char *v);
+		virtual void *proto_p() const;
+	};
+protected:
+	SOCK m_sk;
+	factory *m_f;
+public:
+	finder(SOCK s, factory *f) : m_sk(s), m_f(f) {}
+	~finder(){}
+	int send(char *p, int l) { return m_f->cfg().m_fns(m_sk, p, l); }
+#if defined(_DEBUG)
+#define close() close_dbg(__FILE__,__LINE__)
+	int close_dbg(const char *file, int line) {
+		TRACE("%u:finder::close called from %s(%u)\n", nbr_osdep_getpid(), file, line);
+		return nbr_sock_close(m_sk);
+	}
+#else
+	int close() { return nbr_sock_close(m_sk); }
+#endif
+	int log(loglevel lv, const char *fmt, ...);
+public: /* callback */
+	/* another node inquiry you. please reply if you have capability
+	 * correspond to sym. opt is additional data to process with on_reply */
+	int on_inquiry(const char *sym, char *opt, int omax) {
+		log(INFO, "default: not respond to <%s>\n", sym);
+		return NBR_ENOTFOUND;
+	}
+	/* some node reply to your inquiry. */
+	int on_reply(const char *sym, const char *opt, int olen) { return NBR_OK; }
+};
+
+
+
+/*-------------------------------------------------------------*/
+/* sfc::cluster										   		   */
+/* provide n_servant x m_master mesh and master auto detection */
+/*-------------------------------------------------------------*/
+namespace cluster {
+/* sfc::cluster::node */
+class node : public session {
+public:
+	class nodedata {
+	public:
+		U16	m_n_servant, m_padd;
+	public:
+		nodedata() : m_n_servant(0) {}
+		int pack(char *p, int l);
+		int unpack(const char *p, int l);
+		void setdata(session::factory &f);
+		static int cmp(nodedata *a, nodedata *b) {
+			return (b->m_n_servant - a->m_n_servant);
+		}
+	};
+	struct nodequery {
+		char *p;
+		int l;
+	};
+	typedef nodequery queryctx;
+	class nodefinder : public finder {
+	public:
+		typedef enum  {
+			fev_init_master_query,
+			fev_init_servant_query,
+			fev_poll_query,
+			fev_init_reply,
+			fev_poll_reply,
+		} finderevent;
+	public:
+		nodefinder(SOCK sk, finder::factory *f) : finder(sk, f) {}
+		int on_inquiry(const char *sym, char *opt, int omax);
+		int on_reply(const char *sym, const char *opt, int olen);
+		static bool check_sym(const char *sym_a, const char *sym_b);
+	};
+	class protocol {
+	public:
+		typedef enum {
+			ncmd_invalid,
+			ncmd_app,
+			ncmd_update_node_state,
+			ncmd_get_master_list,
+			ncmd_broadcast,
+			ncmd_unicast,
+		} nodecmd;
+		typedef enum {
+			nev_finder_invalid,
+			nev_finder_query_master_init,
+			nev_finder_query_servant_init,
+			nev_finder_query_poll,
+			nev_finder_reply_init,
+			nev_finder_reply_poll,
+		} nodeevent;
+		static inline nodeevent convert(nodefinder::finderevent e);
+	};
+	class finder_mixin : public protocol {
+	public:
+		typedef enum {
+			ns_invalid,
+			ns_inquiry,		/* call inquiry but not replied yet */
+			ns_found,		/* at least one node reply for inquiry */
+			ns_establish,	/* connection done. */
+		} nodestate;
+	protected:
+		U8 m_state, m_padd[3];
+		UTIME m_last_inquiry;
+		static finder::factory *m_finder;
+		class node *m_primary;
+		ringbuffer	m_pkt_bkup;
+	public:
+		finder_mixin() : m_state(ns_invalid),
+			m_last_inquiry(0LL), m_primary(NULL), m_pkt_bkup() {}
+		~finder_mixin() {}
+		int init_finder(const config &cfg);
+	public:
+		void setstate(nodestate s) { m_state = s; }
+		nodestate state() const { return (nodestate)m_state; }
+		bool ready() const { return state() == ns_establish; }
+		node *primary() { return m_primary; }
+		const node *primary() const { return m_primary; }
+		int writable() const { return primary() ? primary()->writable() : 0; }
+		static finder::factory *finder() { return m_finder; }
+	public:
+		int send(session &s, U32 msgid, char *p, int l);
+		int unicast(const address &a, U32 msgid, char *p, int l);
+		int broadcast(U32 msgid, char *p, int l);
+		void switch_primary(node *new_node);
+	};
+	template <class S, class D = typename S::nodedata>
+	class factory_impl : public session::factory_impl<S>, finder_mixin {
+	public:
+		typedef session::factory_impl<S> super;
+	protected:
+		class NODE : public S {
+		public:
+			class data : public D {
+			public:
+				data() : D() {}
+				int pack(char *p, int l) const { return D::pack(p, l); }
+				int unpack(const char *p, int l) const { return D::unpack(p, l); }
+			} m_data;
+		public:
+			NODE() : m_data() {}
+			data &get() { return m_data; }
+			D *get() { return (D *)&m_data; }
+			void setdata_from(session::factory &f) { D::setdata(f); }
+			static int compare(void *a, void *b) {
+				return D::cmp(((NODE *)a)->get(), ((NODE *)b)->get());
+			}
+			static void sort(NODE **list, int n_list) {
+				::qsort(list, sizeof(NODE *), n_list, compare);
+			}
+		};
+		typedef typename super::sspool sspool;
+		typedef typename sspool::iterator iterator;
+	public:
+		factory_impl() : super(), finder_mixin() {}
+		~factory_impl() { fin(); }
+		sspool &pool() { return super::pool(); }
+		inline bool master() const;
+	public: /* operation */
+		int update_nodestate(const address &a, const D &p);
+	public:/* finder related */
+		int on_finder_reply_init(char *p, int l);
+		int on_finder_reply_poll(char *p, int l);
+	public:/* callbacks */
+		int init(const config &cfg);
+		void fin();
+		void poll(UTIME ut);
+		static int on_open(SOCK);
+		static int on_close(SOCK, int);
+		static int on_recv(SOCK, char*, int);
+		static int on_event(SOCK, char*, int);
+		static void on_mgr(SOCKMGR, int, char*, int);
+		static int on_connect(SOCK, void *);
+		static void on_poll(SOCK);
+	};
+	class property : public config {
+	public:
+		const U8 m_master;
+		U8 m_multiplex, m_padd[2];
+		static finder::property m_mcast;
+		char m_sym_servant_init[finder::SYM_SIZE];
+		char m_sym_master_init[finder::SYM_SIZE];
+		char m_sym_poll[finder::SYM_SIZE];
+		int m_packet_backup_size;
+	public:
+		property(BASE_CONFIG_PLIST, const char *sym, int master,
+				int multiplex, int packet_backup_size);
+		virtual int	set(const char *k, const char *v);
+	};
+public:
+	node() : session() {}
+	~node() {}
+};
+
+/* sfc::cluster::servantsession */
+class servantsession : public session {
+public:
+	template <class S>
+	class factory_impl : public session::factory_impl<S>, node::protocol {
+	protected:
+		session::factory *m_mnode;
+	public:
+		typedef session::factory_impl<S> super;
+	public:
+		factory_impl(session::factory *f) : super(), m_mnode(f) {}
+		~factory_impl() {}
+		session::factory *master_node() { return m_mnode; }
+		int init(const config &cfg);
+		static int on_recv(SOCK, char*, int);
+	};
+public:
+	servantsession() : session() {}
+	~servantsession() {}
+};
+
+/* sfc::cluster::mastersession */
+class mastersession : public session {
+public:
+	template <class S>
+	class factory_impl : public session::factory_impl<S>, node::protocol {
+	protected:
+		session::factory *m_mnode, *m_svnt;
+	public:
+		typedef session::factory_impl<S> super;
+	public:
+		factory_impl(session::factory *mnode, session::factory *svnt) :
+			super(), m_mnode(mnode), m_svnt(svnt) {}
+		~factory_impl() {}
+		session::factory *master_node() { return m_mnode; }
+		session::factory *servant_session() { return m_svnt; }
+		int init(const config &cfg);
+		static int on_recv(SOCK, char*, int);
+	};
+public:
+	mastersession() : session() {}
+	~mastersession() {}
+};
+
+/* sfc::cluster::masternode */
+class masternode : public node {
+public:
+	template <class M, class S, class N>
+	class factory_impl : public node::factory_impl<N> {
+	public:
+		typedef node::factory_impl<N> super;
+		typedef typename super::sspool sspool;
+		mastersession::factory_impl<M> m_fcmstr;	/* master factory */
+		servantsession::factory_impl<S> m_fcsvnt;	/* servant factory */
+	public:
+		factory_impl() : super(), m_fcmstr(this, &m_fcsvnt), m_fcsvnt(this) {}
+		~factory_impl() {}
+		sspool pool() { return super::pool(); }
+		int init(const config &cfg);
+		void fin();
+		void poll(UTIME ut);
+		static void on_mgr(SOCKMGR, int, char*, int);
+	public:/* finder related */
+		int on_finder_query_init(bool is_master, char *p, int l);
+		int on_finder_query_poll(char *p, int l);
+	};
+	template <class M, class S>
+	class property : public node::property {
+	public:
+		typedef typename M::property MC;
+		typedef typename S::property SC;
+	protected:
+		U16	m_master_port, m_servant_port;
+		MC m_master_conf;	/* master config */
+		SC m_servant_conf;	/* servant config */
+	public:
+		property(BASE_CONFIG_PLIST, const char *sym,
+			int multiplex, int master_port, int servant_port,
+			const MC &master_conf, const SC &servant_conf);
+		virtual int	set(const char *k, const char *v);
+	};
+public:
+	masternode() : node() {}
+	~masternode() {}
+};
+
+}
+using namespace cluster;
 #include "session.h"
 
 
@@ -509,8 +1048,10 @@ public:
 	}
 public:
 	static int log(loglevel lv, const char *fmt, ...);
-	static int bg() { return nbr_osdep_daemonize(); }
-	static int fork(char *cmd, char *argv[], char *envp[]) {
+	static inline int pid() { return nbr_osdep_getpid(); }
+	static inline int bg() { return nbr_osdep_daemonize(); }
+	static inline UTIME clock() { return nbr_clock(); }
+	static inline int fork(char *cmd, char *argv[], char *envp[]) {
 		return nbr_osdep_fork(cmd, argv, envp);
 	}
 	static void sigfunc(int signo);

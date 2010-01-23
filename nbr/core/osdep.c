@@ -270,7 +270,8 @@ nbr_osdep_tcp_str2addr(const char *str, void *addr, int *len)
 	sa->sin_family = AF_INET;
 	sa->sin_addr.s_addr = GET_32(hp->h_addr);
 	sa->sin_port = htons(port);
-	//TRACE("str2addr: %08x,%u,%u\n", sa->sin_addr.s_addr, sa->sin_port, *len);
+//	TRACE("str2addr: %08x,%u,%u\n", sa->sin_addr.s_addr, sa->sin_port, *len);
+	ASSERT(sa->sin_addr.s_addr == 0 || sa->sin_addr.s_addr == 0x0100007f);
 	return *len;
 }
 
@@ -284,6 +285,7 @@ nbr_osdep_tcp_addr2str(void *addr, int len, char *str_addr, int str_len)
 		return LASTERR;
 	}
 //	TRACE("addr2str: %08x(%s):%hu\n", sa->sin_addr.s_addr, inet_ntoa(sa->sin_addr), sa->sin_port);
+	ASSERT(sa->sin_addr.s_addr != 0);
 	return nbr_str_printf(str_addr, str_len, "%s:%hu", inet_ntoa(sa->sin_addr),
 		ntohs(sa->sin_port));
 }
@@ -369,10 +371,12 @@ nbr_osdep_tcp_accept(DSCRPTR fd, void *addr, int *len, SKCONF *cfg)
 			*len, sizeof(*sa));
 		return INVALID_FD;
 	}
-	if ((cfd = accept(fd, addr, (U32 *)len)) == -1) {
+	socklen_t slen = *len;
+	if ((cfd = accept(fd, addr, &slen)) == -1) {
 		OSDEP_ERROUT(ERROR,ACCEPT,"TCP: accept fail errno=%d", errno);
 		return INVALID_FD;
 	}
+	*len = slen;
 	if (fd_setoption(fd, cfg) < 0) {
 		close(cfd);
 		return INVALID_FD;
@@ -497,7 +501,7 @@ nbr_osdep_udp_socket(const char *addr, SKCONF *cfg)
 		}
 		if (setsockopt(fd,
 			IPPROTO_IP, IP_MULTICAST_TTL, (char *)&(ucf->ttl), sizeof(ucf->ttl)) == -1) {
-			printf("set multicast ttl : %d %d\n", errno, ucf->ttl);
+			OSDEP_ERROUT(ERROR,SOCKOPT,"set multicast ttl : %d %d\n", errno, ucf->ttl);
 			goto error;
 		 }
 	}
@@ -521,6 +525,22 @@ nbr_osdep_udp_sendto(DSCRPTR fd, const void *data, size_t len, int flag, const v
 {
 //	TRACE("send(%d,%d)\n", fd, len);
 	return sendto(fd, data, len, 0, addr, alen);
+}
+
+
+/* common socket related */
+int		nbr_osdep_sockname(DSCRPTR fd, char *addr, int *len)
+{
+	socklen_t slen = *len;
+	if (slen < sizeof(struct sockaddr)) {
+		return NBR_ESHORT;
+	}
+	if (getsockname(fd, (struct sockaddr *)addr, &slen) != 0) {
+		OSDEP_ERROUT(ERROR,SYSCALL,"getsockname : %d %d\n", errno, fd);
+		return NBR_ESYSCALL;
+	}
+	*len = (int)slen;
+	return NBR_OK;
 }
 
 

@@ -97,6 +97,7 @@ typedef unsigned int		U32;
 typedef int					S32;
 typedef unsigned long long	U64;
 typedef long long			S64;
+typedef volatile U32		ATOMICINT;
 /* object handle */
 typedef void				*ARRAY;
 typedef void				*SEARCH;
@@ -153,6 +154,7 @@ typedef struct	nbr_init_t
 	int max_thread;
 	int max_worker;
 	int sockbuf_size;
+	int sockbuf_size_main;
 	NIOCONF 	ioc;
 	NODECONF	ndc;
 }							CONFIG;
@@ -240,6 +242,7 @@ NBR_API const char	*nbr_str_divide_tag_and_val(char sep, const char *line, char 
 NBR_API int 		nbr_parse_http_req_str(const char *req, const char *tag, char *buf, int buflen);
 NBR_API int 		nbr_parse_http_req_int(const char *req, const char *tag, int *buf);
 NBR_API int 		nbr_parse_http_req_bigint(const char *req, const char *tag, long long *buf);
+NBR_API const char	*nbr_str_rchr(const char *in, char sep, int max);
 
 
 /* array.c */
@@ -299,6 +302,8 @@ NBR_API SOCK	nbr_sockmgr_connect(SOCKMGR s, const char *address,
 NBR_API int		nbr_sockmgr_mcast(SOCKMGR s, const char *address, char *data, int len);
 NBR_API void	nbr_sockmgr_set_data(SOCKMGR s, void *p);
 NBR_API void	*nbr_sockmgr_get_data(SOCKMGR s);
+NBR_API int		nbr_sockmgr_get_addr(SOCKMGR s, char *buf, int len);
+NBR_API int		nbr_sockmgr_event(SOCKMGR s, int type, char *p, int len);
 NBR_API SOCKMGR	nbr_sock_get_mgr(SOCK s);
 NBR_API int 	nbr_sock_close(SOCK s);
 NBR_API int		nbr_sock_event(SOCK s, char *p, int len);
@@ -306,7 +311,8 @@ NBR_API void	nbr_sock_clear(SOCK *p);
 NBR_API int		nbr_sock_valid(SOCK s);
 NBR_API int		nbr_sock_is_same(SOCK s1, SOCK s2);
 NBR_API int		nbr_sock_writable(SOCK s);
-NBR_API const char *nbr_sock_get_addr(SOCK s, char *buf, int len);
+NBR_API int		nbr_sock_get_addr(SOCK s, char *buf, int len);
+NBR_API int		nbr_sock_get_local_addr(SOCK s,char *buf, int len);
 NBR_API const void *nbr_sock_get_ref(SOCK s, int *len);
 NBR_API void	*nbr_sock_get_data(SOCK s, int *len);
 NBR_API void 	nbr_sockmgr_set_callback(SOCKMGR s,
@@ -318,6 +324,8 @@ NBR_API void 	nbr_sockmgr_set_callback(SOCKMGR s,
 					void (*poll)(SOCK));
 NBR_API void	nbr_sockmgr_set_connect_cb(SOCKMGR s,
 					int (*oc)(SOCK, void*));
+NBR_API void	nbr_sockmgr_set_mgrevent_cb(SOCKMGR s,
+					void (*meh)(SOCKMGR, int, char *, int));
 NBR_API int		nbr_sock_send_bin16(SOCK s, char *p, int len);
 NBR_API int		nbr_sock_send_bin32(SOCK s, char *p, int len);
 NBR_API int		nbr_sock_send_text(SOCK s, char *p, int len);

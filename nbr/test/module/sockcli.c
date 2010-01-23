@@ -51,7 +51,8 @@ static int acceptwatcher(SOCK sk)
 {
 	char addr[256]; int i;
 	workbuf_t *wkb;
-	TRACE("cl: connect to %s\n", nbr_sock_get_addr(sk, addr, sizeof(addr)));
+	nbr_sock_get_addr(sk, addr, sizeof(addr));
+	TRACE("cl: connect to %s\n", addr);
 	for (i = 0; i < N_CLIENT; i++) {
 		if (nbr_sock_is_same(sk, ska[i])) {
 			TRACE("this sock(%p,%u) is for index %u\n", sk.p, sk.s, i);

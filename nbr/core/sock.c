@@ -115,6 +115,7 @@ typedef struct	sockmgrdata
 	void		(*on_poll)			(SOCK);					/* polling proc */
 	int 		(*on_connect)		(SOCK, void*);			/* when connection starts
 															(only from nbr_sockmgr_connect)*/
+	void		(*on_mgr)			(SOCKMGR,int,char*,int);/* send event to sockmgr */
 }	skmdata_t;
 
 typedef struct 	sockdata
@@ -140,7 +141,10 @@ typedef struct 	sockdata
 typedef struct 	sockevent
 {
 	U32			len;
-	SOCK		sk;
+	union {
+		SOCK		sk;
+		skmdata_t 	*skm;
+	};
 	U16			type, padd;
 	char		data[0];
 }	sockevent_t;
@@ -162,9 +166,9 @@ typedef struct 	sockjob
 static struct {
 		ARRAY		skm_a;
 		sockdata_t	*free;
-		MUTEX		lock;
+		MUTEX		lock, evlk/* lock for event to sockmgr */;
 		THPOOL		worker;
-		sockjob_t	*jobs;
+		sockjob_t	*jobs, main;
 		int			jobidx, jobmax, total_fds, reserve_fds;
 		sockbuf_t	eb;
 		DSCRPTR		epfd;
@@ -172,9 +176,9 @@ static struct {
 }		g_sock = {
 					NULL,
 					NULL,
+					NULL, NULL,
 					NULL,
-					NULL,
-					NULL,
+					NULL, { NULL, NULL, NULL, {}, NULL, NULL },
 					0, 0, 0, 0,
 					{ NULL, 0, 0 },
 					INVALID_FD,
@@ -342,6 +346,12 @@ sockmgr_event_watcher_noop(SOCK s, char *p, int len)	/* protocol callback */
 	return 0;
 }
 
+static void
+sockmgr_mgr_event_noop(SOCKMGR s, int t, char *p, int len)	/* protocol callback */
+{
+	return;
+}
+
 /* sockbuf_t */
 NBR_INLINE int
 sockbuf_alloc(sockbuf_t *skb, int size)
@@ -357,6 +367,22 @@ sockbuf_free(sockbuf_t *skb)
 	nbr_mem_free(skb->buf);
 	skb->buf = NULL;
 	skb->mlen = skb->blen = 0;
+}
+
+/* sockjob_t */
+NBR_INLINE int
+sockjob_init(sockjob_t *j, int skbsz)
+{
+	int i;
+	j->exec = j->free = NULL;
+	for (i = 0; i < 2; i++) {
+		if (!sockbuf_alloc(&(j->eb[i]), skbsz)) {
+			return NBR_EMALLOC;
+		}
+	}
+	j->reb = &(j->eb[0]);
+	j->web = &(j->eb[1]);
+	return NBR_OK;
 }
 
 NBR_INLINE void
@@ -404,6 +430,23 @@ sockbuf_setevent(sockbuf_t *skb, sockdata_t *skd, int serial,
 	e->len = dlen;
 	if (ccb) { ccb(e->data, data, len); }
 	else { nbr_mem_copy(e->data, data, len); }
+	skb->blen += dlen;
+	return NBR_OK;
+}
+
+NBR_INLINE int
+sockbuf_set_mgrevent(sockbuf_t *skb, SOCKMGR skm, int type, char *data, int len)
+{
+	sockevent_t *e = (sockevent_t *)(skb->buf + skb->blen);
+	int dlen = sizeof(*e) + len;
+	if ((skb->mlen - skb->blen) < dlen) {
+		SOCK_ERROUT(ERROR,SHORT,"setevent:%d,%d,%d",dlen,skb->blen,skb->mlen);
+		return NBR_ESHORT;
+	}
+	e->skm = skm;
+	e->len = dlen;
+	e->type = type;
+	nbr_mem_copy(e->data, data, len);
 	skb->blen += dlen;
 	return NBR_OK;
 }
@@ -536,7 +579,9 @@ sock_addjob(sockdata_t *skd)
 NBR_INLINE void
 sock_set_close_dbg(sockdata_t *skd, int reason, const char *file, int line)
 {
-//	TRACE("%u: sock_set_close(%p) from %s(%u)\n", getpid(), skd, file, line);
+//	char buf[256];
+//	nbr_sock_get_local_addr(sockmgr_make_sock(skd), buf, sizeof(buf));
+//	TRACE("%u: sock_set_close(%u:%s) from %s(%u)\n", getpid(), skd->fd, buf, file, line);
 #else
 NBR_INLINE void
 sock_set_close(sockdata_t *skd, int reason)
@@ -551,7 +596,9 @@ sock_set_close(sockdata_t *skd, int reason)
 NBR_INLINE int
 sock_mark_close_dbg(sockdata_t *skd, int serial, int reason, const char *file, int line)
 {
-//	TRACE("%u: sock_mark_close(%p) from %s(%u)\n", getpid(), skd, file, line);
+//	char buf[256];
+//	nbr_sock_get_local_addr(sockmgr_make_sock(skd), buf, sizeof(buf));
+//	TRACE("%u: sock_mark_close(%u:%s) from %s(%u)\n", getpid(), skd->fd, buf, file, line);
 #else
 NBR_INLINE int
 sock_mark_close(sockdata_t *skd, int serial, int reason)
@@ -903,9 +950,9 @@ NBR_API NIOCONF nbr_sock_nioconf()
 
 /* SOCKMGR */
 int
-nbr_sock_init(int max, int max_nfd, int n_worker, int skbsz)
+nbr_sock_init(int max, int max_nfd, int n_worker, int skbsz, int skbmain)
 {
-	int i, ii;
+	int i;
 	sockjob_t *j;
 	nbr_sock_fin();
 
@@ -928,18 +975,18 @@ nbr_sock_init(int max, int max_nfd, int n_worker, int skbsz)
 		g_sock.jobidx = 0;
 		for (i = 0; i < n_worker; i++) {
 			j = g_sock.jobs + i;
-			j->exec = NULL;
-			for (ii = 0; ii < 2; ii++) {
-				if (!sockbuf_alloc(&(j->eb[ii]), skbsz)) {
-					goto error;
-				}
+			if (sockjob_init(j, skbsz) < 0) {
+				SOCK_ERROUT(ERROR,MALLOC,"sockjob_init: %d,%u", LASTERR, skbsz);
+				goto error;
 			}
-			j->reb = &(j->eb[0]);
-			j->web = &(j->eb[1]);
 			if (!(j->thrd = nbr_thread_create(g_sock.worker, j, sock_process_job))) {
 				SOCK_ERROUT(ERROR,PTHREAD,"thread_create: %d", LASTERR);
 				goto error;
 			}
+		}
+		if (sockjob_init(&(g_sock.main), skbmain) < 0) {
+			SOCK_ERROUT(ERROR,MALLOC,"sockjob_init(main): %d,%u", LASTERR, skbmain);
+			goto error;
 		}
 	}
 	else {
@@ -959,6 +1006,10 @@ nbr_sock_init(int max, int max_nfd, int n_worker, int skbsz)
 	}
 	if (!(g_sock.lock = nbr_mutex_create())) {
 		SOCK_ERROUT(ERROR,PTHREAD,"mutex create: errno=%d",errno);
+		goto error;
+	}
+	if (!(g_sock.evlk = nbr_mutex_create())) {
+		SOCK_ERROUT(ERROR,PTHREAD,"mutex create (event): errno=%d",errno);
 		goto error;
 	}
 	return NBR_OK;
@@ -1011,9 +1062,16 @@ nbr_sock_fin()
 		nbr_mem_free(g_sock.jobs);
 		g_sock.jobs = NULL;
 	}
+	for (i = 0; i < 2; i++) {
+		sockbuf_free(&(g_sock.main.eb[i]));
+	}
 	if (g_sock.lock) {
 		nbr_mutex_destroy(g_sock.lock);
 		g_sock.lock = NULL;
+	}
+	if (g_sock.evlk) {
+		nbr_mutex_destroy(g_sock.evlk);
+		g_sock.evlk = NULL;
 	}
 	g_sock.total_fds = 0;
 	return NBR_OK;
@@ -1087,6 +1145,7 @@ nbr_sockmgr_create(
 	skm->on_event = sockmgr_event_watcher_noop;		/* event watcher */
 	skm->on_poll = NULL;
 	skm->on_connect = NULL;
+	skm->on_mgr = sockmgr_mgr_event_noop;
 	/* set default config */
 	skmconf_set_default(&(skm->cf));
 	/* listener socket? */
@@ -1188,7 +1247,10 @@ nbr_sockmgr_connect(SOCKMGR s, const char *address, void *proto_p, void *p)
 	}
 	/* if callback specified, call it. */
 	if (skm->on_connect) {
-		if (skm->on_connect(sockmgr_make_sock(skd), p) < 0) { goto bad; }
+		if (skm->on_connect(sockmgr_make_sock(skd), p) < 0) {
+			SOCK_LOG(INFO,"connect blocked by app\n");
+			goto bad;
+		}
 	}
 	sock_set_stat(skd, SS_CONNECTING);
 	if ((r = sock_addjob(skd)) < 0) {
@@ -1240,13 +1302,38 @@ nbr_sockmgr_get_data(SOCKMGR s)
 	return skm->data;
 }
 
+NBR_API int
+nbr_sockmgr_get_addr(SOCKMGR s, char *buf, int len)
+{
+	skmdata_t *skm = s;
+	char addr[ADRL];
+	int alen = ADRL, r;
+	if ((r = nbr_osdep_sockname(skm->fd, addr, &alen)) < 0) {
+		return r;
+	}
+	return skm->proto->addr2str(addr, alen, buf, len);
+}
+
+NBR_API int
+nbr_sockmgr_event(SOCKMGR s, int type, char *p, int len)
+{
+	int r = NBR_EPTHREAD;
+	if (!MT_MODE()) {
+		return NBR_ENOTSUPPORT;
+	}
+	THREAD_LOCK(g_sock.evlk, error);
+	r = sockbuf_set_mgrevent(g_sock.main.web, s, type, p, len);
+	THREAD_UNLOCK(g_sock.evlk);
+error:
+	return r;
+}
+
 NBR_API SOCKMGR
 nbr_sock_get_mgr(SOCK s)
 {
 	sockdata_t *skd = s.p;
 	return skd->skm;
 }
-
 
 NBR_API int
 nbr_sockmgr_workmem_size(SOCKMGR s)
@@ -1345,16 +1432,26 @@ nbr_sock_writable(SOCK s)
 	return 0;
 }
 
-NBR_API const char*
+NBR_API int
 nbr_sock_get_addr(SOCK s, char *buf, int len)
 {
 	ASSERT(s.p);
 	sockdata_t *skd = s.p;
-	if (!skd) { return ""; }
-	if (skd->skm->proto->addr2str(skd->addr, skd->alen, buf, len) < 0) {
-		return "";
+	if (!skd) { return NBR_EINVAL; }
+	return skd->skm->proto->addr2str(skd->addr, skd->alen, buf, len);
+}
+
+NBR_API int
+nbr_sock_get_local_addr(SOCK s,char *buf, int len)
+{
+	sockdata_t *skd = s.p;
+	char addr[ADRL];
+	int alen = ADRL, r;
+	if ((r = nbr_osdep_sockname(skd->fd, addr, &alen)) < 0) {
+		ASSERT(FALSE);
+		return r;
 	}
-	return buf;
+	return skd->skm->proto->addr2str(addr, alen, buf, len);
 }
 
 NBR_API const void*
@@ -1411,6 +1508,15 @@ nbr_sockmgr_set_connect_cb(SOCKMGR s,
 	skmdata_t *skm = s;
 	skm->on_connect = oc;
 }
+
+NBR_API void
+nbr_sockmgr_set_mgrevent_cb(SOCKMGR s,
+					void (*meh)(SOCKMGR, int, char *, int))
+{
+	skmdata_t *skm = s;
+	skm->on_mgr = meh ? meh : sockmgr_mgr_event_noop;
+}
+
 
 /* protocol parser/unparser */
 NBR_API int
@@ -1716,6 +1822,7 @@ sock_accept(skmdata_t *skm)
 	}
 	if (skm->on_connect) {
 		if (skm->on_connect(sockmgr_make_sock(skd), NULL) < 0) {
+			SOCK_LOG(INFO,"accept blocked by app\n");
 			skm->proto->close(fd);
 			sockmgr_free_skd(skm, skd);
 			return;
@@ -1776,12 +1883,73 @@ finalize:
 	return ptr;
 }
 
-void
-nbr_sock_poll()
+NBR_INLINE void
+nbr_sock_process_main()
 {
 	skmdata_t *skm;
 	sockdata_t *skd, *tmp;
 	sockevent_t *e, *le;
+	sockjob_t *j;
+	sockbuf_t *skb;
+
+	if (MT_MODE()) {
+		if (!g_sock.free) { return; }
+		if (NBR_OK != nbr_mutex_lock(g_sock.lock)) { return; }
+		skd = g_sock.free;
+		g_sock.free = NULL;
+		if (NBR_OK != nbr_mutex_unlock(g_sock.lock)) { ASSERT(FALSE); }
+		while((tmp = skd)) {
+			skd = skd->next;
+			sockmgr_cleanup_skd(tmp);
+		}
+		if (g_sock.main.web->blen <= 0) {}
+		else if (NBR_OK == nbr_mutex_lock(g_sock.evlk)) {
+			j = &(g_sock.main);
+			/* flip double buffer */
+			skb = j->reb;
+			j->reb = j->web;
+			j->web = skb;
+			if (NBR_OK != nbr_mutex_unlock(g_sock.evlk)) { return; }
+			/* process event */
+			e = (sockevent_t *)j->reb->buf;
+			le = (sockevent_t *)(j->reb->buf + j->reb->blen);
+			while (e < le) {
+				ASSERT(e->len > 0);
+				e->skm->on_mgr(e->skm, e->type, e->data, e->len);
+				e = (sockevent_t *)(((char *)e) + e->len);
+			}
+			j->reb->blen = 0;
+		}
+	}
+	else {
+		e = (sockevent_t *)g_sock.eb.buf;
+		le = (sockevent_t *)(g_sock.eb.buf + g_sock.eb.blen);
+		while (e < le) {
+			ASSERT(e->len > sizeof(*e));
+			if (e->sk.p) {
+				skd = e->sk.p;
+				if (skd->serial == e->sk.s) {
+					skd->skm->on_event(e->sk, (char *)e->data, e->len - sizeof(*e));
+				}
+			}
+			e = (sockevent_t *)(((char *)e) + e->len);
+		}
+		g_sock.eb.blen = 0;
+		ARRAY_SCAN(g_sock.skm_a, skm) {
+			skd = nbr_array_get_first(skm->skd_a);
+			while ((tmp = skd)) {
+				skd = nbr_array_get_next(skm->skd_a, skd);
+				if (!nbr_sock_io(tmp)) {
+					sockmgr_cleanup_skd(tmp);
+				}
+			}
+		}
+	}
+}
+
+void
+nbr_sock_poll()
+{
 	int n_events, i, tot = g_sock.total_fds;
 	EVENT events[tot], *ev;
 
@@ -1813,39 +1981,5 @@ nbr_sock_poll()
 			break;
 		}
 	}
-	if (MT_MODE()) {
-		if (!g_sock.free) { return; }
-		if (NBR_OK != nbr_mutex_lock(g_sock.lock)) { return; }
-		skd = g_sock.free;
-		g_sock.free = NULL;
-		if (NBR_OK != nbr_mutex_unlock(g_sock.lock)) { ASSERT(FALSE); }
-		while((tmp = skd)) {
-			skd = skd->next;
-			sockmgr_cleanup_skd(tmp);
-		}
-	}
-	else {
-		e = (sockevent_t *)g_sock.eb.buf;
-		le = (sockevent_t *)(g_sock.eb.buf + g_sock.eb.blen);
-		while (e < le) {
-			ASSERT(e->len > sizeof(*e));
-			if (e->sk.p) {
-				skd = e->sk.p;
-				if (skd->serial == e->sk.s) {
-					skd->skm->on_event(e->sk, (char *)e->data, e->len - sizeof(*e));
-				}
-			}
-			e = (sockevent_t *)(((char *)e) + e->len);
-		}
-		g_sock.eb.blen = 0;
-		ARRAY_SCAN(g_sock.skm_a, skm) {
-			skd = nbr_array_get_first(skm->skd_a);
-			while ((tmp = skd)) {
-				skd = nbr_array_get_next(skm->skd_a, skd);
-				if (!nbr_sock_io(tmp)) {
-					sockmgr_cleanup_skd(tmp);
-				}
-			}
-		}
-	}
+	nbr_sock_process_main();
 }
