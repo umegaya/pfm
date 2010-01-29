@@ -335,6 +335,14 @@ search_get_opt_from(int primopt)
 	return flag;
 }
 
+#if defined(_DEBUG)
+BOOL nbr_search_sanity_check(SEARCH sd)
+{
+	search_t *s = sd;
+	nbr_array_sanity_check(s->ad);
+}
+#endif
+
 
 
 
@@ -583,6 +591,7 @@ nbr_search_str_get(SEARCH sd, const char *key)
 NBR_API int
 nbr_search_mem_regist(SEARCH sd, const char *key, int kl, void *data)
 {
+	ASSERT(((search_t *)sd)->elemsize >= kl);
 	SEARCH_REGISTER(nbr_mem_copy(tmp->key.mem.k, key, kl),
 			nbr_mem_cmp(tmp->key.mem.k, key, kl) == 0,
 			search_get_mem_hush(m, key, kl));

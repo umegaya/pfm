@@ -212,6 +212,7 @@ NBR_API int		nbr_osdep_get_macaddr(char *ifname, U8 *addr);
 NBR_API int		nbr_osdep_daemonize();
 NBR_API int		nbr_osdep_getpid();
 NBR_API int		nbr_osdep_fork(char *cmd, char *argv[], char *envp[]);
+NBR_API int		nbr_osdep_sleep(U64 nanosec);
 NBR_API UTIME	nbr_clock();
 
 
@@ -239,6 +240,7 @@ NBR_API char		*nbr_str_chop(char *buffer);
 NBR_API int			nbr_str_parse_url(const char *in, int max, char *host, U16 *port, char *url);
 NBR_API size_t		nbr_str_utf8_copy(char *dst, int dlen, const char *src, int smax, int len);
 NBR_API const char	*nbr_str_divide_tag_and_val(char sep, const char *line, char *tag, int tlen);
+NBR_API const char	*nbr_str_divide(const char *sep, const char *line, char *tag, int tlen);
 NBR_API int 		nbr_parse_http_req_str(const char *req, const char *tag, char *buf, int buflen);
 NBR_API int 		nbr_parse_http_req_int(const char *req, const char *tag, int *buf);
 NBR_API int 		nbr_parse_http_req_bigint(const char *req, const char *tag, long long *buf);
@@ -321,7 +323,7 @@ NBR_API void 	nbr_sockmgr_set_callback(SOCKMGR s,
 					int (*cw)(SOCK, int),
 					int (*pp)(SOCK, char*, int),
 					int (*eh)(SOCK, char*, int),
-					void (*poll)(SOCK));
+					UTIME (*poll)(SOCK));
 NBR_API void	nbr_sockmgr_set_connect_cb(SOCKMGR s,
 					int (*oc)(SOCK, void*));
 NBR_API void	nbr_sockmgr_set_mgrevent_cb(SOCKMGR s,

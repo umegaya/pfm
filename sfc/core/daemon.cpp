@@ -248,5 +248,5 @@ daemon::create_config(config *cl[], int size)
 session::factory*
 daemon::create_factory(const char *sname)
 {
-	return new session::factory_impl<session>;
+	return NULL;
 }

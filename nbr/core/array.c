@@ -376,6 +376,7 @@ array_destroy(array_t *a)
 	}
 	e = a->free;
 	while ((pe = e)) {
+		ASSERT(element_get_flag(e, ELEM_FROM_HEAP) || array_check_align(a, e));
 		e = e->next;
 		if (element_get_flag(pe, ELEM_FROM_HEAP)) {
 			nbr_mem_free(pe);
@@ -384,7 +385,27 @@ array_destroy(array_t *a)
 	nbr_mem_free(a);
 }
 
-
+#if defined(_DEBUG)
+BOOL nbr_array_sanity_check(ARRAY ad)
+{
+	array_t *a = ad;
+	element_t *e = a->used, *pe;
+	while ((pe = e)) {
+		if (!element_get_flag(e, ELEM_FROM_HEAP) && !array_check_align(a, e)) {
+			return FALSE;
+		}
+		e = e->next;
+	}
+	e = a->free;
+	while ((pe = e)) {
+		if (!element_get_flag(e, ELEM_FROM_HEAP) && !array_check_align(a, e)) {
+			return FALSE;
+		}
+		e = e->next;
+	}
+	return TRUE;
+}
+#endif
 
 
 /*-------------------------------------------------------------*/

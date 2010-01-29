@@ -578,6 +578,15 @@ int		nbr_osdep_rlimit_set(int ltype, int val)
 }
 
 
+/* sleep related */
+NBR_API int
+nbr_osdep_sleep(U64 nanosec)
+{
+	struct timespec ts;
+	ts.tv_sec = nanosec / (1000 * 1000 * 1000);
+	ts.tv_nsec = nanosec % (1000 * 1000 * 1000);
+	return (0 == nanosleep(&ts, NULL) ? NBR_OK : NBR_ESYSCALL);
+}
 
 
 /* clock related */

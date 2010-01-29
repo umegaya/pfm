@@ -25,5 +25,14 @@ void nbr_search_fin();
 #if defined(_TEST)
 extern BOOL nbr_search_test();
 #endif
+#if defined(_DEBUG)
+#ifdef __cplusplus    /* When the user is Using C++,use C-linkage by this */
+extern "C" {
+#endif
+extern BOOL nbr_search_sanity_check(SEARCH s);
+#ifdef __cplusplus    /* When the user is Using C++,use C-linkage by this */
+}
+#endif
+#endif
 
 #endif /* __SRCH_H__  */

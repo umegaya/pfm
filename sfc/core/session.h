@@ -40,7 +40,7 @@ template <class S, class P>
 void session::factory_impl<S,P>::fin()
 {
 	m_skm = NULL;
-	P::fin();
+	m_container.fin();
 }
 
 template <class S, class P>
@@ -66,12 +66,13 @@ void session::factory_impl<S,P>::poll(UTIME ut)
 		if (!tmp->valid()) {
 			if (cfg().client()) {
 				/* no-recconection or poll failure */
-				if (tmp->cfg().m_ld_wait <= 0 || tmp->poll(ut, false) < 0) {
+				if (tmp->poll(ut, false) < 0 || tmp->cfg().m_ld_wait <= 0) {
 					goto finalize_session;
 				}
 				else if ((ut - tmp->last_access()) > tmp->cfg().m_ld_wait) {
 					S &rs = *tmp;
 					if (connect(&rs, NULL, tmp->cfg().proto_p()) < 0) {
+						log(ERROR, "reconnection fails! (%d)\n", rs.conn_retry());
 						rs.incr_conn_retry();
 						continue;
 					}
@@ -86,7 +87,7 @@ void session::factory_impl<S,P>::poll(UTIME ut)
 				continue;
 			}
 finalize_session:
-			P::erase(tmp);
+			m_container.erase(tmp);
 		}
 	}
 }
@@ -151,7 +152,8 @@ int session::factory_impl<S,P>::on_recv(SOCK sk, char *p, int l)
 		return NBR_ENOTFOUND;
 	}
 	S *obj = *s;
-	if (obj->ping().recv((**s), p, l) < 0) {
+	if (S::recvping((**s), p, l) < 0) {
+		obj->log(ERROR, "illegal ping recved\n");
 		return NBR_EINVAL;	/* invalid ping result received */
 	}
 	obj->update_access();
@@ -169,19 +171,22 @@ int session::factory_impl<S,P>::on_event(SOCK sk, char *p, int l)
 }
 
 template <class S, class P>
-void session::factory_impl<S,P>::on_poll(SOCK sk)
+UTIME session::factory_impl<S,P>::on_poll(SOCK sk)
 {
 	S **s = (S**)nbr_sock_get_data(sk, NULL);
 	if (s == NULL) {
-		return;
+		return 0LL;
 	}
 	S *obj = *s;
 	UTIME ut = nbr_clock();
-	if (obj->cfg().m_ping_timeo > 0 && !obj->ping().validate(*obj, ut)) {
+	session::factory_impl<S,P> *fc = (session::factory_impl<S,P> *)obj->f();
+	if (fc->cfg().m_ping_timeo > 0 && !fc->checkping(*obj, ut)) {
+		obj->log(ERROR, "pingtimeout: %u\n",fc->cfg().m_ping_timeo);
 		obj->close();
-		return;
+		return ut + obj->cfg().m_taskspan;
 	}
 	obj->poll(ut, true);
+	return ut + obj->cfg().m_taskspan;
 }
 
 
@@ -220,7 +225,7 @@ int finder::factory::on_recv(SOCK sk, char *p, int l)
 /* sfc::node											   */
 /*-------------------------------------------------------------*/
 inline node::protocol::nodeevent
-node::protocol::convert(nodefinder::finderevent e)
+node::finder_mixin::convert(nodefinder::finderevent e)
 {
 	switch(e) {
 	case nodefinder::fev_init_master_query:
@@ -436,7 +441,7 @@ int node::factory_impl<S,D>::on_recv(SOCK sk, char *p, int l)
 	node::factory_impl<S,D> *nf =
 			(node::factory_impl<S,D> *)nbr_sockmgr_get_data(s);
 	S *obj = *s;
-	if (obj->ping().recv((**s), p, l) < 0) {
+	if (S::recvping((**s), p, l) < 0) {
 		return NBR_EINVAL;	/* invalid ping result received */
 	}
 	switch(*p) {
@@ -492,12 +497,6 @@ int node::factory_impl<S,D>::on_connect(SOCK sk, void *p)
 	return session::factory_impl<S>::on_connect(sk, p);
 }
 
-template <class S, class D>
-void node::factory_impl<S,D>::on_poll(SOCK sk)
-{
-	return session::factory_impl<S>::on_poll(sk);
-}
-
 
 
 /*-------------------------------------------------------------*/
@@ -543,7 +542,7 @@ int servantsession::factory_impl<S>::on_recv(SOCK sk, char *p, int l)
 		break;
 	case ncmd_get_master_list:
 		nf->master_node()->event(
-			node::protocol::convert(node::nodefinder::fev_init_servant_query),
+			super::convert(node::nodefinder::fev_init_servant_query),
 			sk, sizeof(sk));
 		break;
 	case ncmd_broadcast:

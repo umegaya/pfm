@@ -26,7 +26,7 @@ namespace sfc {
 /*-------------------------------------------------------------*/
 /* sfc::httpsession											   */
 /*-------------------------------------------------------------*/
-class httpsession : public session
+class httpsession : public session, public session::binprotocol
 {
 public:
 	enum method {
@@ -120,14 +120,14 @@ public:
 	typedef fsm request, response;
 public:
 	template <class S>
-	class factory : public session::factory_impl< S, arraypool<S> > {
+	class factory_impl : public session::factory_impl< S, arraypool<S> > {
 	protected:
 		ARRAY m_fsm_a;
 	public:
 		typedef session::factory_impl<S, arraypool<S> > super;
 	public:
-		factory() : super(), m_fsm_a() {}
-		~factory() {}
+		factory_impl() : super(), m_fsm_a() {}
+		~factory_impl() {}
 		int init(const config &cfg);
 		void fin();
 		void attach_fsm(httpsession &s) {
@@ -173,7 +173,7 @@ protected:
 /* sfc::httpsession::factory											   */
 /*-------------------------------------------------------------*/
 template <class S> int
-httpsession::factory<S>::init(const config &cfg)
+httpsession::factory_impl<S>::init(const config &cfg)
 {
 	if (!super::init_pool(cfg)) {
 		return NBR_ESHORT;
@@ -184,17 +184,17 @@ httpsession::factory<S>::init(const config &cfg)
 		return NBR_ESHORT;
 	}
 	return session::factory::init(cfg,
-			httpsession::factory<S>::on_open,
-			httpsession::factory<S>::on_close,
-			httpsession::factory<S>::on_recv,
-			httpsession::factory<S>::on_event,
+			httpsession::factory_impl<S>::on_open,
+			super::on_close,
+			httpsession::factory_impl<S>::on_recv,
+			super::on_event,
 			NULL, /* use default */
-			httpsession::factory<S>::on_connect,
-			httpsession::factory<S>::on_poll);
+			httpsession::factory_impl<S>::on_connect,
+			super::on_poll);
 }
 
 template <class S> void
-httpsession::factory<S>::fin()
+httpsession::factory_impl<S>::fin()
 {
 	if (m_fsm_a) {
 		nbr_array_destroy(m_fsm_a);
@@ -203,7 +203,7 @@ httpsession::factory<S>::fin()
 }
 
 template <class S> int
-httpsession::factory<S>::on_recv(SOCK sk, char *p, int l)
+httpsession::factory_impl<S>::on_recv(SOCK sk, char *p, int l)
 {
 	S **s = (S**)nbr_sock_get_data(sk, NULL);
 	if (s == NULL) {
@@ -224,11 +224,11 @@ httpsession::factory<S>::on_recv(SOCK sk, char *p, int l)
 }
 
 template <class S> int
-httpsession::factory<S>::on_connect(SOCK sk, void *p)
+httpsession::factory_impl<S>::on_connect(SOCK sk, void *p)
 {
 	S **s = (S**)nbr_sock_get_data(sk, NULL);
-	httpsession::factory<S> *f =
-		(httpsession::factory<S> *)nbr_sockmgr_get_data(nbr_sock_get_mgr(sk));
+	httpsession::factory_impl<S> *f =
+		(httpsession::factory_impl<S> *)nbr_sockmgr_get_data(nbr_sock_get_mgr(sk));
 	if (s == NULL || f == NULL) {
 		ASSERT(false);
 		return NBR_ENOTFOUND;
@@ -247,7 +247,7 @@ httpsession::factory<S>::on_connect(SOCK sk, void *p)
 
 
 template <class S> int
-httpsession::factory<S>::on_open(SOCK sk)
+httpsession::factory_impl<S>::on_open(SOCK sk)
 {
 	S **s = (S**)nbr_sock_get_data(sk, NULL), *obj;
 	if (s == NULL) {

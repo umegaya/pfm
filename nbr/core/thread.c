@@ -284,7 +284,9 @@ thpool_job_exec(void *p)
 	thpool_t *tp = th->belong;
 	pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
 	for (;;) {
-		COND_WAIT(tp->event, 10, ret);
+		pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
+		COND_WAIT(tp->event, -1, ret);
+		pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
 		ptr = NULL;
 		if (ret == 0 || ret == EINTR || ret == ETIMEDOUT) {
 			if (tp->queue.top) {
@@ -300,9 +302,6 @@ thpool_job_exec(void *p)
 				nbr_thpool_addjob(tp, ptr, fn);
 			}
 		}
-		pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
-		pthread_testcancel();
-		pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
 	}
 	return p;
 }

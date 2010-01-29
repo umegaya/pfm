@@ -17,6 +17,7 @@
  * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
  ****************************************************************/
 #include "httpd.h"
+#include "shell.h"
 #include "typedef.h"
 #include "macro.h"
 #include "str.h"
@@ -25,8 +26,8 @@ using namespace sfc;
 #define DAEMON_ENTRY(name)										\
 	if (nbr_str_cmp(dname, 256, #name, sizeof(#name)) == 0 ||	\
 		nbr_str_cmp(dname, 256, "any", sizeof("any")) == 0) {	\
-		p = new test##name;										\
-		if (((test##name *)p)->init(argc, argv) < 0) {			\
+		p = new name;											\
+		if (((name *)p)->init(argc, argv) < 0) {				\
 			delete p;											\
 			return NULL;										\
 		}														\
@@ -37,8 +38,8 @@ daemon *
 init_daemon(char *dname, int argc, char *argv[])
 {
 	daemon *p;
-	DAEMON_ENTRY(httpd);
-//	DAEMON_ENTRY(echod);
+	DAEMON_ENTRY(shelld);
+	DAEMON_ENTRY(testhttpd);
 	return NULL;
 }
 
@@ -47,25 +48,35 @@ main(int argc, char *argv[])
 {
 	daemon *d;
 	if (argc <= 1) {
-		argv[1] = "httpd";
+		//argv[1] = "testhttpd";
+		argv[1] = "shelld";
 		argc = 2;
 	}
 	if (argc < 3) {
 		char *srv_argv[] = { argv[0], argv[1], "./test/srv.conf", NULL };
-		char *cli_argv[] = { argv[1], "./test/cli.conf", NULL };
+		char *cli_argv[] = { "./test/cli.conf", NULL };
 		int r;
 		if ((r = daemon::fork(argv[0], srv_argv, NULL)) < 0) {
 			return -2;
 		}
+		nbr_osdep_sleep(500 * 1000 * 1000/* 500ms */);
 		daemon::log(kernel::INFO, "fork success: pid = %d\n", r);
-		if (!(d = init_daemon(argv[1], 2, cli_argv))) {
+		if (!(d = init_daemon(argv[1], 1, cli_argv))) {
+			daemon::log(kernel::ERROR, "init_daemon fail (%s)\n", argv[1]);
 			return -1;
 		}
-		return d->run();
+		daemon::log(kernel::INFO, "start client\n");
+		d->run();
+		delete d;
+		return 0;
 	}
 	/* above daemon::fork comming to here */
 	if (!(d = init_daemon(argv[1], argc - 2, argv + 2))) {
+		daemon::log(kernel::ERROR, "init_daemon fail (%s)\n", argv[1]);
 		return -1;
 	}
-	return d->run();
+	daemon::log(kernel::INFO, "start server\n");
+	d->run();
+	delete d;
+	return 0;
 }

@@ -112,7 +112,7 @@ typedef struct	sockmgrdata
 	char		*(*record_parser)	(char *, int *, int*);	/* protocol parcer */
 	int			(*on_recv)			(SOCK, char *, int);	/* protocol callback */
 	int			(*on_event)			(SOCK, char *, int);	/* event watcher */
-	void		(*on_poll)			(SOCK);					/* polling proc */
+	UTIME		(*on_poll)			(SOCK);					/* polling proc */
 	int 		(*on_connect)		(SOCK, void*);			/* when connection starts
 															(only from nbr_sockmgr_connect)*/
 	void		(*on_mgr)			(SOCKMGR,int,char*,int);/* send event to sockmgr */
@@ -126,6 +126,7 @@ typedef struct 	sockdata
 	int			nwb, nrb;	/* used size of wb, rb, eb */
 	int			serial;		/* serial number */
 	UTIME		access;		/* last received time */
+	UTIME 		nextpoll;	/* next polling time */
 	DSCRPTR		fd;			/* abstruct socket data */
 	char		addr[ADRL];	/* socket address info */
 	U8			alen;		/* actual length of addr */
@@ -270,7 +271,7 @@ sockmgr_alloc_skd(skmdata_t *skm, char *addr, int addrlen)
 	skd->next = NULL;
 	skd->thrd = NULL;
 	skd->closereason = CLOSED_BY_INVALID;
-	skd->access = nbr_clock();
+	skd->nextpoll = skd->access = nbr_clock();
 	skd->events = 0;
 	skd->reg.type = EPD_SOCK;
 	if (!(skd->rb = sockmgr_alloc_rb(skm))) { goto bad; }
@@ -409,7 +410,7 @@ ccb_text(char *out, char *data, int len)
 	ASSERT(len > 1);
 	/* len contains additional bytes for null-terminate */
 	nbr_mem_copy(out, data, len - 1);
-	SET_8(out + len - 1, 0);
+	SET_8(out + len - 1, '\n');
 }
 
 NBR_INLINE int
@@ -459,9 +460,19 @@ sock_get_size(int wks)
 }
 
 NBR_INLINE int
-sock_timeout(skmdata_t *skm, sockdata_t *skd)
+sock_polling(skmdata_t *skm, sockdata_t *skd)
 {
-	return ((nbr_clock() - skd->access) > skm->timeout);
+	if (skd->stat == SS_CLOSING) {
+		return TRUE;
+	}
+	UTIME ut = nbr_clock();
+	if ((ut - skd->access) > skm->timeout) {
+		return FALSE;
+	}
+	if (skm->on_poll && ut > skd->nextpoll) {
+		skd->nextpoll = skm->on_poll(sockmgr_make_sock(skd));
+	}
+	return TRUE;
 }
 
 NBR_INLINE SOCKSTATE
@@ -1489,7 +1500,7 @@ nbr_sockmgr_set_callback(SOCKMGR s,
 					int (*cw)(SOCK, int),
 					int (*pp)(SOCK, char*, int),
 					int (*eh)(SOCK, char*, int),
-					void (*poll)(SOCK))
+					UTIME (*poll)(SOCK))
 {
 	ASSERT(s);
 	skmdata_t *skm = s;
@@ -1618,13 +1629,13 @@ nbr_sock_rparser_text(char *p, int *len, int *rlen)
 {
 	char *w = p;
 	int tmp = *len;
-	while (*w) {
+	while (*w != '\n') {
 		if ((w - p) > tmp) {
 			return NULL;
 		}
 		w++;
 	}
-	*rlen = (w - p);
+	*rlen = (w - p) + 1; /* +1 for \n */
 	return p;
 }
 
@@ -1718,12 +1729,7 @@ sock_rw(void *ptr, int rf, int wf, int dg)
 			break;
 		}
 	}
-	if (skm->on_poll) {
-		if (sock_get_stat(skd) != SS_CLOSING) {
-			skm->on_poll(sockmgr_make_sock(skd));
-		}
-	}
-	if (sock_timeout(skm, skd)) {
+	if (!sock_polling(skm, skd)) {
 		sock_set_close(skd, CLOSED_BY_TIMEOUT);
 		return skd;
 	}

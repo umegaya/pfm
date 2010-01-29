@@ -224,6 +224,9 @@ public:
 	inline iterator	next(iterator p) const;
 	inline element	*alloc();
 	inline bool		initialized() { return m_a != NULL; }
+#if defined(_DEBUG)
+	ARRAY get_a() { return m_a; }
+#endif
 private:
 	array(const array &a);
 };
@@ -261,7 +264,7 @@ public:
 	struct 	kcont<C,address> {
 		typedef const address &type;
 		static SEARCH init(int max, int opt, int hashsz) {
-			return nbr_search_init_mem_engine(max, opt, hashsz, sizeof(address::SIZE));
+			return nbr_search_init_mem_engine(max, opt, hashsz, address::SIZE);
 		}
 		static int regist(SEARCH s, type t, element *v) {
 			return nbr_search_mem_regist(s, t, t.len(), v);
@@ -353,6 +356,9 @@ public:
 	inline retval	*create(key k);
 	inline void		erase(key k);
 	inline bool		initialized() { return super::initialized() && m_s != NULL; }
+#if defined(_DEBUG)
+	SEARCH get_s() { return m_s; }
+#endif
 protected:
 	inline element	*findelem(key k) const;
 	inline element	*alloc(key k);
@@ -454,10 +460,10 @@ public:
 	bool client() const { return (m_flag & cfg_flag_server) == 0; }
 	static int commentline(const char *line) { return (line[0] == '#' ? 1 : 0); }
 	static int emptyline(const char *line) { return (line[0] == '\0' ? 1 : 0); }
-protected:
+public:
 	static int cmp(const char *a, const char *b);
-	parser rparser_from(const char *str);
-	sender sender_from(const char *str);
+	static parser rparser_from(const char *str);
+	static sender sender_from(const char *str);
 };
 
 #include "util.h"
@@ -523,17 +529,18 @@ public:
 					int (*eh)(SOCK, char*, int),
 					void (*meh)(SOCKMGR, int, char*, int),
 					int (*oc)(SOCK, void*),
-					void (*poll)(SOCK));
+					UTIME (*poll)(SOCK));
 	};
 	template <class S>
 	class arraypool {
-	protected:
+	public:
 		typedef array<S> sspool;
 		typedef typename sspool::iterator iterator;
+	private:
 		sspool m_pool;
 	public:
 		arraypool() : m_pool() {}
-		~arraypool() {}
+		~arraypool() { fin(); }
 		sspool &pool() { return m_pool; }
 		void erase(iterator it) {
 			it->fin();
@@ -542,7 +549,7 @@ public:
 		S *create(SOCK sk) {
 			return m_pool.create();
 		}
-		bool init_pool(const config &cfg) {
+		bool init(const config &cfg) {
 			return m_pool.init(cfg.m_max_connection,
 				sizeof(S), cfg.m_option);
 		}
@@ -550,14 +557,14 @@ public:
 	};
 	template <class S>
 	class mappool {
-	protected:
+	public:
 		typedef map<S, address> sspool;
 		typedef typename sspool::iterator iterator;
 	private:
 		sspool m_pool;
 	public:
 		mappool() : m_pool() {}
-		~mappool() {}
+		~mappool() { fin(); }
 		sspool &pool() { return m_pool; }
 		void erase(iterator it) {
 			address a = it->addr();
@@ -568,24 +575,35 @@ public:
 			address a;
 			return a.from(sk) > 0 ? m_pool.create(a) : NULL;
 		}
-		bool init_pool(const config &cfg) {
+		bool init(const config &cfg) {
 			return m_pool.init(cfg.m_max_connection, cfg.m_max_connection,
 				sizeof(S), cfg.m_option);
 		}
 		void fin() { m_pool.fin(); }
 	};
 	template < class S, class P = mappool<S> >
-	class factory_impl : public factory, P {
+	class factory_impl : public factory {
+	protected:
+		P m_container;
 	public:
 		typedef	typename P::sspool sspool;
 		typedef typename P::iterator iterator;
 	public:
-		factory_impl() : factory(), P() {}
+		factory_impl() : factory(), m_container() {}
 		~factory_impl() { fin(); }
-		sspool &pool() { return P::pool(); }
+		sspool &pool() { return m_container.pool(); }
+		S* create(SOCK sk) { return m_container.create(sk); }
+		int init_pool(const config &cfg) { return m_container.init(cfg); }
 		int broadcast(char *p, int l);
+		bool checkping(class session &s, UTIME ut) {
+			int intv = (int)(ut - s.last_ping());
+			if (intv > cfg().m_ping_intv) {
+				if (S::sendping(s, ut) < 0) { return false; }
+			}
+			return intv > cfg().m_ping_timeo;
+		}
+	public:
 		int init(const config &cfg);
-		bool init_pool(const config &cfg) { return P::init_pool(cfg); }
 		void fin();
 		void poll(UTIME ut);
 		static int on_open(SOCK);
@@ -593,24 +611,27 @@ public:
 		static int on_recv(SOCK, char*, int);
 		static int on_event(SOCK, char*, int);
 		static int on_connect(SOCK, void *);
-		static void on_poll(SOCK);
+		static UTIME on_poll(SOCK);
 	};
-	class pingmgr {
-	protected:
-		U32				m_last_msgid;
-		UTIME			m_last_sent;
+	class textprotocol {
 	public:
-		pingmgr() : m_last_msgid(0), m_last_sent(0) {}
-		~pingmgr() {}
-		int send(class session &s);
-		int recv(class session &s, char *p, int l);
-		int validate(class session &s, UTIME ut) {
-			int intv = (int)(ut - m_last_sent);
-			if (intv > s.cfg().m_ping_intv) {
-				if (send(s) < 0) { return 0; }
-			}
-			return intv > s.cfg().m_ping_timeo ? 0 : 1;
-		}
+		static const char cmd_ping[];
+	public:
+		static int sendping(class session &s, UTIME ut);
+		static int recvping(class session &s, char *p, int l);
+	protected:
+		static bool cmp(const char *a, const char *b);
+		static int hexdump(char *out, int olen, const char *in, int ilen);
+	};
+	class binprotocol {
+	public:
+		enum {
+			cmd_ping = 0,
+			cmd_last,
+		};
+	public:
+		static int sendping(class session &s, UTIME ut);
+		static int recvping(class session &s, char *p, int l);
 	};
 	typedef config property;
 public:
@@ -630,29 +651,32 @@ public:
 protected:
 	SOCK 	m_sk;
 	factory *m_f;
-	pingmgr	m_ping;
-	UTIME	m_last_access;
-	U16		m_padd;
-	U8		m_conn_retry, m_state;
+	UTIME	m_last_access, m_last_ping;
+	U32		m_latency;
+	U8		m_conn_retry, m_state, m_padd[2];
 	address	m_addr;
 public:	/* usually dont need to touch */
-	session() : m_f(NULL), m_ping(), m_last_access(0LL),
+	session() : m_f(NULL), m_last_access(0LL), m_last_ping(0LL), m_latency(0),
 		m_conn_retry(0), m_state(ss_invalid), m_addr() {
 		clear_sock();
 	}
 	~session() {}
 	void set(SOCK sk, factory *f) 	{ m_sk = sk; m_f = f; }
-	pingmgr &ping()					{ return m_ping; }
 	const config &cfg() const 		{ return f()->cfg(); }
 	factory *f() 					{ return m_f; }
 	const factory *f() const		{ return m_f; }
 public: /* attributes */
 	void update_access() 			{ m_last_access = nbr_clock(); }
+	void update_ping(UTIME ut)		{ m_last_ping = ut; }
+	void update_latency(U32 ut)		{ m_latency = ut; }
 	UTIME last_access() const		{ return m_last_access; }
+	UTIME last_ping() const			{ return m_last_ping; }
+	U32  latency() const			{ return m_latency; }
 	bool valid() const				{ return m_state != ss_invalid && m_state != ss_closed; }
 	bool closed() const				{ return m_state == ss_closed; }
 	void setstate(ssstate s)		{ m_state = s; }
 	void setaddr(char *a = NULL);
+	int senddata(U32 msgid, char *p, int l) { UNUSED(msgid); return send(p, l); }
 	const address &addr() const		{ return m_addr; }
 	address &addr() 				{ return m_addr; }
 	int localaddr(address &a)		{
@@ -668,13 +692,7 @@ public: /* attributes */
 	int conn_retry() const			{ return m_conn_retry; }
 public: /* operation */
 	int log(loglevel lv, const char *fmt, ...);
-#if defined(_DEBUG)
-#define close() close_dbg(__FILE__,__LINE__)
-	int close_dbg(const char *file, int line) {
-		TRACE("%u:session::close call from %s(%u)\n", nbr_osdep_getpid(), file, line);
-#else
 	int close() {
-#endif
 		int r = nbr_sock_close(m_sk);
 		if (r >= 0) { setstate(ss_closing); }
 		return r;
@@ -686,8 +704,14 @@ public: /* operation */
 public: /* callback */
 	pollret poll(UTIME ut, bool from_worker) { return pr_server_stop_client_continue; }
 	void fin()						{}
-	int on_open(const config &cfg)	{ return NBR_OK; }
-	int on_close(int reason)		{ return NBR_OK; }
+	int on_open(const config &cfg)	{
+		log(INFO, "%s %s\n", cfg.client() ? "connect to" : "accept from",(const char *)addr());
+		return NBR_OK;
+	}
+	int on_close(int reason)		{
+		log(INFO, "%s %s\n", cfg().client() ? "disconnected from" : "close",(const char *)addr());
+		return NBR_OK;
+	}
 	int on_recv(char *p, int l)		{ return NBR_OK; }
 	int on_event(char *p, int l)	{ return NBR_OK; }
 };
@@ -742,15 +766,7 @@ public:
 	finder(SOCK s, factory *f) : m_sk(s), m_f(f) {}
 	~finder(){}
 	int send(char *p, int l) { return m_f->cfg().m_fns(m_sk, p, l); }
-#if defined(_DEBUG)
-#define close() close_dbg(__FILE__,__LINE__)
-	int close_dbg(const char *file, int line) {
-		TRACE("%u:finder::close called from %s(%u)\n", nbr_osdep_getpid(), file, line);
-		return nbr_sock_close(m_sk);
-	}
-#else
 	int close() { return nbr_sock_close(m_sk); }
-#endif
 	int log(loglevel lv, const char *fmt, ...);
 public: /* callback */
 	/* another node inquiry you. please reply if you have capability
@@ -771,7 +787,27 @@ public: /* callback */
 /*-------------------------------------------------------------*/
 namespace cluster {
 /* sfc::cluster::node */
-class node : public session {
+class protocol : public session::binprotocol {
+public:
+	typedef enum {
+		ncmd_invalid,
+		ncmd_app,
+		ncmd_update_node_state,
+		ncmd_get_master_list,
+		ncmd_broadcast,
+		ncmd_unicast,
+	} nodecmd;
+	typedef enum {
+		nev_finder_invalid,
+		nev_finder_query_master_init,
+		nev_finder_query_servant_init,
+		nev_finder_query_poll,
+		nev_finder_reply_init,
+		nev_finder_reply_poll,
+	} nodeevent;
+};
+
+class node : public session, public protocol {
 public:
 	class nodedata {
 	public:
@@ -805,26 +841,6 @@ public:
 		int on_reply(const char *sym, const char *opt, int olen);
 		static bool check_sym(const char *sym_a, const char *sym_b);
 	};
-	class protocol {
-	public:
-		typedef enum {
-			ncmd_invalid,
-			ncmd_app,
-			ncmd_update_node_state,
-			ncmd_get_master_list,
-			ncmd_broadcast,
-			ncmd_unicast,
-		} nodecmd;
-		typedef enum {
-			nev_finder_invalid,
-			nev_finder_query_master_init,
-			nev_finder_query_servant_init,
-			nev_finder_query_poll,
-			nev_finder_reply_init,
-			nev_finder_reply_poll,
-		} nodeevent;
-		static inline nodeevent convert(nodefinder::finderevent e);
-	};
 	class finder_mixin : public protocol {
 	public:
 		typedef enum {
@@ -852,6 +868,7 @@ public:
 		const node *primary() const { return m_primary; }
 		int writable() const { return primary() ? primary()->writable() : 0; }
 		static finder::factory *finder() { return m_finder; }
+		static inline nodeevent convert(nodefinder::finderevent e);
 	public:
 		int send(session &s, U32 msgid, char *p, int l);
 		int unicast(const address &a, U32 msgid, char *p, int l);
@@ -905,7 +922,6 @@ public:
 		static int on_event(SOCK, char*, int);
 		static void on_mgr(SOCKMGR, int, char*, int);
 		static int on_connect(SOCK, void *);
-		static void on_poll(SOCK);
 	};
 	class property : public config {
 	public:
@@ -1040,7 +1056,7 @@ public:
 	int alive();
 	static void stop();
 public:
-	template <class S> S *find_session(const char *name) {
+	template <class S> S *find_factory(const char *name) {
 		return (S *)m_sl.find(name);
 	}
 	template <class C> C *find_config(const char *name) {

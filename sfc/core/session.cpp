@@ -83,7 +83,7 @@ int session::factory::init(const config &cfg,
 							int (*eh)(SOCK, char*, int),
 							void (*meh)(SOCKMGR, int, char*, int),
 							int (*oc)(SOCK, void*),
-							void (*poll)(SOCK))
+							UTIME (*poll)(SOCK))
 {
 	m_cfg = &cfg;
 	if (cfg.m_max_query > 0 && cfg.m_query_bufsz > 0) {
@@ -115,39 +115,87 @@ int session::factory::init(const config &cfg,
 
 
 /*-------------------------------------------------------------*/
-/* sfc::session::pingmgr							   		   */
+/* sfc::session::binprotocol						   		   */
 /*-------------------------------------------------------------*/
-int session::pingmgr::send(class session &s)
+int session::binprotocol::sendping(class session &s, UTIME ut)
 {
 	/* disabled ping? */
 	if (s.cfg().m_ping_timeo <= 0) { return NBR_OK; }
-	if (m_last_msgid != 0) {
-		return NBR_OK;	/* last ping not replied yet */
-	}
 	char work[64];
 	PUSH_START(work, sizeof(work));
-	PUSH_8((U8)0);
-	m_last_msgid = s.msgid();
-	PUSH_32(m_last_msgid);
+	PUSH_8(cmd_ping);
+	PUSH_64(ut);
 	return s.send(work, PUSH_LEN());
 }
 
-int session::pingmgr::recv(class session &s, char *p, int l)
+int session::binprotocol::recvping(class session &s, char *p, int l)
 {
+	/* disabled ping? */
+	if (s.cfg().m_ping_timeo <= 0) { return NBR_OK; }
 	if (*p != 0) {
 		return NBR_OK;	/* not ping packet */
 	}
-	/* disabled ping? */
-	if (s.cfg().m_ping_timeo <= 0) { return NBR_OK; }
 	U8 cmd;
-	U32 msgid;
+	U64 ut;
 	POP_START(p, l);
 	POP_8(cmd);
-	POP_32(msgid);
-	if (msgid != m_last_msgid) {
-		return NBR_EINVAL;
-	}
+	POP_64(ut);
+	s.update_latency((U32)(nbr_clock() - ut));
 	return NBR_OK;
+}
+
+
+
+/*-------------------------------------------------------------*/
+/* sfc::session::textprotocol						   		   */
+/*-------------------------------------------------------------*/
+const char session::textprotocol::cmd_ping[] = "0";
+int session::textprotocol::sendping(class session &s, UTIME ut)
+{
+	/* disabled ping? */
+	if (s.cfg().m_ping_timeo <= 0) { return NBR_OK; }
+	char work[64];
+	PUSH_TEXT_START(work, cmd_ping);
+	PUSH_TEXT_BIGNUM(ut);
+	return s.send(work, PUSH_TEXT_LEN());
+}
+
+int session::textprotocol::recvping(class session &s, char *p, int l)
+{
+	if (s.cfg().m_ping_timeo <= 0) { return NBR_OK; }
+	if (*p != '0') {
+		return NBR_OK; /* no ping */
+	}
+	/* disabled ping? */
+	char cmd[sizeof(cmd_ping) + 1];
+	U64 ut;
+	POP_TEXT_START(p, l);
+	POP_TEXT_STR(cmd, sizeof(cmd));
+	POP_TEXT_BIGNUM(ut, U64);
+	s.update_latency((U32)(nbr_clock() - ut));
+	return NBR_OK;
+}
+
+bool session::textprotocol::cmp(const char *a, const char *b)
+{
+	return nbr_str_cmp(a, 256, b, 256) == 0;
+}
+
+int session::textprotocol::hexdump(char *out, int olen, const char *in, int ilen)
+{
+	if ((ilen * 2) > olen) { return NBR_ESHORT; }
+	const char *w = in;
+	char *v = out;
+	const char table[] = "0123456789abcdef";
+	while (*w) {
+		*v++ = table[((U8)*w) >> 4];
+		*v++ = table[((U8)*w) & 0x0F];
+		w++;
+		if ((w - in) > ilen) {
+			break;
+		}
+	}
+	return (v - out);
 }
 
 
@@ -266,16 +314,16 @@ int node::nodefinder::on_inquiry(const char *sym, char *opt, int olen)
 	int r;
 	/* initialize phase */
 	if (check_sym(p.m_sym_master_init, sym)) {
-		r = msh->event(node::protocol::convert(fev_init_master_query),
+		r = msh->event(node::finder_mixin::convert(fev_init_master_query),
 				(char *)&m_sk, sizeof(m_sk));
 	}
 	if (check_sym(p.m_sym_servant_init, sym)) {
-		r = msh->event(node::protocol::convert(fev_init_servant_query),
+		r = msh->event(node::finder_mixin::convert(fev_init_servant_query),
 				(char *)&m_sk, sizeof(m_sk));
 	}
 	/* polling phase */
 	if (check_sym(p.m_sym_poll, sym)) {
-		r = msh->event(node::protocol::convert(fev_poll_query),
+		r = msh->event(node::finder_mixin::convert(fev_poll_query),
 				(char *)&m_sk, sizeof(m_sk));
 	}
 	if (r < 0) {
@@ -293,10 +341,10 @@ int node::nodefinder::on_reply(const char *sym, const char *opt, int olen)
 	node::property &p = (node::property &)msh->cfg();
 	int r;
 	if (check_sym(p.m_sym_master_init, sym) || check_sym(p.m_sym_servant_init, sym)) {
-		r = msh->event(node::protocol::convert(fev_init_reply), opt, olen);
+		r = msh->event(node::finder_mixin::convert(fev_init_reply), opt, olen);
 	}
 	if (check_sym(p.m_sym_poll, sym)) {
-		r = msh->event(node::protocol::convert(fev_poll_reply), opt, olen);
+		r = msh->event(node::finder_mixin::convert(fev_poll_reply), opt, olen);
 	}
 	if (r < 0) {
 		log(ERROR, "cannot send event for <%s>\n", sym);

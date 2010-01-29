@@ -94,6 +94,9 @@ enum {
 int 	nbr_osdep_rlimit_get(int ltype);
 int		nbr_osdep_rlimit_set(int ltype, int val);
 
+/* sleep related */
+//int		nbr_osdep_sleep(U64 nanosec);
+
 /* epoll related */
 #if !defined(EPOLLRDHUP)
 #define EPOLLRDHUP 0x2000

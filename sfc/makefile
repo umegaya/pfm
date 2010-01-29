@@ -51,7 +51,7 @@ TESTDEPS = $(TESTSRCS:%.cpp=$(DEPS)/$(TESTDIR)/%.d)
 TESTREQLIBS = z bz2 rt m ssl crypto
 TESTLIBS = $(foreach lib,$(TESTREQLIBS),$(shell echo "-l$(lib)"))
 UNITTEST = ut
-RUNTEST = all
+RUNTEST = any
 TESTRESULT = resp.*
 
 #-----------------------------------------------------------------------
@@ -100,8 +100,8 @@ $(PLUGIN_DIR)/lib$(LIBNAME)_%.a: $(PLUGIN_DIR)/%.cpp
 all: $(LIBRARY) $(PLUGIN) $(UNITTEST)
 
 test: all
-	./$(TESTDIR)/$(UNITTEST)
-
+	./$(TESTDIR)/$(UNITTEST) $(RUNTEST)
+	
 $(LIBRARY): $(LIBOBJS)
 	$(AR) $(LIBRARY) $(LIBOBJS)
 

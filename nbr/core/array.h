@@ -25,5 +25,14 @@ void nbr_array_fin();
 #if defined(_TEST)
 extern BOOL nbr_array_test();
 #endif
+#if defined(_DEBUG)
+#ifdef __cplusplus    /* When the user is Using C++,use C-linkage by this */
+extern "C" {
+#endif
+extern BOOL nbr_array_sanity_check(ARRAY a);
+#ifdef __cplusplus    /* When the user is Using C++,use C-linkage by this */
+}
+#endif
+#endif
 
 #endif	/* __ARRAY_H__ */

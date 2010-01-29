@@ -27,6 +27,7 @@ class get_request_session : public httpsession {
 	const char *m_url;
 	U32 m_rid;
 public:
+	typedef httpsession::factory_impl<get_request_session> factory;
 	static int m_done;
 	static UTIME m_start, m_end;
 public:
@@ -48,6 +49,7 @@ protected:
 	};
 	static map<fmem, char[256]>	m_res;
 public:
+	typedef httpsession::factory_impl<get_response_session> factory;
 	get_response_session() : httpsession() {}
 	~get_response_session() {}
 public:

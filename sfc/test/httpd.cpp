@@ -42,6 +42,7 @@ get_request_session::process(response &resp)
 	char mime[256];
 	if (!resp.hdrstr("Content-Type", mime, sizeof(mime))) {
 		log(INFO, "content-type unknown\n");
+		ASSERT(FALSE);
 		return NBR_OK;
 	}
 //	log(INFO, "content-type: %s\n", mime);
@@ -140,7 +141,7 @@ get_response_session::process(request &r)
 	}
 	int len = send_result_and_body(HRC_OK, (const char *)fm->p, fm->l, "image/jpg");
 //	log(INFO, "send %u byte\n", len);
-	return NBR_OK;
+	return len;
 }
 
 get_response_session::fmem *
@@ -215,10 +216,13 @@ session::factory *
 testhttpd::create_factory(const char *sname)
 {
 	TRACE("create_factory: sname=<%s>\n", sname);
-	if (nbr_str_cmp(sname, sizeof("rget") - 1, "rget", sizeof("rget") - 1) == 0) {
-		return new httpsession::factory<get_response_session>;
+	if (config::cmp(sname, "sv")) {
+		return new get_response_session::factory;
 	}
-	return new httpsession::factory<get_request_session>;
+	if (config::cmp(sname, "cl")) {
+		return new get_request_session::factory;
+	}
+	return NULL;
 }
 
 int
@@ -228,7 +232,7 @@ testhttpd::create_config(config *cl[], int size)
 		return NBR_ESHORT;
 	}
 	cl[0] = new config (
-			"get",
+			"cl",
 			"localhost:"PORT,
 			60,
 			60, opt_not_set,
@@ -244,7 +248,7 @@ testhttpd::create_config(config *cl[], int size)
 			config::cfg_flag_not_set
 			);
 	cl[1] = new config (
-			"rget",
+			"sv",
 			"0.0.0.0:"PORT,
 			60,
 			60, opt_not_set,
@@ -265,16 +269,16 @@ testhttpd::create_config(config *cl[], int size)
 int
 testhttpd::boot(int argc, char *argv[])
 {
-	httpsession::factory<get_request_session> *f =
-			find_session< httpsession::factory<get_request_session> >("get");
-	config *c = find_config<config>("get");
+	get_request_session::factory *f =
+			find_factory<get_request_session::factory>("cl");
+	config *c = find_config<config>("cl");
 	if (!c || !f) {
 		m_server = 1;
 		return get_response_session::init_res();	/* maybe server session. ok */
 	}
 	get_request_session *s;
 	get_request_session::m_start = nbr_clock();
-	for (int i = 0; i < 10 /*c->m_max_connection*/; i++) {
+	for (int i = 0; i < c->m_max_connection; i++) {
 		if (!(s = f->pool().create())) {
 			log(ERROR, "allocate session fail\n");
 			return NBR_EINVAL;
