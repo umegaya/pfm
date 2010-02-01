@@ -214,6 +214,7 @@ NBR_API int		nbr_osdep_getpid();
 NBR_API int		nbr_osdep_fork(char *cmd, char *argv[], char *envp[]);
 NBR_API int		nbr_osdep_sleep(U64 nanosec);
 NBR_API UTIME	nbr_clock();
+NBR_API UTIME	nbr_time();
 
 
 /* rand.c */

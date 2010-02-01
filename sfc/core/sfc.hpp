@@ -596,6 +596,7 @@ public:
 		int init_pool(const config &cfg) { return m_container.init(cfg); }
 		int broadcast(char *p, int l);
 		bool checkping(class session &s, UTIME ut) {
+			if (!cfg().client()) { return true; }
 			int intv = (int)(ut - s.last_ping());
 			if (intv > cfg().m_ping_intv) {
 				if (S::sendping(s, ut) < 0) { return false; }
@@ -621,6 +622,7 @@ public:
 		static int recvping(class session &s, char *p, int l);
 	protected:
 		static bool cmp(const char *a, const char *b);
+		static char *chop(char *p) { return nbr_str_chop(p); }
 		static int hexdump(char *out, int olen, const char *in, int ilen);
 	};
 	class binprotocol {

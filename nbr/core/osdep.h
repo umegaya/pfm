@@ -50,6 +50,7 @@
 	#include	<netdb.h>
 	#include	<arpa/inet.h>
 	#include	<fcntl.h>
+	#include 	<time.h>
 #endif
 
 /* TCP related */
@@ -96,6 +97,7 @@ int		nbr_osdep_rlimit_set(int ltype, int val);
 
 /* sleep related */
 //int		nbr_osdep_sleep(U64 nanosec);
+#define osdep_sleep nanosleep
 
 /* epoll related */
 #if !defined(EPOLLRDHUP)

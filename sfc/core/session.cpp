@@ -140,7 +140,16 @@ int session::binprotocol::recvping(class session &s, char *p, int l)
 	POP_START(p, l);
 	POP_8(cmd);
 	POP_64(ut);
-	s.update_latency((U32)(nbr_clock() - ut));
+	if (s.cfg().client()) {
+		s.update_latency((U32)(nbr_clock() - ut));
+#if defined(_DEBUG)
+		s.log(kernel::INFO, "recvping: lacency=%u(%llu,%llu)\n", s.latency(),
+				nbr_clock(), ut);
+#endif
+	}
+	else {
+		sendping(s, ut);
+	}
 	return NBR_OK;
 }
 
@@ -156,7 +165,13 @@ int session::textprotocol::sendping(class session &s, UTIME ut)
 	if (s.cfg().m_ping_timeo <= 0) { return NBR_OK; }
 	char work[64];
 	PUSH_TEXT_START(work, cmd_ping);
+	if (s.cfg().client()) {
+		ut = nbr_time();
+	}
 	PUSH_TEXT_BIGNUM(ut);
+#if 1//defined(_DEBUG)
+	s.log(kernel::INFO, "sendping: at %llu\n", ut);
+#endif
 	return s.send(work, PUSH_TEXT_LEN());
 }
 
@@ -172,7 +187,17 @@ int session::textprotocol::recvping(class session &s, char *p, int l)
 	POP_TEXT_START(p, l);
 	POP_TEXT_STR(cmd, sizeof(cmd));
 	POP_TEXT_BIGNUM(ut, U64);
-	s.update_latency((U32)(nbr_clock() - ut));
+	if (s.cfg().client()) {
+		U64 now = nbr_time();
+		s.update_latency((U32)(now - ut));
+#if defined(_DEBUG)
+		s.log(kernel::INFO, "recvping: lacency=%u(%llu,%llu)\n", s.latency(),
+				now, ut);
+#endif
+	}
+	else {
+		sendping(s, ut);
+	}
 	return NBR_OK;
 }
 

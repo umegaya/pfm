@@ -260,7 +260,7 @@ cond_timedwait(cond_t *c, MUTEX m, int timeout)
 	}
 	gettimeofday(&tv, NULL);
 	ts.tv_sec = tv.tv_sec + (timeout / 1000);
-	ts.tv_nsec = (tv.tv_usec + ((timeout % 1000) * 1000000));
+	ts.tv_nsec = (tv.tv_usec * 1000 + ((timeout % 1000) * 1000000));
 	if (ts.tv_nsec >= 1000000000) {
 		ts.tv_nsec -= 1000000000;
 		ts.tv_sec++;
@@ -553,6 +553,7 @@ nbr_thread_wait_signal(THREAD th, int mine, int ms)
 	 * crushes thread stack. it appears as crush inside
 	 * pthread_test_cancel() */
 	COND_WAIT(*c, ms, ret);
+//	TRACE("%u:%llu: wait singal: ret=%u\n", getpid(), nbr_time(), ret);
 	COND_UNLOCK(c->mtx, ret != 0 && ret != EBUSY);
 	return ret;
 }

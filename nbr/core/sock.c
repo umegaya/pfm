@@ -153,6 +153,7 @@ typedef struct 	sockevent
 typedef struct 	sockjob
 {
 	THREAD		thrd;		/* thread object to process this queue */
+	int			active,sleep;/* thread need to active/now sleep? */
 	sockdata_t	*exec;		/* list of sockdata which should handle with this task */
 	sockdata_t	*free;		/* list of sockdata which should free by main thread */
 	sockbuf_t	eb[2];		/* sockbuf (double buffer) */
@@ -179,7 +180,7 @@ static struct {
 					NULL,
 					NULL, NULL,
 					NULL,
-					NULL, { NULL, NULL, NULL, {}, NULL, NULL },
+					NULL, { NULL, 0, 0, NULL, NULL, {}, NULL, NULL },
 					0, 0, 0, 0,
 					{ NULL, 0, 0 },
 					INVALID_FD,
@@ -376,6 +377,7 @@ sockjob_init(sockjob_t *j, int skbsz)
 {
 	int i;
 	j->exec = j->free = NULL;
+	j->active = j->sleep = 0;
 	for (i = 0; i < 2; i++) {
 		if (!sockbuf_alloc(&(j->eb[i]), skbsz)) {
 			return NBR_EMALLOC;
@@ -579,7 +581,7 @@ sock_addjob(sockdata_t *skd)
 			SOCK_EVENT_ADDSOCK, NULL, 0, NULL)) == NBR_OK) {
 			/* because if assign->exec, then sock_process_job keep on running
 			 * and execute event handle loop, so no need to wake up. */
-			if (!assign->exec) { nbr_thread_signal(assign->thrd, 1); }
+			if (assign->sleep) { nbr_thread_signal(assign->thrd, 1); }
 		}
 		return r;
 	}
@@ -886,11 +888,12 @@ sock_process_job(THREAD thrd)
 	sockevent_t *e, *le;
 	sockbuf_t  *skb;
 	sockdata_t *sk, *psk, *ppsk, *last;
+	int n_sleep;
 	nbr_thread_setcancelstate(0);	/* non-cancelable */
 	for (;;) {
-		if (g_sock.ioc.job_idle_sleep_us > 0) {
-			usleep(g_sock.ioc.job_idle_sleep_us);
-		}
+//		if (g_sock.ioc.job_idle_sleep_us > 0) {
+//			nbr_osdep_sleep(g_sock.ioc.job_idle_sleep_us);
+//		}
 		if (j->web->blen <= 0) {
 		}
 		else if (NBR_OK == nbr_mutex_lock(nbr_thread_signal_mutex(thrd))) {
@@ -912,26 +915,22 @@ sock_process_job(THREAD thrd)
 			j->reb->blen = 0;
 		}
 		nbr_thread_testcancel();	/* if cancel request, stop this thread */
-		if ((sk = j->exec)) {
-			ppsk = NULL;
-			while((psk = sk)) {
-				sk = psk->next;
-				if (nbr_sock_io(psk)) { ppsk = psk; }
-				else {
-					if (!j->free) { last = psk; }
-					psk->next = j->free;
-					j->free = psk;
-					if (ppsk) { ppsk->next = sk; }
-					else { j->exec = sk; }
-				}
+		j->active = 0;
+		sk = j->exec;
+		ppsk = NULL;
+		while((psk = sk)) {
+			sk = psk->next;
+			if (nbr_sock_io(psk)) {
+				if (sock_readable(psk)) { j->active = 1; }
+				ppsk = psk;
 			}
-		}
-		else {
-			nbr_thread_setcancelstate(1);	/* cancelable */
-			if (NBR_OK == nbr_thread_wait_signal(thrd, 1, -1)) {
-				nbr_mutex_unlock(nbr_thread_signal_mutex(thrd));
+			else {
+				if (!j->free) { last = psk; }
+				psk->next = j->free;
+				j->free = psk;
+				if (ppsk) { ppsk->next = sk; }
+				else { j->exec = sk; }
 			}
-			nbr_thread_setcancelstate(0);	/* non-cancelable */
 		}
 		if (j->free) {
 			if (NBR_OK == nbr_mutex_lock(g_sock.lock)) {
@@ -940,6 +939,17 @@ sock_process_job(THREAD thrd)
 				j->free = NULL;
 				if (NBR_OK != nbr_mutex_unlock(g_sock.lock)) { break; }
 			}
+		}
+		if (j->active) {}
+		else {
+			j->sleep = 1;
+			n_sleep = j->exec ? g_sock.ioc.job_idle_sleep_us : -1;
+//			TRACE("%u: %llu: sleep : n_sleep = %d\n", getpid(), nbr_time(), n_sleep);
+			nbr_thread_setcancelstate(1);	/* cancelable */
+			if (NBR_OK == nbr_thread_wait_signal(thrd, 1, n_sleep)) {
+				nbr_mutex_unlock(nbr_thread_signal_mutex(thrd));
+			}
+			nbr_thread_setcancelstate(0);	/* non-cancelable */
 		}
 	}
 	return thrd;
@@ -1629,13 +1639,23 @@ nbr_sock_rparser_text(char *p, int *len, int *rlen)
 {
 	char *w = p;
 	int tmp = *len;
-	while (*w != '\n') {
+	while (1) {
+		if (GET_8(w) == '\n') {
+			SET_8(w, 0);
+			tmp = 1;
+			break;
+		}
+		if (GET_16(w) == htons(0x0d0a)) {
+			SET_16(w, 0);
+			tmp = 2;
+			break;
+		}
 		if ((w - p) > tmp) {
 			return NULL;
 		}
 		w++;
 	}
-	*rlen = (w - p) + 1; /* +1 for \n */
+	*rlen = (w - p) + tmp; /* +1 for \n */
 	return p;
 }
 
@@ -1658,10 +1678,10 @@ sock_rw(void *ptr, int rf, int wf, int dg)
 	skmdata_t *skm = skd->skm;
 
 	if (rf && skd->nrb < skm->nrb) {
-//		TRACE("sock_io(%p) read: %u/%u\n", skd, skd->nrb, skm->nrb);
 		asz = sizeof(addr);
 		rsz = ifp->recv(skd->fd, skd->rb + skd->nrb, skm->nrb - skd->nrb,
 				MSG_DONTWAIT, addr, (size_t *)&asz);
+//		TRACE("%u: time = %llu %s(%u) %u\n", nbr_osdep_getpid(), nbr_time(), __FILE__, __LINE__, rsz);
 		switch(rsz) {
 		case -1:
 //			TRACE("%u: sock_io(%p) read: errno=%d\n", getpid(), skd, errno);
@@ -1705,9 +1725,13 @@ sock_rw(void *ptr, int rf, int wf, int dg)
 		if (cnt++ >= skm->cf.n_record_process) { break; }
 	}
 	sock_rb_shrink(skd, trsz);
-
+	/* polling will write something here */
+	if (!sock_polling(skm, skd)) {
+		sock_set_close(skd, CLOSED_BY_TIMEOUT);
+		return skd;
+	}
 	if (wf && skd->nwb > 0) {
-//		TRACE("%u: sock_io(%p) try %u byte\n", getpid(),skd, skd->nwb);
+//		TRACE("%u: time = %llu %s(%u)\n", nbr_osdep_getpid(), nbr_time(), __FILE__, __LINE__);
 		ssz = ifp->send(skd->fd, skd->wb, skd->nwb, 0, skd->addr, skd->alen);
 		switch(ssz) {
 		case -1:
@@ -1728,10 +1752,6 @@ sock_rw(void *ptr, int rf, int wf, int dg)
 			sock_wb_shrink(skd, ssz);
 			break;
 		}
-	}
-	if (!sock_polling(skm, skd)) {
-		sock_set_close(skd, CLOSED_BY_TIMEOUT);
-		return skd;
 	}
 	if (!dg) {
 		if (sock_attach_epoll(g_sock.epfd, skd, TRUE,
@@ -1958,6 +1978,8 @@ nbr_sock_poll()
 {
 	int n_events, i, tot = g_sock.total_fds;
 	EVENT events[tot], *ev;
+	sockdata_t *skd;
+	sockjob_t *j;
 
 	n_events = nbr_epoll_wait(g_sock.epfd, events, tot, g_sock.ioc.epoll_timeout_ms);
 	if (n_events < 0) {
@@ -1972,15 +1994,21 @@ nbr_sock_poll()
 		ev = events + i;
 		switch(type_from(ev)) {
 		case EPD_SOCKMGR:
-//			TRACE("epoll:epd_sockmgr: %p\n", sock_from(ev));
 			sock_accept(sockmgr_from(ev));
 			break;
 		case EPD_DGSKMGR:
-//			TRACE("epoll:epd_dgskmgr: %p\n", sock_from(ev));
 			dgsk_accept(sockmgr_from(ev));
 			break;
 		case EPD_SOCK:
-			sock_from(ev)->events |= events_from(ev);
+			skd = sock_from(ev);
+			skd->events |= events_from(ev);
+			if (MT_MODE() && sock_readable(skd)) {
+				j = nbr_thread_get_data(skd->thrd);
+				if (j->sleep) {
+//					TRACE("%u:%llu: wakeup!\n", getpid(), nbr_time());
+					if (nbr_thread_signal(skd->thrd, 1) == NBR_OK) { j->sleep = 0; }
+				}
+			}
 			break;
 		default:
 			ASSERT(FALSE);

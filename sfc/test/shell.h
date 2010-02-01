@@ -39,6 +39,8 @@ public:
 		static const char code_exec_start[];
 		static const char code_exec_result[];
 		static const char code_exec_end[];
+		static char *debug_big_data;
+		static const size_t debug_big_datasize = (1024 * 1024);
 	public:
 		void recv_cmd_list(U32 msgid) { ASSERT(false);return ; }
 		void recv_cmd_copyinit(U32 msgid, const char *path, int n_chunk, int chunksz) { ASSERT(false);return ; }
@@ -50,6 +52,9 @@ public:
 		void recv_code_exec_start(U32 msgid, const char *result) { ASSERT(false);return ; }
 		void recv_code_exec_result(U32 msgid, const char *line) { ASSERT(false);return ; }
 		void recv_code_exec_end(U32 msgid, const char *result) { ASSERT(false);return ; }
+	public:
+		static int sendping(class session &s, UTIME ut);
+		static int recvping(class session &s, char *p, int l);
 	};
 	template <class S>
 	class protocol_impl : public protocol {
@@ -106,6 +111,7 @@ public:
 	public:
 		void fin()						{}
 		int on_recv(char *p, int l)		{
+			TRACE("%u: time = %llu %s(%u)\n", nbr_osdep_getpid(), nbr_time(), __FILE__, __LINE__);
 			return protocol_impl<shellserver>::on_recv(*this, p, l);
 		}
 		int on_event(char *p, int l)	{ return NBR_OK; }
@@ -120,6 +126,7 @@ public:
 	session::factory 	*create_factory(const char *sname);
 	int					create_config(config* cl[], int size);
 	int					boot(int argc, char *argv[]);
+	int				 	initlib(CONFIG &c);
 	void				shutdown();
 	static int			addjob(shellserver::exec_ctx *ctx);
 protected:

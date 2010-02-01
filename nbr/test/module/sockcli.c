@@ -158,6 +158,19 @@ static int sendpacket3(SOCK sk, int error_reason)
 	return nbr_sock_send_bin32(sk, buffer, PUSH_LEN());
 }
 
+static int sendpacket4(SOCK sk)
+{
+	char buffer[1024], str[32];
+	U8 type = 3;
+	U64 ut = nbr_time();
+	PUSH_START(buffer, sizeof(buffer));
+	PUSH_8(type);
+	PUSH_64(ut);
+	PUSH_8A(str, sizeof(str));
+	return nbr_sock_send_bin32(sk, buffer, PUSH_LEN());
+}
+
+static U64 g_total_rtt = 0LL;
 static int parser(SOCK sk, char *p, int l)
 {
 	workbuf_t *wkb;
@@ -165,6 +178,7 @@ static int parser(SOCK sk, char *p, int l)
 	char strbuf[256];
 	int len, msgid;
 	U8 type;
+	UTIME ut;
 	wkb = nbr_sock_get_data(sk, &len);
 	VTRACE("cl: recv: len=%u,%p\n", l, wkb);
 	POP_START(p, l);
@@ -211,6 +225,12 @@ static int parser(SOCK sk, char *p, int l)
 		}
 		numhandle++;
 		break;
+	case 2:
+		POP_64(ut);
+//		TRACE("nbr_time = %llu (%llu)\n", nbr_time(), ut);
+		g_total_rtt += (nbr_time() - ut);
+		numhandle++;
+		break;
 	}
 //	TRACE("sock reuse %p:%u:%u\n", sk.p, sk.s, wkb->index);
 //	nbr_sock_close(sk);
@@ -249,6 +269,17 @@ static int eventhandler(SOCK sk, char *p, int l)
 			return -1;
 		}
 		return 1;
+	case 2:
+		if (nbr_sock_writable(sk) <= 12) {
+			TRACE("write buf almost full: remain %d\n", nbr_sock_writable(sk));
+			return 1;
+		}
+		if (sendpacket4(sk) < 0) {
+			emerg = NBR_EEXPIRE;
+			ASSERT(FALSE);
+			return -1;
+		}
+		return 1;
 	}
 	ASSERT(FALSE);
 	return 0;
@@ -270,6 +301,8 @@ static int sendevent(SOCK sk, U8 type)
 		PUSH_STR(strbuf);
 		number = get_msgid();
 		PUSH_32(number);
+		break;
+	case 2:
 		break;
 	}
 	return nbr_sock_event(sk, buffer, PUSH_LEN());
@@ -298,7 +331,7 @@ static int create_connection(SOCKMGR skm, const char *addr, U8 type)
 //			}
 			if (nbr_sock_writable(ska[i]) > 264 /* && (sent[i] % 2) == 0 */) {
 				VTRACE("idx=%u is writable: sendpacket\n", i);
-				sendevent(ska[i], 1);
+				sendevent(ska[i], type);
 				sent[i]++;
 			}
 			//VTRACE("idx=%u: writable=%u\n", i, nbr_sock_writable(ska[i]));
@@ -400,7 +433,7 @@ main(int argc, char *argv[], char *envp[])
 	rl.rlim_max = RLIM_INFINITY;
 	setrlimit(RLIMIT_CORE, &rl);
 	/* client */
-	SOCKMGR skm = nbr_sockmgr_create(4 * 1024, 4 * 1024,
+	SOCKMGR skm = nbr_sockmgr_create(8 * 1024, 16 * 1024,
 						N_CLIENT + 1,
 						sizeof(workbuf_t),
 						f_udp ? 10 : 600,
@@ -448,6 +481,11 @@ main(int argc, char *argv[], char *envp[])
 	if (emerg == 0) {
 		res_handle = numhandle;
 		printf("%u query handled in %u sec (%f qps)\n", res_handle, span, (float)((float)res_handle / (float)span));
+		if (type == 2) {
+			printf("ave latency: %f usec (spend %llu usec)\n",
+					(float)((float)g_total_rtt / (float)res_handle),
+					g_total_rtt);
+		}
 	}
 	else {
 		printf("error happen: e = %d\n", emerg);

@@ -40,7 +40,62 @@ const char shelld::protocol::code_copychunk[] = "copychunk_r";
 const char shelld::protocol::code_exec_start[] = "exec_r";
 const char shelld::protocol::code_exec_result[] = "exec_result";
 const char shelld::protocol::code_exec_end[] = "exec_end";
+char *shelld::protocol::debug_big_data = NULL;
 
+int shelld::protocol::sendping(class session &s, UTIME ut)
+{
+	if (!debug_big_data) {
+		debug_big_data = (char *)nbr_mem_alloc(debug_big_datasize + 1);
+		memset(debug_big_data, 'a', debug_big_datasize);
+		debug_big_data[1024] = '\0';
+	}
+	/* disabled ping? */
+	if (s.cfg().m_ping_timeo <= 0) { return NBR_OK; }
+	char work[64 + debug_big_datasize + 1];
+	PUSH_TEXT_START(work, cmd_ping);
+	if (s.cfg().client()) {
+		ut = nbr_time();
+	}
+	PUSH_TEXT_BIGNUM(ut);
+	PUSH_TEXT_STR(debug_big_data);
+#if 1//defined(_DEBUG)
+	s.log(kernel::INFO, "sendping: at %llu\n", ut);
+#endif
+	return s.send(work, PUSH_TEXT_LEN());
+}
+
+int shelld::protocol::recvping(class session &s, char *p, int l)
+{
+	if (s.cfg().m_ping_timeo <= 0) { return NBR_OK; }
+	if (*p != '0') {
+		return NBR_OK; /* no ping */
+	}
+	/* disabled ping? */
+	char cmd[16 + 1];
+	char dbd[debug_big_datasize + 1];
+	U64 ut;
+	POP_TEXT_START(p, l);
+	POP_TEXT_STR(cmd, sizeof(cmd));
+	POP_TEXT_BIGNUM(ut, U64);
+	POP_TEXT_STR(dbd, sizeof(dbd));
+	TRACE("first 16 char of dbd is :");
+	for (int i = 0; i < 16; i++) {
+		TRACE("%c", dbd[i]);
+	}
+	TRACE("\n");
+	if (s.cfg().client()) {
+		U64 now = nbr_time();
+		s.update_latency((U32)(now - ut));
+#if defined(_DEBUG)
+		s.log(kernel::INFO, "recvping: lacency=%u(%llu,%llu)\n", s.latency(),
+				now, ut);
+#endif
+	}
+	else {
+		sendping(s, ut);
+	}
+	return NBR_OK;
+}
 
 
 /*-------------------------------------------------------------*/
@@ -273,11 +328,6 @@ session::pollret shelld::shellserver::poll(UTIME ut, bool thread)
 //			valid() ? "valid" : "invalid",
 //			thread ? "from thread" : "from main",
 //			writable());
-	factory *fc = (factory *)f();
-	if (!nbr_search_sanity_check(fc->pool().get_s())) {
-		log(ERROR, "sanity check fails\n");
-		return pr_stop;
-	}
 #endif
 	return master::poll(ut, thread);
 }
@@ -302,10 +352,18 @@ shelld::create_factory(const char *sname)
 {
 	TRACE("create_factory: sname=<%s>\n", sname);
 	if (config::cmp(sname, "sv")) {
+#if defined(_CLUSTER_)
+		return new mastersession::factory_impl<shellserver>;
+#else
 		return new shellserver::factory;
+#endif
 	}
 	if (config::cmp(sname, "cl")) {
+#if defined(_CLUSTER_)
+		return new servantsession::factory_impl<shellserver>;
+#else
 		return new shellclient::factory;
+#endif
 	}
 	return NULL;
 }
@@ -321,8 +379,8 @@ shelld::create_config(config *cl[], int size)
 			"localhost:12345",
 			5,	/* 5 connection expandable */
 			60, opt_expandable,
-			32 * 1024, 1024,
-			0, 0,	/* no ping */
+			1025 * 1024, 1025 * 1024,
+			2, 10,	/* no ping */
 			-1,0,	/* no query buffer */
 			"TCP",
 			1 * 1000 * 1000/* 1msec task span */,
@@ -337,8 +395,8 @@ shelld::create_config(config *cl[], int size)
 			"0.0.0.0:12345",
 			10,	/* 10 connection fix */
 			60, opt_not_set,
-			1024, 32 * 1024,
-			0, 0,	/* no ping */
+			1025 * 1024, 1025 * 1024,
+			2, 10,	/* no ping */
 			-1,0,	/* no query buffer */
 			"TCP",
 			1 * 1000 * 1000/* 10msec task span */,
@@ -349,6 +407,13 @@ shelld::create_config(config *cl[], int size)
 			config::cfg_flag_server
 			);
 	return 2;
+}
+
+int
+shelld::initlib(CONFIG &c)
+{
+	c.ioc.job_idle_sleep_us = 10;
+	return NBR_OK;
 }
 
 int

@@ -338,8 +338,9 @@ search_get_opt_from(int primopt)
 #if defined(_DEBUG)
 BOOL nbr_search_sanity_check(SEARCH sd)
 {
+	extern BOOL nbr_array_sanity_check(ARRAY);
 	search_t *s = sd;
-	nbr_array_sanity_check(s->ad);
+	return nbr_array_sanity_check(s->ad);
 }
 #endif
 

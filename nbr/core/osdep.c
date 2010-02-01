@@ -21,6 +21,7 @@
 #include	"nbr_pkt.h"
 #include 	<sys/resource.h>
 #include 	<sys/ioctl.h>
+#include	<time.h>
 
 
 
@@ -607,7 +608,22 @@ void nbr_clock_poll()
 	g_clock = clock_get_time_diff(&ost);
 }
 
-UTIME nbr_clock()
+NBR_API UTIME
+nbr_clock()
 {
 	return g_clock;
 }
+
+NBR_API UTIME
+nbr_time()
+{
+#if defined(__NBR_LINUX__)
+	ostime_t ost;
+	gettimeofday(&ost, NULL);
+	return ost.tv_sec * 1000 * 1000 + ost.tv_usec;
+#else
+	return 0LL;
+#endif
+}
+
+

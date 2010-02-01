@@ -79,12 +79,12 @@
 								return NBR_ESHORT; }
 #define PUSH_TEXT_STR(s)	PUSH_TEXT(" %s", s)
 #define PUSH_TEXT_NUM(n)	PUSH_TEXT(" %u", n)
-#define PUSH_TEXT_BIGNUM(bn)	PUSH_TEXT("%llu ", bn)
+#define PUSH_TEXT_BIGNUM(bn)	PUSH_TEXT(" %llu", bn)
 #define PUSH_TEXT_CURPOS()	(__buf)
 #define PUSH_TEXT_LEN()		(__buf - __p)
 
 #define POP_TEXT_START(p,l)	char *__buf = p;
-#define POP_TEXT_STR(s,l)	if (!(__buf = (char *)nbr_str_divide(" \n",__buf, s, l))) { \
+#define POP_TEXT_STR(s,l)	if (!(__buf = (char *)nbr_str_divide(" ",__buf, s, l))) { \
 								TRACE("pop err@%s(%u)\n", __FILE__, __LINE__);	\
 								return NBR_ESHORT; }
 #define POP_TEXT_NUM(n,t)	{ char __tmp[256]; POP_TEXT_STR(__tmp, sizeof(__tmp)); \

@@ -101,12 +101,26 @@ static int sendresult2(SOCK sk, U32 msgid, const char *b)
 	return nbr_sock_send_bin32(sk, buffer, PUSH_LEN());
 }
 
+static int sendresult3(SOCK sk, U64 ut)
+{
+	char buffer[2048], data[256];
+	U8 type = 2;
+	PUSH_START(buffer, sizeof(buffer));
+	PUSH_8(type);
+	PUSH_64(ut);
+	PUSH_8A(data, sizeof(data));
+	VTRACE("sv: sendresult2:(%llu)\n", ut);
+	return nbr_sock_send_bin32(sk, buffer, PUSH_LEN());
+}
+
 static int parser(SOCK sk, char *p, int l)
 {
 	U32 number;
 	char strbuf[256];
 	U8 type;
 	U16 val;
+	U64 ut;
+	int len;
 	nbr_sock_get_addr(sk, strbuf, sizeof(strbuf));
 	VTRACE("%p: recv %u byte from %s\n", sk.p, l, strbuf);
 	POP_START(p, l);
@@ -127,6 +141,11 @@ static int parser(SOCK sk, char *p, int l)
 		ASSERT(val == 100);
 		TRACE("###### final packet from child process res(%d)\n", error_result);
 		return 0;
+	case 3:
+		POP_64(ut);
+		len = sizeof(strbuf);
+		POP_8A(strbuf, len);
+		return sendresult3(sk, ut);
 	}
 	alive = 0;
 	error_result = NBR_ERANGE;
@@ -328,7 +347,7 @@ nbr_sock_test(int max_thread, int max_client, int exec_dur, int max_query, char 
 		"localhost:1978",
 		"3",	/* 3 thread */
 		"10",	/* execute 10 sec */
-		"0",	/* calculate prime */
+		"2",	/* calculate prime */
 		proto,	/*proto*/
 		"800",	/* max_client */
 		"128000",/* max query */
@@ -344,6 +363,7 @@ nbr_sock_test(int max_thread, int max_client, int exec_dur, int max_query, char 
 
 	nbr_get_default(&c);
 	c.max_worker = max_thread;
+	c.sockbuf_size = 24 * 1024 * 1024;
 	N_CLIENT = max_client;
 	N_CLIENT_GROUP = (N_CLIENT / 1000) + 1;
 	if (nbr_init(&c) != NBR_OK) {
@@ -357,7 +377,7 @@ nbr_sock_test(int max_thread, int max_client, int exec_dur, int max_query, char 
 
 	proto_if = proto_regist_by_name(proto, &proto_p);
 	/* server */
-	SOCKMGR skm = nbr_sockmgr_create(4 * 1024, 4 * 1024,
+	SOCKMGR skm = nbr_sockmgr_create(8 * 1024, 8 * 1024,
 						N_CLIENT + 1,
 						sizeof(workbuf_t),
 						f_udp ? 10 : 500 * 1000,
