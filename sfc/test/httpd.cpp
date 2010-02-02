@@ -23,6 +23,8 @@
 #include <sys/stat.h>
 
 using namespace sfc;
+using namespace sfc::app;
+using namespace sfc::http;
 
 /*-------------------------------------------------------------*/
 /* get_request_session										   */
@@ -212,7 +214,7 @@ get_response_session::fin_res()
 /*-------------------------------------------------------------*/
 /* testhttpd												   */
 /*-------------------------------------------------------------*/
-session::factory *
+factory *
 testhttpd::create_factory(const char *sname)
 {
 	TRACE("create_factory: sname=<%s>\n", sname);

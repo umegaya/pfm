@@ -143,6 +143,12 @@ typedef struct 	nbr_udpconf
 	char *mcast_addr;
 	int	ttl;
 }							UDPCONF;
+typedef struct 	nbr_sockmgr_stat_t
+{
+	int n_connection;
+	int total_send, total_recv;
+	int send_sec, recv_sec;
+}							SKMSTAT;
 typedef struct	nbr_init_t
 {
 	int	max_array;
@@ -307,6 +313,7 @@ NBR_API void	nbr_sockmgr_set_data(SOCKMGR s, void *p);
 NBR_API void	*nbr_sockmgr_get_data(SOCKMGR s);
 NBR_API int		nbr_sockmgr_get_addr(SOCKMGR s, char *buf, int len);
 NBR_API int		nbr_sockmgr_event(SOCKMGR s, int type, char *p, int len);
+NBR_API int		nbr_sockmgr_get_stat(SOCKMGR s, SKMSTAT *st);
 NBR_API SOCKMGR	nbr_sock_get_mgr(SOCK s);
 NBR_API int 	nbr_sock_close(SOCK s);
 NBR_API int		nbr_sock_event(SOCK s, char *p, int len);

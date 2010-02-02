@@ -21,6 +21,7 @@
 #include <signal.h>
 
 using namespace sfc;
+using namespace sfc::app;
 
 U32 daemon::m_sigflag = 0;
 
@@ -108,7 +109,7 @@ daemon::init(int argc, char *argv[])
 	}
 	cmap::iterator c;
 	for (c = m_cl.begin(); c != m_cl.end(); c = m_cl.next(c)) {
-		session::factory *f;
+		factory *f;
 		if (c->disabled()) {
 			continue;	/* skip to create factory */
 		}
@@ -241,11 +242,11 @@ daemon::create_config(config *cl[], int size)
 	if (size <= 0) {
 		return NBR_ESHORT;
 	}
-	cl[0] = new session::property;
+	cl[0] = new basic_property;
 	return 1;
 }
 
-session::factory*
+factory*
 daemon::create_factory(const char *sname)
 {
 	return NULL;

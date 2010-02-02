@@ -413,8 +413,8 @@ public:
 public:
 	/* macro for inheritant class */
 #define BASE_CONFIG_PLIST				\
-	const char name[MAX_SESSION_NAME],	\
-	const char host[MAX_HOST_NAME],		\
+	const char name[config::MAX_SESSION_NAME],	\
+	const char host[config::MAX_HOST_NAME],		\
 	int max_connection,					\
 	int timeout, int option,			\
 	int rbuf, int wbuf,					\
@@ -468,174 +468,183 @@ public:
 
 #include "util.h"
 }	//namespace util
-using namespace util;
+//using namespace util;
 
 
 
 /*-------------------------------------------------------------*/
 /* sfc::session												   */
 /*-------------------------------------------------------------*/
-class session : public kernel {
+namespace base {
+using namespace util;
+/* protocol */
+class textprotocol : public kernel {
 public:
-	class factory : public kernel {
-		friend class lock;
-		static const U32	MSGID_LIMIT = 2000000000;
-		static const U16	MSGID_COMPACT_LIMIT = 60000;
-	public:
-		struct query {
-			char data[0];
-		};
-		typedef map<query,U32> qmap;
-	public:
-		const config	*m_cfg;
-		SOCKMGR			m_skm;
-		UTIME			m_last_poll;
-		U32				m_msgid_seed;
-		RWLOCK			m_lk;
-		qmap			m_ql;
-	public:
-		factory() : m_cfg(NULL), m_skm(NULL), m_last_poll(0),
-					m_msgid_seed(0), m_lk(NULL), m_ql() {}
-		virtual ~factory() {}
-		virtual int init(const config &cfg) = 0;
-		virtual void fin() = 0;
-		virtual void poll(UTIME ut) = 0;
-		int log(loglevel lv, const char *fmt, ...);
-		int base_init();
-		void base_fin();
-		RWLOCK lk() { return m_lk; }
-		const config &cfg() const { return *m_cfg; }
-		qmap &querymap() { return m_ql; }
-		int connect(session *s, const char *addr = NULL, void *p = NULL);
-		int get(address &a) const { return a.from((SOCKMGR)m_skm); }
-		int mcast(const char *addr, char *p, int l);
-		int event(int t, const char *p, int l) {
-			return nbr_sockmgr_event(m_skm, t, (char *)p, l); }
-		inline U32 msgid() {
-			++m_msgid_seed;
-			if (m_msgid_seed > MSGID_LIMIT) { m_msgid_seed = 1; }
-			return m_msgid_seed;
-		}
-		inline U16 compact_msgid() {
-			++m_msgid_seed;
-			if (m_msgid_seed > MSGID_COMPACT_LIMIT) { m_msgid_seed = 1; }
-			return m_msgid_seed;
-		}
-	protected:
-		int init(const config &cfg,
-					int (*aw)(SOCK),
-					int (*cw)(SOCK, int),
-					int (*pp)(SOCK, char*, int),
-					int (*eh)(SOCK, char*, int),
-					void (*meh)(SOCKMGR, int, char*, int),
-					int (*oc)(SOCK, void*),
-					UTIME (*poll)(SOCK));
+	static const char cmd_ping[];
+public:
+	static int sendping(class session &s, UTIME ut);
+	static int recvping(class session &s, char *p, int l);
+protected:
+	static bool cmp(const char *a, const char *b);
+	static char *chop(char *p) { return nbr_str_chop(p); }
+	static int hexdump(char *out, int olen, const char *in, int ilen);
+};
+class binprotocol : public kernel {
+public:
+	enum {
+		cmd_ping = 0,
+		cmd_last,
 	};
-	template <class S>
-	class arraypool {
-	public:
-		typedef array<S> sspool;
-		typedef typename sspool::iterator iterator;
-	private:
-		sspool m_pool;
-	public:
-		arraypool() : m_pool() {}
-		~arraypool() { fin(); }
-		sspool &pool() { return m_pool; }
-		void erase(iterator it) {
-			it->fin();
-			m_pool.erase(it);
-		}
-		S *create(SOCK sk) {
-			return m_pool.create();
-		}
-		bool init(const config &cfg) {
-			return m_pool.init(cfg.m_max_connection,
-				sizeof(S), cfg.m_option);
-		}
-		void fin() { m_pool.fin(); }
+public:
+	static int sendping(class session &s, UTIME ut);
+	static int recvping(class session &s, char *p, int l);
+};
+
+/* factory */
+class factory : public kernel {
+	friend class lock;
+	static const U32	MSGID_LIMIT = 2000000000;
+	static const U16	MSGID_COMPACT_LIMIT = 60000;
+public:
+	struct query {
+		char data[0];
 	};
-	template <class S>
-	class mappool {
-	public:
-		typedef map<S, address> sspool;
-		typedef typename sspool::iterator iterator;
-	private:
-		sspool m_pool;
-	public:
-		mappool() : m_pool() {}
-		~mappool() { fin(); }
-		sspool &pool() { return m_pool; }
-		void erase(iterator it) {
-			address a = it->addr();
-			it->fin();
-			pool().erase(a);
-		}
-		S *create(SOCK sk) {
-			address a;
-			return a.from(sk) > 0 ? m_pool.create(a) : NULL;
-		}
-		bool init(const config &cfg) {
-			return m_pool.init(cfg.m_max_connection, cfg.m_max_connection,
-				sizeof(S), cfg.m_option);
-		}
-		void fin() { m_pool.fin(); }
-	};
-	template < class S, class P = mappool<S> >
-	class factory_impl : public factory {
-	protected:
-		P m_container;
-	public:
-		typedef	typename P::sspool sspool;
-		typedef typename P::iterator iterator;
-	public:
-		factory_impl() : factory(), m_container() {}
-		~factory_impl() { fin(); }
-		sspool &pool() { return m_container.pool(); }
-		S* create(SOCK sk) { return m_container.create(sk); }
-		int init_pool(const config &cfg) { return m_container.init(cfg); }
-		int broadcast(char *p, int l);
-		bool checkping(class session &s, UTIME ut) {
-			if (!cfg().client()) { return true; }
-			int intv = (int)(ut - s.last_ping());
-			if (intv > cfg().m_ping_intv) {
-				if (S::sendping(s, ut) < 0) { return false; }
-			}
-			return intv > cfg().m_ping_timeo;
-		}
-	public:
-		int init(const config &cfg);
-		void fin();
-		void poll(UTIME ut);
-		static int on_open(SOCK);
-		static int on_close(SOCK, int);
-		static int on_recv(SOCK, char*, int);
-		static int on_event(SOCK, char*, int);
-		static int on_connect(SOCK, void *);
-		static UTIME on_poll(SOCK);
-	};
-	class textprotocol {
-	public:
-		static const char cmd_ping[];
-	public:
-		static int sendping(class session &s, UTIME ut);
-		static int recvping(class session &s, char *p, int l);
-	protected:
-		static bool cmp(const char *a, const char *b);
-		static char *chop(char *p) { return nbr_str_chop(p); }
-		static int hexdump(char *out, int olen, const char *in, int ilen);
-	};
-	class binprotocol {
-	public:
-		enum {
-			cmd_ping = 0,
-			cmd_last,
-		};
-	public:
-		static int sendping(class session &s, UTIME ut);
-		static int recvping(class session &s, char *p, int l);
-	};
-	typedef config property;
+	typedef map<query,U32> qmap;
+public:
+	const config	*m_cfg;
+	SOCKMGR			m_skm;
+	UTIME			m_last_poll;
+	U32				m_msgid_seed;
+	RWLOCK			m_lk;
+	qmap			m_ql;
+public:
+	factory() : m_cfg(NULL), m_skm(NULL), m_last_poll(0),
+				m_msgid_seed(0), m_lk(NULL), m_ql() {}
+	virtual ~factory() {}
+	virtual int init(const config &cfg) = 0;
+	virtual void fin() = 0;
+	virtual void poll(UTIME ut) = 0;
+	virtual int broadcast(char *, int) { ASSERT(false); return NBR_OK; }
+	bool is_initialized() const { return (m_skm != NULL); }
+	int log(loglevel lv, const char *fmt, ...);
+	int base_init();
+	void base_fin();
+	RWLOCK lk() { return m_lk; }
+	const config &cfg() const { return *m_cfg; }
+	qmap &querymap() { return m_ql; }
+	int connect(session *s, const char *addr = NULL, void *p = NULL);
+	int get(address &a) const { return a.from((SOCKMGR)m_skm); }
+	int stat(SKMSTAT &st) { return nbr_sockmgr_get_stat(m_skm, &st); }
+	int mcast(const char *addr, char *p, int l);
+	int event(int t, const char *p, int l) {
+		return nbr_sockmgr_event(m_skm, t, (char *)p, l); }
+	inline U32 msgid() {
+		++m_msgid_seed;
+		if (m_msgid_seed > MSGID_LIMIT) { m_msgid_seed = 1; }
+		return m_msgid_seed;
+	}
+	inline U16 compact_msgid() {
+		++m_msgid_seed;
+		if (m_msgid_seed > MSGID_COMPACT_LIMIT) { m_msgid_seed = 1; }
+		return m_msgid_seed;
+	}
+protected:
+	int init(const config &cfg,
+				int (*aw)(SOCK),
+				int (*cw)(SOCK, int),
+				int (*pp)(SOCK, char*, int),
+				int (*eh)(SOCK, char*, int),
+				void (*meh)(SOCKMGR, int, char*, int),
+				int (*oc)(SOCK, void*),
+				UTIME (*poll)(SOCK));
+};
+/* mempool definition */
+template <class S>
+class arraypool {
+public:
+	typedef array<S> sspool;
+	typedef typename sspool::iterator iterator;
+private:
+	sspool m_pool;
+public:
+	arraypool() : m_pool() {}
+	~arraypool() { fin(); }
+	sspool &pool() { return m_pool; }
+	void erase(iterator it) {
+		it->fin();
+		m_pool.erase(it);
+	}
+	S *create(SOCK sk) {
+		return m_pool.create();
+	}
+	bool init(const config &cfg, int size) {
+		if (size < 0) { size = sizeof(S); }
+		return m_pool.init(cfg.m_max_connection,
+			size, cfg.m_option);
+	}
+	void fin() { m_pool.fin(); }
+};
+template <class S>
+class mappool {
+public:
+	typedef map<S, address> sspool;
+	typedef typename sspool::iterator iterator;
+private:
+	sspool m_pool;
+public:
+	mappool() : m_pool() {}
+	~mappool() { fin(); }
+	sspool &pool() { return m_pool; }
+	void erase(iterator it) {
+		address a = it->addr();
+		it->fin();
+		pool().erase(a);
+	}
+	S *create(SOCK sk) {
+		address a;
+		return a.from(sk) > 0 ? m_pool.create(a) : NULL;
+	}
+	bool init(const config &cfg, int size) {
+		if (size < 0) { size = sizeof(S); }
+		return m_pool.init(cfg.m_max_connection, cfg.m_max_connection,
+			size, cfg.m_option);
+	}
+	void fin() { m_pool.fin(); }
+};
+/* factory_impl */
+template < class S, class P = mappool<S> >
+class factory_impl : public factory {
+protected:
+	P m_container;
+public:
+	typedef	typename P::sspool sspool;
+	typedef typename P::iterator iterator;
+public:
+	factory_impl() : factory(), m_container() {}
+	~factory_impl() { fin(); }
+	sspool &pool() { return m_container.pool(); }
+	S* create(SOCK sk) { return m_container.create(sk); }
+	int init_pool(const config &cfg, int size = -1) {
+		return m_container.init(cfg, size); }
+	int broadcast(char *p, int l);
+	bool checkping(class session &s, UTIME ut);
+public:
+	int init(const config &cfg);
+	void fin();
+	void poll(UTIME ut);
+	static int on_open(SOCK);
+	static int on_close(SOCK, int);
+	static int on_recv(SOCK, char*, int);
+	static int on_event(SOCK, char*, int);
+	static int on_connect(SOCK, void *);
+	static UTIME on_poll(SOCK);
+};
+
+/* property */
+typedef config basic_property;
+
+/* session */
+class session : public kernel {
 public:
 	typedef enum {
 		ss_invalid,
@@ -678,6 +687,7 @@ public: /* attributes */
 	bool closed() const				{ return m_state == ss_closed; }
 	void setstate(ssstate s)		{ m_state = s; }
 	void setaddr(char *a = NULL);
+	void setaddr(const address &a) 	{ m_addr = a; }
 	int senddata(U32 msgid, char *p, int l) { UNUSED(msgid); return send(p, l); }
 	const address &addr() const		{ return m_addr; }
 	address &addr() 				{ return m_addr; }
@@ -717,70 +727,86 @@ public: /* callback */
 	int on_recv(char *p, int l)		{ return NBR_OK; }
 	int on_event(char *p, int l)	{ return NBR_OK; }
 };
+#include "base.h"
+}	//namespace base
 
 
 
 /*-------------------------------------------------------------*/
 /* sfc::finder												   */
 /*-------------------------------------------------------------*/
-class finder : public kernel {
+namespace finder {
+using namespace base;
+/* protocol */
+class finder_protocol : public binprotocol {
 public:
-	static const char 	MCAST_GROUP[];
 	static const size_t MAX_OPT_LEN = 1024;
 	static const size_t SYM_SIZE = 32;
+public: /* callback */
+	/* another node inquiry you. please reply if you have capability
+	 * correspond to sym. opt is additional data to process with on_reply */
+	int on_inquiry(const char *sym, char *, int);
+	/* some node reply to your inquiry. */
+	int on_reply(const char*, const char*, int) { ASSERT(false);return NBR_OK; }
+};
+template <class S>
+class finder_protocol_impl : public finder_protocol {
+public:
+	static int on_recv(S &, char *, int);
+};
+
+/* factory */
+class finder_factory : public factory {
+public:
 	static const int	DEFAULT_REGISTER = 3;
 	static const int 	DEFAULT_HASHSZ = 16;
+	typedef map<factory*, char[finder_protocol::SYM_SIZE]> smap;
+	typedef factory super;
+protected:
+	smap	m_sl;
 public:
-	class factory : public session::factory {
-	public:
-		typedef map<session::factory*, char[SYM_SIZE]> smap;
-		typedef session::factory super;
-	protected:
-		smap	m_sl;
-	public:
-		factory() : super(), m_sl() {}
-		~factory() {}
-		int init(const config &cfg);
-		int init(const config &cfg, int (*pp)(SOCK, char*, int));
-		void poll(UTIME ut) {}
-		void fin() {}
-		int inquiry(const char *sym);
-		session::factory *find_factory(const char *sym) { return m_sl.find(sym); }
-		bool register_factory(session::factory *fc, const char *sym) {
-			return m_sl.insert(fc, sym) != m_sl.end();
-		}
-		template <class F> static int on_recv(SOCK, char*, int);
-	};
-	class property : public config {
-	public:
-		char 	m_mcastaddr[session::SOCK_ADDR_SIZE];
-		U16		m_mcastport, m_padd;
-		UDPCONF m_mcastconf;
-	public:
-		property(BASE_CONFIG_PLIST, const char *mcastgrp, U16 mcastport, int ttl);
-		virtual int	set(const char *k, const char *v);
-		virtual void *proto_p() const;
-	};
+	finder_factory() : super(), m_sl() {}
+	~finder_factory() {}
+	int init(const config &cfg);
+	int init(const config &cfg, int (*pp)(SOCK, char*, int));
+	void poll(UTIME ut) {}
+	void fin() {}
+	int inquiry(const char *sym);
+	factory *find_factory(const char *sym) { return m_sl.find(sym); }
+	bool register_factory(factory *fc, const char *sym) {
+		return m_sl.insert(fc, sym) != m_sl.end();
+	}
+	template <class F> static int on_recv(SOCK, char*, int);
+};
+
+/* property */
+class finder_property : public config {
+public:
+	static const char 	MCAST_GROUP[];
+public:
+	char 	m_mcastaddr[session::SOCK_ADDR_SIZE];
+	U16		m_mcastport, m_padd;
+	UDPCONF m_mcastconf;
+public:
+	finder_property(BASE_CONFIG_PLIST, const char *mcastgrp, U16 mcastport, int ttl);
+	virtual int	set(const char *k, const char *v);
+	virtual void *proto_p() const;
+};
+
+/* session */
+class finder_session : public kernel {
 protected:
 	SOCK m_sk;
 	factory *m_f;
 public:
-	finder(SOCK s, factory *f) : m_sk(s), m_f(f) {}
-	~finder(){}
+	finder_session(SOCK s, factory *f) : m_sk(s), m_f(f) {}
+	~finder_session(){}
 	int send(char *p, int l) { return m_f->cfg().m_fns(m_sk, p, l); }
 	int close() { return nbr_sock_close(m_sk); }
 	int log(loglevel lv, const char *fmt, ...);
-public: /* callback */
-	/* another node inquiry you. please reply if you have capability
-	 * correspond to sym. opt is additional data to process with on_reply */
-	int on_inquiry(const char *sym, char *opt, int omax) {
-		log(INFO, "default: not respond to <%s>\n", sym);
-		return NBR_ENOTFOUND;
-	}
-	/* some node reply to your inquiry. */
-	int on_reply(const char *sym, const char *opt, int olen) { return NBR_OK; }
 };
-
+#include "finder.h"
+}	//namespace finder
 
 
 /*-------------------------------------------------------------*/
@@ -788,8 +814,9 @@ public: /* callback */
 /* provide n_servant x m_master mesh and master auto detection */
 /*-------------------------------------------------------------*/
 namespace cluster {
-/* sfc::cluster::node */
-class protocol : public session::binprotocol {
+using namespace finder;
+/* cluster_protocol */
+class cluster_protocol : public binprotocol {
 public:
 	typedef enum {
 		ncmd_invalid,
@@ -807,9 +834,105 @@ public:
 		nev_finder_reply_init,
 		nev_finder_reply_poll,
 	} nodeevent;
+public:
+	int on_cmd_app(char *, int){ ASSERT(false); return NBR_OK; }
+	int on_cmd_update_node_state(char *p, int l){ ASSERT(false); return NBR_OK; }
+	int on_cmd_get_master_list(SOCK sk, char *p, int l){ ASSERT(false); return NBR_OK; }
+	int on_cmd_broadcast(char *p, int l){ ASSERT(false); return NBR_OK; }
+	int on_cmd_unicast(address &a, char *p, int l){ ASSERT(false); return NBR_OK; }
+
+	int on_ev_finder_query_master_init(char *p, int l){ ASSERT(false); return NBR_OK; }
+	int on_ev_finder_query_servant_init(char *p, int l){ ASSERT(false); return NBR_OK; }
+	int on_ev_finder_query_poll(char *p, int l){ ASSERT(false); return NBR_OK; }
+	int on_ev_finder_reply_init(char *p, int l){ ASSERT(false); return NBR_OK; }
+	int on_ev_finder_reply_poll(char *p, int l){ ASSERT(false); return NBR_OK; }
 };
 
-class node : public session, public protocol {
+template <class S>
+class cluster_protocol_impl : public cluster_protocol {
+public:
+	typedef S impl;
+public:
+	static int recv_handler(S &, SOCK, char *, int);
+	static int event_handler(S &, int, char *, int);
+};
+
+/* cluster_finder */
+class cluster_finder_factory : public finder_factory {
+public:
+	typedef finder_factory super;
+	typedef enum {
+		ns_invalid,
+		ns_inquiry,		/* call inquiry but not replied yet */
+		ns_found,		/* at least one node reply for inquiry */
+		ns_establish,	/* connection done. */
+	} nodestate;
+protected:
+	U8 m_state, m_padd[3];
+	UTIME m_last_inquiry;
+	class node *m_primary;
+	ringbuffer	m_pkt_bkup;
+public:
+	cluster_finder_factory() : super(), m_state(ns_invalid),
+		m_last_inquiry(0LL), m_primary(NULL), m_pkt_bkup() {}
+	~cluster_finder_factory() {}
+	int init_finder(const config &cfg);
+public:
+	void setstate(nodestate s) { m_state = s; }
+	nodestate state() const { return (nodestate)m_state; }
+	bool ready() const { return state() == ns_establish; }
+	class node *primary() { return m_primary; }
+	const class node *primary() const { return m_primary; }
+	int writable() const;
+	finder_factory *finder() { return this; }
+public:
+	int send(session &s, U32 msgid, char *p, int l);
+	int unicast(const address &a, U32 msgid, char *p, int l);
+	int broadcast(U32 msgid, char *p, int l);
+	void switch_primary(node *new_node);
+};
+
+/* cluster_property */
+class cluster_property : public basic_property {
+public:
+	const U8 m_master;
+	U8 m_multiplex, m_padd[2];
+	static finder_property m_mcast;
+	char m_sym_servant_init[finder_protocol::SYM_SIZE];
+	char m_sym_master_init[finder_protocol::SYM_SIZE];
+	char m_sym_poll[finder_protocol::SYM_SIZE];
+	int m_packet_backup_size;
+public:
+	cluster_property(BASE_CONFIG_PLIST, const char *sym, int master,
+			int multiplex, int packet_backup_size);
+	virtual int	set(const char *k, const char *v);
+};
+
+class cluster_finder_factory_container {
+public:
+	static cluster_finder_factory m_finder;
+	cluster_finder_factory_container() {}
+	static cluster_finder_factory &finder() { return m_finder; }
+	static void set_new_primary(node *n) { m_finder.switch_primary(n); }
+	static int init(const cluster_property &cfg);
+	static void fin();
+};
+
+class cluster_finder :
+	public finder_session,
+	public cluster_protocol_impl<cluster_finder> {
+public:
+	typedef cluster_protocol_impl<cluster_finder> protocol;
+	typedef finder_property property;
+public:
+	cluster_finder(SOCK sk, factory *f) : finder_session(sk, f) {}
+	cluster_finder();
+	int on_inquiry(const char *sym, char *opt, int omax);
+	int on_reply(const char *sym, const char *opt, int olen);
+};
+
+/* node */
+class node : public session {
 public:
 	class nodedata {
 	public:
@@ -818,231 +941,202 @@ public:
 		nodedata() : m_n_servant(0) {}
 		int pack(char *p, int l);
 		int unpack(const char *p, int l);
-		void setdata(session::factory &f);
-		static int cmp(nodedata *a, nodedata *b) {
-			return (b->m_n_servant - a->m_n_servant);
+		void setdata(factory &f);
+		static int cmp(const nodedata &a, const nodedata &b) {
+			return (b.m_n_servant - a.m_n_servant);
 		}
 	};
-	struct nodequery {
+	struct querydata {
 		char *p;
 		int l;
-	};
-	typedef nodequery queryctx;
-	class nodefinder : public finder {
-	public:
-		typedef enum  {
-			fev_init_master_query,
-			fev_init_servant_query,
-			fev_poll_query,
-			fev_init_reply,
-			fev_poll_reply,
-		} finderevent;
-	public:
-		nodefinder(SOCK sk, finder::factory *f) : finder(sk, f) {}
-		int on_inquiry(const char *sym, char *opt, int omax);
-		int on_reply(const char *sym, const char *opt, int olen);
-		static bool check_sym(const char *sym_a, const char *sym_b);
-	};
-	class finder_mixin : public protocol {
-	public:
-		typedef enum {
-			ns_invalid,
-			ns_inquiry,		/* call inquiry but not replied yet */
-			ns_found,		/* at least one node reply for inquiry */
-			ns_establish,	/* connection done. */
-		} nodestate;
-	protected:
-		U8 m_state, m_padd[3];
-		UTIME m_last_inquiry;
-		static finder::factory *m_finder;
-		class node *m_primary;
-		ringbuffer	m_pkt_bkup;
-	public:
-		finder_mixin() : m_state(ns_invalid),
-			m_last_inquiry(0LL), m_primary(NULL), m_pkt_bkup() {}
-		~finder_mixin() {}
-		int init_finder(const config &cfg);
-	public:
-		void setstate(nodestate s) { m_state = s; }
-		nodestate state() const { return (nodestate)m_state; }
-		bool ready() const { return state() == ns_establish; }
-		node *primary() { return m_primary; }
-		const node *primary() const { return m_primary; }
-		int writable() const { return primary() ? primary()->writable() : 0; }
-		static finder::factory *finder() { return m_finder; }
-		static inline nodeevent convert(nodefinder::finderevent e);
-	public:
-		int send(session &s, U32 msgid, char *p, int l);
-		int unicast(const address &a, U32 msgid, char *p, int l);
-		int broadcast(U32 msgid, char *p, int l);
-		void switch_primary(node *new_node);
-	};
-	template <class S, class D = typename S::nodedata>
-	class factory_impl : public session::factory_impl<S>, finder_mixin {
-	public:
-		typedef session::factory_impl<S> super;
-	protected:
-		class NODE : public S {
-		public:
-			class data : public D {
-			public:
-				data() : D() {}
-				int pack(char *p, int l) const { return D::pack(p, l); }
-				int unpack(const char *p, int l) const { return D::unpack(p, l); }
-			} m_data;
-		public:
-			NODE() : m_data() {}
-			data &get() { return m_data; }
-			D *get() { return (D *)&m_data; }
-			void setdata_from(session::factory &f) { D::setdata(f); }
-			static int compare(void *a, void *b) {
-				return D::cmp(((NODE *)a)->get(), ((NODE *)b)->get());
-			}
-			static void sort(NODE **list, int n_list) {
-				::qsort(list, sizeof(NODE *), n_list, compare);
-			}
-		};
-		typedef typename super::sspool sspool;
-		typedef typename sspool::iterator iterator;
-	public:
-		factory_impl() : super(), finder_mixin() {}
-		~factory_impl() { fin(); }
-		sspool &pool() { return super::pool(); }
-		inline bool master() const;
-	public: /* operation */
-		int update_nodestate(const address &a, const D &p);
-	public:/* finder related */
-		int on_finder_reply_init(char *p, int l);
-		int on_finder_reply_poll(char *p, int l);
-	public:/* callbacks */
-		int init(const config &cfg);
-		void fin();
-		void poll(UTIME ut);
-		static int on_open(SOCK);
-		static int on_close(SOCK, int);
-		static int on_recv(SOCK, char*, int);
-		static int on_event(SOCK, char*, int);
-		static void on_mgr(SOCKMGR, int, char*, int);
-		static int on_connect(SOCK, void *);
-	};
-	class property : public config {
-	public:
-		const U8 m_master;
-		U8 m_multiplex, m_padd[2];
-		static finder::property m_mcast;
-		char m_sym_servant_init[finder::SYM_SIZE];
-		char m_sym_master_init[finder::SYM_SIZE];
-		char m_sym_poll[finder::SYM_SIZE];
-		int m_packet_backup_size;
-	public:
-		property(BASE_CONFIG_PLIST, const char *sym, int master,
-				int multiplex, int packet_backup_size);
-		virtual int	set(const char *k, const char *v);
 	};
 public:
 	node() : session() {}
 	~node() {}
 };
 
-/* sfc::cluster::servantsession */
-class servantsession : public session {
+/* cluster_factory */
+template <class S, class P, class D = typename S::nodedata>
+class cluster_factory_impl : public factory_impl<S>,
+	public P, public cluster_finder_factory_container {
 public:
-	template <class S>
-	class factory_impl : public session::factory_impl<S>, node::protocol {
-	protected:
-		session::factory *m_mnode;
+	typedef factory_impl<S> super;
+	typedef P protocol;
+protected:
+	class NODE : public S {
 	public:
-		typedef session::factory_impl<S> super;
+		class data : public D {
+		public:
+			data() : D() {}
+			void setdata(factory &f) { D::setdata(f); }
+			int pack(char *p, int l) const { return D::pack(p, l); }
+			int unpack(const char *p, int l) { return D::unpack(p, l); }
+		} m_data;
 	public:
-		factory_impl(session::factory *f) : super(), m_mnode(f) {}
-		~factory_impl() {}
-		session::factory *master_node() { return m_mnode; }
-		int init(const config &cfg);
-		static int on_recv(SOCK, char*, int);
+		NODE() : m_data() {}
+		data &get() { return m_data; }
+		const data &get() const { return m_data; }
+		void setdata_from(factory &f) {m_data.setdata(f); }
+		static int compare(const void *a, const void *b) {
+			return D::cmp(((const NODE *)a)->get(), ((const NODE *)b)->get());
+		}
+		static void sort(NODE **list, int n_list) {
+			::qsort(list, sizeof(NODE *), n_list, compare);
+		}
 	};
+	typedef typename super::sspool sspool;
+	typedef typename sspool::iterator iterator;
 public:
-	servantsession() : session() {}
-	~servantsession() {}
+	cluster_factory_impl() : super(), P() {}
+	~cluster_factory_impl() { fin(); }
+	sspool &pool() { return super::pool(); }
+	NODE *from_iter(iterator &i) { return (NODE *)&(*i); }
+	inline bool master() const;
+	cluster_finder_factory &finder() {
+		return cluster_finder_factory_container::finder(); }
+	void set_new_primary(NODE *n) {
+		return cluster_finder_factory_container::set_new_primary(n); }
+public: /* operation */
+	int update_nodestate(const address &a, const D &p);
+public:/* finder related */
+	int on_ev_finder_reply_init(char *p, int l);
+	int on_ev_finder_reply_poll(char *p, int l);
+public:/* callbacks */
+	int init(const config &cfg);
+	void fin();
+	void poll(UTIME ut);
+	static int on_open(SOCK);
+	static int on_close(SOCK, int);
+	static int on_recv(SOCK, char*, int);
+	static int on_event(SOCK, char*, int);
+	static void on_mgr(SOCKMGR, int, char*, int);
+	static int on_connect(SOCK, void *);
 };
 
-/* sfc::cluster::mastersession */
-class mastersession : public session {
+/* servant_factory_impl */
+template <class S>
+class servant_session_factory_impl :
+	public factory_impl<S>,
+	public cluster_protocol_impl<servant_session_factory_impl<S> > {
+protected:
+	factory *m_mnode;
 public:
-	template <class S>
-	class factory_impl : public session::factory_impl<S>, node::protocol {
-	protected:
-		session::factory *m_mnode, *m_svnt;
-	public:
-		typedef session::factory_impl<S> super;
-	public:
-		factory_impl(session::factory *mnode, session::factory *svnt) :
-			super(), m_mnode(mnode), m_svnt(svnt) {}
-		~factory_impl() {}
-		session::factory *master_node() { return m_mnode; }
-		session::factory *servant_session() { return m_svnt; }
-		int init(const config &cfg);
-		static int on_recv(SOCK, char*, int);
-	};
+	typedef factory_impl<S> super;
 public:
-	mastersession() : session() {}
-	~mastersession() {}
+	servant_session_factory_impl(factory *f) : super(), m_mnode(f) {}
+	~servant_session_factory_impl() {}
+	factory *master_node() { return m_mnode; }
+	int init(const config &cfg);
+	static int on_recv(SOCK, char*, int);
+	int on_cmd_update_node_state(char *p, int l);
+	int on_cmd_get_master_list(SOCK sk, char *p, int l);
+	int on_cmd_broadcast(char *p, int l);
+	int on_cmd_unicast(address &a, char *p, int l);
 };
 
-/* sfc::cluster::masternode */
-class masternode : public node {
+/* master_session_factory_impl */
+template <class S>
+class master_session_factory_impl :
+	public factory_impl<S>,
+	public cluster_protocol_impl<master_session_factory_impl<S> > {
+protected:
+	factory *m_mnode, *m_svnt;
 public:
-	template <class M, class S, class N>
-	class factory_impl : public node::factory_impl<N> {
-	public:
-		typedef node::factory_impl<N> super;
-		typedef typename super::sspool sspool;
-		mastersession::factory_impl<M> m_fcmstr;	/* master factory */
-		servantsession::factory_impl<S> m_fcsvnt;	/* servant factory */
-	public:
-		factory_impl() : super(), m_fcmstr(this, &m_fcsvnt), m_fcsvnt(this) {}
-		~factory_impl() {}
-		sspool pool() { return super::pool(); }
-		int init(const config &cfg);
-		void fin();
-		void poll(UTIME ut);
-		static void on_mgr(SOCKMGR, int, char*, int);
-	public:/* finder related */
-		int on_finder_query_init(bool is_master, char *p, int l);
-		int on_finder_query_poll(char *p, int l);
-	};
-	template <class M, class S>
-	class property : public node::property {
-	public:
-		typedef typename M::property MC;
-		typedef typename S::property SC;
-	protected:
-		U16	m_master_port, m_servant_port;
-		MC m_master_conf;	/* master config */
-		SC m_servant_conf;	/* servant config */
-	public:
-		property(BASE_CONFIG_PLIST, const char *sym,
-			int multiplex, int master_port, int servant_port,
-			const MC &master_conf, const SC &servant_conf);
-		virtual int	set(const char *k, const char *v);
-	};
+	typedef factory_impl<S> super;
 public:
-	masternode() : node() {}
-	~masternode() {}
+	master_session_factory_impl(factory *mnode, factory *svnt) :
+		super(), m_mnode(mnode), m_svnt(svnt) {}
+	~master_session_factory_impl() {}
+	factory *master_node() { return m_mnode; }
+	factory *servant_session() { return m_svnt; }
+	int init(const config &cfg);
+	static int on_recv(SOCK, char*, int);
+	int on_cmd_update_node_state(char *p, int l);
+//	int on_cmd_get_master_list(SOCK sk, char *p, int l);
+	int on_cmd_broadcast(char *p, int l);
+	int on_cmd_unicast(address &a, char *p, int l);
 };
 
-}
-using namespace cluster;
-#include "session.h"
+/* servant_cluster_property */
+class servant_cluster_property : public cluster_property {
+public:
+	servant_cluster_property(BASE_CONFIG_PLIST, const char *sym,
+		int multiplex, int packet_bkup_size) :
+		cluster_property(BASE_CONFIG_CALL, sym, 0, multiplex, packet_bkup_size) {}
+};
+
+/* servant_cluster_factory_impl */
+template <class SN>
+class servant_cluster_factory_impl :
+	public cluster_factory_impl<SN,
+		cluster_protocol_impl<servant_cluster_factory_impl<SN> > > {
+public:
+	typedef cluster_factory_impl<SN,
+		cluster_protocol_impl<servant_cluster_factory_impl<SN> > > super;
+	typedef typename super::sspool sspool;
+	typedef servant_cluster_property property;
+public:
+	servant_cluster_factory_impl() : super() {}
+	~servant_cluster_factory_impl() {}
+};
+
+/* master_cluster_property */
+template <class MF, class SF>
+class master_cluster_property : public cluster_property {
+public:
+	typedef typename MF::property MC;
+	typedef typename SF::property SC;
+public:
+	U16	m_master_port, m_servant_port;
+	MC m_master_conf;	/* master config */
+	SC m_servant_conf;	/* servant config */
+public:
+	master_cluster_property(BASE_CONFIG_PLIST, const char *sym,
+		int multiplex, int packet_bkup_size,
+		int master_port, int servant_port,
+		const MC &master_conf, const SC &servant_conf);
+	virtual int	set(const char *k, const char *v);
+};
+
+/* master_cluster_factory_impl */
+template <class M, class S, class N>
+class master_cluster_factory_impl :
+	public cluster_factory_impl<N,
+		cluster_protocol_impl<master_cluster_factory_impl<M,S,N> > > {
+public:
+	typedef cluster_factory_impl<N,
+		cluster_protocol_impl<master_cluster_factory_impl<M,S,N> > > super;
+	typedef typename super::sspool sspool;
+	typedef master_cluster_property<M,S> property;
+	master_session_factory_impl<M> m_fcmstr;	/* master factory */
+	servant_session_factory_impl<S> m_fcsvnt;	/* servant factory */
+public:
+	master_cluster_factory_impl() : super(),
+		m_fcmstr(this, &m_fcsvnt), m_fcsvnt(this) {}
+	~master_cluster_factory_impl() {}
+	sspool &pool() { return super::pool(); }
+	int init(const config &cfg);
+	void fin();
+	void poll(UTIME ut);
+	static void on_mgr(SOCKMGR, int, char*, int);
+public:/* finder related */
+	int on_finder_query_init(bool is_master, char *p, int l);
+	int on_finder_query_poll(char *p, int l);
+};
+#include "cluster.h"
+}	//namespace cluster
 
 
 
 /*-------------------------------------------------------------*/
 /* sfc::daemon												   */
 /*-------------------------------------------------------------*/
+namespace app {
+using namespace base;
 class daemon : public kernel {
 protected:
-	typedef map<session::factory*, char[config::MAX_SESSION_NAME]>	smap;
-	typedef map<config*, char[config::MAX_SESSION_NAME]>			cmap;
+	typedef map<factory*, char[config::MAX_SESSION_NAME]>	smap;
+	typedef map<config*, char[config::MAX_SESSION_NAME]>	cmap;
 	smap 		m_sl;
 	cmap		m_cl;
 	static U32	m_sigflag;
@@ -1074,13 +1168,13 @@ public:
 	}
 	static void sigfunc(int signo);
 public:
-	virtual int					on_signal(int signo);
-	virtual int					boot(int argc, char *argv[]);
-	virtual void				shutdown() {}
-	virtual int				 	initlib(CONFIG &c);
-	virtual int					create_config(config *cl[], int size);
-	virtual session::factory 	*create_factory(const char *sname);
+	virtual int		on_signal(int signo);
+	virtual int		boot(int argc, char *argv[]);
+	virtual void	shutdown() {}
+	virtual int		initlib(CONFIG &c);
+	virtual int		create_config(config *cl[], int size);
+	virtual factory *create_factory(const char *sname);
 };
-
+}	//namespace app
 }	//namespace sfc
 #endif	//__SFC_H__

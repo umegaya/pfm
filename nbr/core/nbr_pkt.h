@@ -53,7 +53,7 @@ static inline U64 htonll(U64 n) { return (((U64)htonl(n)) << 32) + htonl(n >> 32
 /* unpack support */
 #define	POP_START(data, len)	const char *_data=(data); int _len=(len); int _ofs=0;
 #define POP_LEN()				_ofs
-#define	POP_BUF()				_data
+#define	POP_BUF()				((char *)_data)
 #define POP_REMAIN()			(_len - _ofs)
 #define POP_SKIP(n)				(_ofs += n)
 #define POP_HAS_REMAIN()		(_len > _ofs)

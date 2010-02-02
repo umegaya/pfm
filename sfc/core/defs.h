@@ -64,8 +64,8 @@
 #define POP_ADDR(a)					\
 {									\
 	int __r;						\
-	const char *__p = a;			\
-	POP_STR2(p, address::SIZE, __r);\
+	char *__p = a.a();				\
+	POP_STR2(__p, (int)address::SIZE, __r);\
 	a.setlen(__r);					\
 }
 #define PUSH_ADDR(a) PUSH_STR((const char *)a)

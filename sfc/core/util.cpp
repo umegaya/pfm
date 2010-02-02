@@ -22,6 +22,7 @@
 #include "str.h"
 
 using namespace sfc;
+using namespace sfc::util;
 
 /*-------------------------------------------------------------*/
 /* sfc::util::address										   */
@@ -235,7 +236,8 @@ config::sender_from(const char *str)
 /*-------------------------------------------------------------*/
 /* sfc::finder::property									   */
 /*-------------------------------------------------------------*/
-finder::property::property(BASE_CONFIG_PLIST,
+using namespace finder;
+finder_property::finder_property(BASE_CONFIG_PLIST,
 	const char *mcastgrp, U16 mcastport, int ttl) :
 	config(BASE_CONFIG_CALL), m_mcastport(mcastport)
 {
@@ -244,14 +246,5 @@ finder::property::property(BASE_CONFIG_PLIST,
 		mcastgrp, sizeof(m_mcastaddr));
 	m_mcastconf.mcast_addr = m_mcastaddr;
 	m_mcastconf.ttl = ttl;
-}
-
-
-
-/*-------------------------------------------------------------*/
-/* sfc::node::nodefinder									   */
-/*-------------------------------------------------------------*/
-bool node::nodefinder::check_sym(const char *sym_a, const char *sym_b) {
-	return 0 == nbr_str_cmp(sym_a, SYM_SIZE, sym_b, SYM_SIZE);
 }
 

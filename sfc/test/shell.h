@@ -22,12 +22,13 @@
 #include "sfc.hpp"
 
 namespace sfc {
-
+using namespace app;
+using namespace cluster;
 class shelld : public daemon {
 public:
-	typedef session servant;
-	typedef session master;
-	class protocol : public session::textprotocol {
+	typedef node servant;
+	typedef node master;
+	class protocol : public textprotocol {
 	public:
 		static const char cmd_list[];
 		static const char cmd_copyinit[];
@@ -75,8 +76,9 @@ public:
 	protected:
 		char	m_cmd[256];
 	public:
-		typedef shellclient::factory_impl<shellclient,
+		typedef factory_impl<shellclient,
 					arraypool<shellclient> > factory;
+		typedef config property;
 	public:
 		shellclient() : servant() { m_cmd[0] = '\0'; }
 		~shellclient() {}
@@ -104,7 +106,8 @@ public:
 	protected:
 		exec_ctx m_ctx;
 	public:
-		typedef shellserver::factory_impl<shellserver> factory;
+		typedef factory_impl<shellserver> factory;
+		typedef config property;
 	public:
 		shellserver() : master() {}
 		~shellserver() {}
@@ -118,22 +121,27 @@ public:
 		void recv_cmd_exec(U32 msgid, const char *cmd);
 		pollret poll(UTIME ut, bool from_worker);
 	};
+
+	class shell_connector : public node, public textprotocol {
+	public:
+		shell_connector() : node() {}
+	};
+	typedef master_cluster_factory_impl<shellserver, shellserver, node> master_shell;
+	typedef servant_cluster_factory_impl<shellserver> servant_shell;
 protected:
 	int m_server;
 	static THPOOL m_job;
 public:
 	shelld() : daemon(), m_server(0) {}
-	session::factory 	*create_factory(const char *sname);
-	int					create_config(config* cl[], int size);
-	int					boot(int argc, char *argv[]);
-	int				 	initlib(CONFIG &c);
-	void				shutdown();
-	static int			addjob(shellserver::exec_ctx *ctx);
+	factory 	*create_factory(const char *sname);
+	int			create_config(config* cl[], int size);
+	int			boot(int argc, char *argv[]);
+	int			initlib(CONFIG &c);
+	void		shutdown();
+	static int	addjob(shellserver::exec_ctx *ctx);
 protected:
-	static void			*popen_job(void *ctx);
+	static void	*popen_job(void *ctx);
 };
-
-}
-
+}	//namespace sfc
 
 #endif//__SHELL_H__

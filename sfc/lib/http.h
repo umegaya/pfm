@@ -22,11 +22,31 @@
 #include "sfc.hpp"
 
 namespace sfc {
+namespace http {
+using namespace base;
 #include "httprc.h"
 /*-------------------------------------------------------------*/
-/* sfc::httpsession											   */
+/* http_session												   */
 /*-------------------------------------------------------------*/
-class httpsession : public session, public session::binprotocol
+template <class S>
+class http_factory_impl : public factory_impl< S, arraypool<S> > {
+protected:
+	ARRAY m_fsm_a;
+public:
+	typedef factory_impl<S, arraypool<S> > super;
+public:
+	http_factory_impl() : super(), m_fsm_a() {}
+	~http_factory_impl() {}
+	int init(const config &cfg);
+	void fin();
+	inline void attach_fsm(class httpsession &s);
+	ARRAY allocator() { return m_fsm_a; }
+	static int on_open(SOCK sk);
+	static int on_connect(SOCK sk, void *p);
+	static int on_recv(SOCK sk, char *p, int l);
+};
+
+class httpsession : public session, public binprotocol
 {
 public:
 	enum method {
@@ -119,26 +139,6 @@ public:
 	} *m_fsm;
 	typedef fsm request, response;
 public:
-	template <class S>
-	class factory_impl : public session::factory_impl< S, arraypool<S> > {
-	protected:
-		ARRAY m_fsm_a;
-	public:
-		typedef session::factory_impl<S, arraypool<S> > super;
-	public:
-		factory_impl() : super(), m_fsm_a() {}
-		~factory_impl() {}
-		int init(const config &cfg);
-		void fin();
-		void attach_fsm(httpsession &s) {
-			if (!s.has_fsm()) { s.set_fsm(nbr_array_alloc(m_fsm_a)); }
-		}
-		ARRAY allocator() { return m_fsm_a; }
-		static int on_open(SOCK sk);
-		static int on_connect(SOCK sk, void *p);
-		static int on_recv(SOCK sk, char *p, int l);
-	};
-public:
 	httpsession() : session() {}
 	~httpsession() {}
 	class fsm &fsm() { return *m_fsm; }
@@ -170,10 +170,10 @@ protected:
 };
 
 /*-------------------------------------------------------------*/
-/* sfc::httpsession::factory											   */
+/* http_factory_impl										   */
 /*-------------------------------------------------------------*/
 template <class S> int
-httpsession::factory_impl<S>::init(const config &cfg)
+http_factory_impl<S>::init(const config &cfg)
 {
 	if (!super::init_pool(cfg)) {
 		return NBR_ESHORT;
@@ -183,18 +183,18 @@ httpsession::factory_impl<S>::init(const config &cfg)
 			cfg.m_option))) {
 		return NBR_ESHORT;
 	}
-	return session::factory::init(cfg,
-			httpsession::factory_impl<S>::on_open,
+	return factory::init(cfg,
+			http_factory_impl<S>::on_open,
 			super::on_close,
-			httpsession::factory_impl<S>::on_recv,
+			http_factory_impl<S>::on_recv,
 			super::on_event,
 			NULL, /* use default */
-			httpsession::factory_impl<S>::on_connect,
+			http_factory_impl<S>::on_connect,
 			super::on_poll);
 }
 
 template <class S> void
-httpsession::factory_impl<S>::fin()
+http_factory_impl<S>::fin()
 {
 	if (m_fsm_a) {
 		nbr_array_destroy(m_fsm_a);
@@ -203,7 +203,7 @@ httpsession::factory_impl<S>::fin()
 }
 
 template <class S> int
-httpsession::factory_impl<S>::on_recv(SOCK sk, char *p, int l)
+http_factory_impl<S>::on_recv(SOCK sk, char *p, int l)
 {
 	S **s = (S**)nbr_sock_get_data(sk, NULL);
 	if (s == NULL) {
@@ -224,11 +224,11 @@ httpsession::factory_impl<S>::on_recv(SOCK sk, char *p, int l)
 }
 
 template <class S> int
-httpsession::factory_impl<S>::on_connect(SOCK sk, void *p)
+http_factory_impl<S>::on_connect(SOCK sk, void *p)
 {
 	S **s = (S**)nbr_sock_get_data(sk, NULL);
-	httpsession::factory_impl<S> *f =
-		(httpsession::factory_impl<S> *)nbr_sockmgr_get_data(nbr_sock_get_mgr(sk));
+	http_factory_impl<S> *f =
+		(http_factory_impl<S> *)nbr_sockmgr_get_data(nbr_sock_get_mgr(sk));
 	if (s == NULL || f == NULL) {
 		ASSERT(false);
 		return NBR_ENOTFOUND;
@@ -247,7 +247,7 @@ httpsession::factory_impl<S>::on_connect(SOCK sk, void *p)
 
 
 template <class S> int
-httpsession::factory_impl<S>::on_open(SOCK sk)
+http_factory_impl<S>::on_open(SOCK sk)
 {
 	S **s = (S**)nbr_sock_get_data(sk, NULL), *obj;
 	if (s == NULL) {
@@ -269,6 +269,12 @@ httpsession::factory_impl<S>::on_open(SOCK sk)
 	return NBR_OK;
 }
 
+template <class S> void
+http_factory_impl<S>::attach_fsm(httpsession &s) {
+	if (!s.has_fsm()) { s.set_fsm(nbr_array_alloc(m_fsm_a)); }
 }
+
+}	//namespace http
+}	//namespace sfc
 
 #endif//__HTTP_H__

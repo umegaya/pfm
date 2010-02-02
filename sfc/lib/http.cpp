@@ -24,6 +24,8 @@
 #include "str.h"
 
 using namespace sfc;
+using namespace sfc::base;
+using namespace sfc::http;
 
 /*-------------------------------------------------------------*/
 /* sfc::httpsession::fsm									   */

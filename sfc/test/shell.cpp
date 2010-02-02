@@ -26,6 +26,8 @@
 #endif
 
 using namespace sfc;
+using namespace sfc::app;
+using namespace sfc::cluster;
 
 /*-------------------------------------------------------------*/
 /* shelld::protocol											   */
@@ -347,23 +349,16 @@ void shelld::shellserver::recv_cmd_exec(U32 msgid, const char *cmd)
 /* shelld													   */
 /*-------------------------------------------------------------*/
 THPOOL shelld::m_job = NULL;
-session::factory *
+factory *
 shelld::create_factory(const char *sname)
 {
 	TRACE("create_factory: sname=<%s>\n", sname);
 	if (config::cmp(sname, "sv")) {
-#if defined(_CLUSTER_)
-		return new mastersession::factory_impl<shellserver>;
-#else
-		return new shellserver::factory;
-#endif
+		return new master_cluster_factory_impl<shellserver, shellserver, shell_connector>;
 	}
 	if (config::cmp(sname, "cl")) {
-#if defined(_CLUSTER_)
-		return new servantsession::factory_impl<shellserver>;
-#else
-		return new shellclient::factory;
-#endif
+		/* this shellserver means, shellserver feature + cluster node */
+		return new servant_cluster_factory_impl<shellserver>;
 	}
 	return NULL;
 }
@@ -374,37 +369,69 @@ shelld::create_config(config *cl[], int size)
 	if (size <= 1) {
 		return NBR_ESHORT;
 	}
-	cl[0] = new shellclient::property (
-			"cl",
-			"localhost:12345",
-			5,	/* 5 connection expandable */
-			60, opt_expandable,
-			1025 * 1024, 1025 * 1024,
-			2, 10,	/* no ping */
-			-1,0,	/* no query buffer */
-			"TCP",
-			1 * 1000 * 1000/* 1msec task span */,
-			10/* after 10ms, again try to connect */,
-			kernel::INFO,
-			nbr_sock_rparser_text,
-			nbr_sock_send_text,
-			config::cfg_flag_not_set
+	cl[1] = new master_shell::property (
+				"sv",
+				"localhost:12345",
+				5,	/* 5 connection expandable */
+				60, opt_expandable,
+				256 * 1024, 256 * 1024,
+				2, 10,	/* no ping */
+				-1,0,	/* no query buffer */
+				"TCP",
+				1 * 1000 * 1000/* 1msec task span */,
+				10/* after 10ms, again try to connect */,
+				kernel::INFO,
+				nbr_sock_rparser_text,
+				nbr_sock_send_text,
+				config::cfg_flag_not_set,
+				"shell", 2,	-1, /* finder sym is 'shell' and multiplexity = 2
+								 packet backup size is auto decided */
+				12345, 54321,	/* master port = 12345, servant = 54321 */
+				config("for_mstr",	/* server for master:config */
+						"localhost:12345",
+						5,	/* 5 connection expandable */
+						60, opt_expandable,
+						256 * 1024, 256 * 1024,
+						2, 10,	/* no ping */
+						-1,0,	/* no query buffer */
+						"TCP",
+						1 * 1000 * 1000/* 1msec task span */,
+						10/* after 10ms, again try to connect */,
+						kernel::INFO,
+						nbr_sock_rparser_text,
+						nbr_sock_send_text,
+						config::cfg_flag_not_set),
+				config("for_svnt",	/* server for servant:config */
+						"localhost:12345",
+						5,	/* 5 connection expandable */
+						60, opt_expandable,
+						256 * 1024, 256 * 1024,
+						2, 10,	/* no ping */
+						-1,0,	/* no query buffer */
+						"TCP",
+						1 * 1000 * 1000/* 1msec task span */,
+						10/* after 10ms, again try to connect */,
+						kernel::INFO,
+						nbr_sock_rparser_text,
+						nbr_sock_send_text,
+						config::cfg_flag_not_set)
 			);
-	cl[1] = new shellserver::property (
-			"sv",
-			"0.0.0.0:12345",
-			10,	/* 10 connection fix */
-			60, opt_not_set,
-			1025 * 1024, 1025 * 1024,
-			2, 10,	/* no ping */
-			-1,0,	/* no query buffer */
-			"TCP",
-			1 * 1000 * 1000/* 10msec task span */,
-			0/* never wait ld recovery */,
-			kernel::INFO,
-			nbr_sock_rparser_text,
-			nbr_sock_send_text,
-			config::cfg_flag_server
+	cl[0] = new servant_shell::property (
+				"cl",
+				"0.0.0.0:12345",
+				10,	/* 10 connection fix */
+				60, opt_not_set,
+				256 * 1024, 256 * 1024,
+				2, 10,	/* no ping */
+				-1,0,	/* no query buffer */
+				"TCP",
+				1 * 1000 * 1000/* 10msec task span */,
+				0/* never wait ld recovery */,
+				kernel::INFO,
+				nbr_sock_rparser_text,
+				nbr_sock_send_text,
+				config::cfg_flag_server,
+				"shell", 2,	-1 /* finder sym is 'shell' and multiplexity = 2 */
 			);
 	return 2;
 }

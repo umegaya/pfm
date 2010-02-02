@@ -950,6 +950,7 @@ sock_process_job(THREAD thrd)
 				nbr_mutex_unlock(nbr_thread_signal_mutex(thrd));
 			}
 			nbr_thread_setcancelstate(0);	/* non-cancelable */
+			ASSERT(j->sleep == 0);
 		}
 	}
 	return thrd;
@@ -1347,6 +1348,16 @@ nbr_sockmgr_event(SOCKMGR s, int type, char *p, int len)
 	THREAD_UNLOCK(g_sock.evlk);
 error:
 	return r;
+}
+
+NBR_API int
+nbr_sockmgr_get_stat(SOCKMGR s, SKMSTAT *st)
+{
+	skmdata_t *skm = s;
+	st->n_connection = nbr_array_use(skm->skd_a);
+	st->recv_sec = st->send_sec = 0;
+	st->total_recv = st->total_send = 0;
+	return NBR_OK;
 }
 
 NBR_API SOCKMGR
