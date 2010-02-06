@@ -49,10 +49,8 @@ int shelld::protocol::sendping(class session &s, UTIME ut)
 	if (!debug_big_data) {
 		debug_big_data = (char *)nbr_mem_alloc(debug_big_datasize + 1);
 		memset(debug_big_data, 'a', debug_big_datasize);
-		debug_big_data[1024] = '\0';
+		debug_big_data[debug_big_datasize] = '\0';
 	}
-	/* disabled ping? */
-	if (s.cfg().m_ping_timeo <= 0) { return NBR_OK; }
 	char work[64 + debug_big_datasize + 1];
 	PUSH_TEXT_START(work, cmd_ping);
 	if (s.cfg().client()) {
@@ -60,17 +58,16 @@ int shelld::protocol::sendping(class session &s, UTIME ut)
 	}
 	PUSH_TEXT_BIGNUM(ut);
 	PUSH_TEXT_STR(debug_big_data);
-#if 1//defined(_DEBUG)
-	s.log(kernel::INFO, "sendping: at %llu\n", ut);
+#if defined(_DEBUG)
+	//s.log(kernel::INFO, "sendping: at %llu\n", ut);
 #endif
 	return s.send(work, PUSH_TEXT_LEN());
 }
 
 int shelld::protocol::recvping(class session &s, char *p, int l)
 {
-	if (s.cfg().m_ping_timeo <= 0) { return NBR_OK; }
 	if (*p != '0') {
-		return NBR_OK; /* no ping */
+		return no_ping; /* no ping */
 	}
 	/* disabled ping? */
 	char cmd[16 + 1];
@@ -80,11 +77,6 @@ int shelld::protocol::recvping(class session &s, char *p, int l)
 	POP_TEXT_STR(cmd, sizeof(cmd));
 	POP_TEXT_BIGNUM(ut, U64);
 	POP_TEXT_STR(dbd, sizeof(dbd));
-	TRACE("first 16 char of dbd is :");
-	for (int i = 0; i < 16; i++) {
-		TRACE("%c", dbd[i]);
-	}
-	TRACE("\n");
 	if (s.cfg().client()) {
 		U64 now = nbr_time();
 		s.update_latency((U32)(now - ut));
@@ -96,6 +88,9 @@ int shelld::protocol::recvping(class session &s, char *p, int l)
 	else {
 		sendping(s, ut);
 	}
+#if defined(_DEBUG) && 0
+	if ((nbr_rand32() % 3) == 0) { return NBR_EINVAL; }
+#endif
 	return NBR_OK;
 }
 
@@ -354,11 +349,11 @@ shelld::create_factory(const char *sname)
 {
 	TRACE("create_factory: sname=<%s>\n", sname);
 	if (config::cmp(sname, "sv")) {
-		return new master_cluster_factory_impl<shellserver, shellserver, shell_connector>;
+		return new master_cluster_factory_impl<shell_connector, shellserver, shell_connector>;
 	}
 	if (config::cmp(sname, "cl")) {
 		/* this shellserver means, shellserver feature + cluster node */
-		return new servant_cluster_factory_impl<shellserver>;
+		return new servant_cluster_factory_impl<shellserver, shell_connector>;
 	}
 	return NULL;
 }
@@ -375,9 +370,9 @@ shelld::create_config(config *cl[], int size)
 				5,	/* 5 connection expandable */
 				60, opt_expandable,
 				256 * 1024, 256 * 1024,
-				2, 10,	/* no ping */
-				-1,0,	/* no query buffer */
-				"TCP",
+				10 * 1000 * 1000, 2 * 1000 * 1000,	/* 10sec timeout, 2sec ping intv */
+				1000,0,	/* 1000 query buffer, size is auto generated */
+				"TCP", "eth0",
 				1 * 1000 * 1000/* 1msec task span */,
 				10/* after 10ms, again try to connect */,
 				kernel::INFO,
@@ -388,50 +383,64 @@ shelld::create_config(config *cl[], int size)
 								 packet backup size is auto decided */
 				12345, 54321,	/* master port = 12345, servant = 54321 */
 				config("for_mstr",	/* server for master:config */
-						"localhost:12345",
+						"0.0.0.0:12345",
 						5,	/* 5 connection expandable */
 						60, opt_expandable,
 						256 * 1024, 256 * 1024,
-						2, 10,	/* no ping */
+						10 * 1000 * 1000, 0,	/* 10sec timeout, no ping sent */
 						-1,0,	/* no query buffer */
-						"TCP",
+						"TCP", "eth0",
 						1 * 1000 * 1000/* 1msec task span */,
 						10/* after 10ms, again try to connect */,
 						kernel::INFO,
 						nbr_sock_rparser_text,
 						nbr_sock_send_text,
-						config::cfg_flag_not_set),
+						config::cfg_flag_server),
 				config("for_svnt",	/* server for servant:config */
-						"localhost:12345",
+						"0.0.0.0:54321",
 						5,	/* 5 connection expandable */
 						60, opt_expandable,
 						256 * 1024, 256 * 1024,
-						2, 10,	/* no ping */
+						10 * 1000 * 1000, 0,	/* 10sec timeout, no ping sent */
 						-1,0,	/* no query buffer */
-						"TCP",
+						"TCP", "eth0",
 						1 * 1000 * 1000/* 1msec task span */,
 						10/* after 10ms, again try to connect */,
 						kernel::INFO,
 						nbr_sock_rparser_text,
 						nbr_sock_send_text,
-						config::cfg_flag_not_set)
+						config::cfg_flag_server)
 			);
 	cl[0] = new servant_shell::property (
 				"cl",
-				"0.0.0.0:12345",
+				"localhost:12345",
 				10,	/* 10 connection fix */
 				60, opt_not_set,
 				256 * 1024, 256 * 1024,
-				2, 10,	/* no ping */
-				-1,0,	/* no query buffer */
-				"TCP",
+				10 * 1000 * 1000, 2 * 1000 * 1000,	/* 10sec timeout, 2sec ping intv */
+				1000,0,	/* 1000 query buffer,size is auto generated */
+				"TCP", "eth0",
 				1 * 1000 * 1000/* 10msec task span */,
 				0/* never wait ld recovery */,
 				kernel::INFO,
 				nbr_sock_rparser_text,
 				nbr_sock_send_text,
-				config::cfg_flag_server,
-				"shell", 2,	-1 /* finder sym is 'shell' and multiplexity = 2 */
+				config::cfg_flag_not_set,
+				"shell", 2,	-1 /* finder sym is 'shell' and multiplexity = 2 */,
+				config("for_client",	/* server for client:config */
+						"0.0.0.0:23456",
+						5,	/* 5 connection expandable */
+						60, opt_expandable,
+						256 * 1024, 256 * 1024,
+						10 * 1000 * 1000, 0,	/* 10sec timeout, no ping sent */
+						-1,0,	/* no query buffer */
+						"TCP", "eth0",
+						1 * 1000 * 1000/* 1msec task span */,
+						10/* after 10ms, again try to connect */,
+						kernel::INFO,
+						nbr_sock_rparser_text,
+						nbr_sock_send_text,
+						config::cfg_flag_server)
 			);
 	return 2;
 }
@@ -499,42 +508,17 @@ end:
 int
 shelld::boot(int argc, char *argv[])
 {
-	shellserver::factory *sv = find_factory<shellserver::factory>("sv");
-	shellclient::factory *cl = find_factory<shellclient::factory>("cl");
-	if (sv) {
-		if (cl) {
-			log(ERROR, "client should be disabled\n");
-			return NBR_ECONFIGURE;
+	if (!m_job) {
+		if (!(m_job = nbr_thpool_create(3))) {
+			log(ERROR, "cannot create thread pool\n");
+			return NBR_EPTHREAD;
 		}
-		if (!m_job) {
-			if (!(m_job = nbr_thpool_create(3))) {
-				log(ERROR, "cannot create thread pool\n");
-				return NBR_EPTHREAD;
-			}
-			int r;
-			if ((r = nbr_thpool_init_jobqueue(m_job, 30)) < 0) {
-				log(ERROR, "cannot init jobqueue (%d)\n", r);
-				return r;
-			}
+		int r;
+		if ((r = nbr_thpool_init_jobqueue(m_job, 30)) < 0) {
+			log(ERROR, "cannot init jobqueue (%d)\n", r);
+			return r;
 		}
-		return NBR_OK;
 	}
-	if (!cl) {
-		log(ERROR, "client should be activated\n");
-		return NBR_ECONFIGURE;
-	}
-	shellclient *c = cl->pool().alloc();
-	if (!c) {
-		log(ERROR, "cannot allocate\n");
-		return NBR_EEXPIRE;
-	}
-	int r;
-	c->setcmd("ls");
-	if ((r = cl->connect(c)) < 0) {
-		log(ERROR, "fail to connect (%d)\n", r);
-		return r;
-	}
-	log(INFO, "connecting... %s\n", cl->cfg().m_host);
 	return NBR_OK;
 }
 

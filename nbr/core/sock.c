@@ -393,7 +393,7 @@ ccb_bin16(char *out, char *data, int len)
 {
 	ASSERT(len <= 0xFFFF && len > 2);
 	/* len contains additional bytes for length */
-	SET_16(out, len);
+	SET_16(out, len - 2);
 	nbr_mem_copy(out + 2, data, len - 2);
 }
 
@@ -402,7 +402,7 @@ ccb_bin32(char *out, char *data, int len)
 {
 	ASSERT(len > 4);
 	/* len contains additional bytes for length */
-	SET_32(out, len);
+	SET_32(out, len - 4);
 	nbr_mem_copy(out + 4, data, len - 4);
 }
 
@@ -434,6 +434,7 @@ sockbuf_setevent(sockbuf_t *skb, sockdata_t *skd, int serial,
 	if (ccb) { ccb(e->data, data, len); }
 	else { nbr_mem_copy(e->data, data, len); }
 	skb->blen += dlen;
+	ASSERT(e->sk.p && e->sk.s != 0);
 	return NBR_OK;
 }
 
@@ -581,7 +582,11 @@ sock_addjob(sockdata_t *skd)
 			SOCK_EVENT_ADDSOCK, NULL, 0, NULL)) == NBR_OK) {
 			/* because if assign->exec, then sock_process_job keep on running
 			 * and execute event handle loop, so no need to wake up. */
-			if (assign->sleep) { nbr_thread_signal(assign->thrd, 1); }
+			if (assign->sleep) {
+				if (nbr_thread_signal(assign->thrd, 1) == NBR_OK) {
+					assign->sleep = 0;
+				}
+			}
 		}
 		return r;
 	}
@@ -647,9 +652,9 @@ NBR_INLINE int
 sock_recv_dgram(sockdata_t* skd, int serial, char *data, int len)
 {
 	if (!MT_MODE()) {
-		if (sock_wb_remain(skd->skm, skd) >= len) {
-			nbr_mem_copy(skd->wb, data, len);
-			skd->nwb += len;
+		if (sock_rb_remain(skd->skm, skd) >= len) {
+			nbr_mem_copy(skd->rb, data, len);
+			skd->nrb += len;
 			return len;
 		}
 		return NBR_ESHORT;
@@ -826,6 +831,7 @@ sockjob_process_event(sockjob_t *j, sockevent_t *e)
 	int dlen;
 	sockdata_t *skd = e->sk.p;
 	if (!skd || skd->serial != e->sk.s) {
+		TRACE("old event %p %p %u %u\n", skd, skd->thrd, skd->serial, e->sk.s);
 		return;
 	}
 	switch(e->type) {
@@ -876,7 +882,10 @@ sockjob_process_event(sockjob_t *j, sockevent_t *e)
 			skd->nrb += dlen;
 //			TRACE("event dgram %p %u\n", skd, skd->nrb);
 		}
-		else { sock_set_close(skd, CLOSED_BY_ERROR); }
+		else {
+			ASSERT(FALSE);
+			sock_set_close(skd, CLOSED_BY_ERROR);
+		}
 		break;
 	}
 }
@@ -942,15 +951,15 @@ sock_process_job(THREAD thrd)
 		}
 		if (j->active) {}
 		else {
-			j->sleep = 1;
 			n_sleep = j->exec ? g_sock.ioc.job_idle_sleep_us : -1;
 //			TRACE("%u: %llu: sleep : n_sleep = %d\n", getpid(), nbr_time(), n_sleep);
 			nbr_thread_setcancelstate(1);	/* cancelable */
+			j->sleep = 1;
 			if (NBR_OK == nbr_thread_wait_signal(thrd, 1, n_sleep)) {
 				nbr_mutex_unlock(nbr_thread_signal_mutex(thrd));
 			}
+			j->sleep = 0;
 			nbr_thread_setcancelstate(0);	/* non-cancelable */
-			ASSERT(j->sleep == 0);
 		}
 	}
 	return thrd;
@@ -1295,7 +1304,7 @@ nbr_sockmgr_mcast(SOCKMGR s, const char *address, char *data, int len)
 	char addr[256];
 	int addrlen = sizeof(addr);
 	skmdata_t *skm = s;
-	if (!skm->proto->dgram || skm->fd != INVALID_FD) {
+	if (!skm->proto->dgram || skm->fd == INVALID_FD) {
 		SOCK_ERROUT(ERROR,INVAL,"mcast: %s,%d,%d", address,skm->proto->dgram,skm->fd);
 		return NBR_EINVAL;
 	}
@@ -1303,8 +1312,8 @@ nbr_sockmgr_mcast(SOCKMGR s, const char *address, char *data, int len)
 		SOCK_ERROUT(ERROR,HOSTBYNAME,"mcast: s2a: %s,errno=%d", address,errno);
 		return NBR_EHOSTBYNAME;
 	}
-	if (skm->proto->send(skm->fd, data, len, addr, addrlen) < 0) {
-		SOCK_ERROUT(ERROR,SOCKET,"mcast: s2a: %s,errno=%d", address,errno);
+	if (skm->proto->send(skm->fd, data, len, 0, addr, addrlen) < 0) {
+		SOCK_ERROUT(ERROR,SOCKET,"mcast: send: %s,errno=%d", address,errno);
 		return NBR_ESOCKET;
 	}
 	return NBR_OK;
@@ -1330,10 +1339,22 @@ nbr_sockmgr_get_addr(SOCKMGR s, char *buf, int len)
 	skmdata_t *skm = s;
 	char addr[ADRL];
 	int alen = ADRL, r;
-	if ((r = nbr_osdep_sockname(skm->fd, addr, &alen)) < 0) {
+	if ((r = nbr_osdep_sockname(sockmgr_get_realfd(skm), addr, &alen)) < 0) {
 		return r;
 	}
 	return skm->proto->addr2str(addr, alen, buf, len);
+}
+
+NBR_API int
+nbr_sockmgr_get_ifaddr(SOCKMGR s, const char *ifn, char *buf, int len)
+{
+	skmdata_t *skm = s;
+	char addr[ADRL];
+	int alen = ADRL, r;
+	if ((r = nbr_osdep_sockname(sockmgr_get_realfd(skm), addr, &alen)) < 0) {
+		return r;
+	}
+	return nbr_osdep_ifaddr(sockmgr_get_realfd(skm), ifn, buf, &len, addr, alen);
 }
 
 NBR_API int
@@ -1479,7 +1500,7 @@ nbr_sock_get_local_addr(SOCK s,char *buf, int len)
 	sockdata_t *skd = s.p;
 	char addr[ADRL];
 	int alen = ADRL, r;
-	if ((r = nbr_osdep_sockname(skd->fd, addr, &alen)) < 0) {
+	if ((r = nbr_osdep_sockname(sock_get_realfd(skd), addr, &alen)) < 0) {
 		ASSERT(FALSE);
 		return r;
 	}
@@ -1627,9 +1648,11 @@ nbr_sock_rparser_bin16(char *p, int *len, int *rlen)
 	int tmp = GET_16(p);
 	ASSERT(tmp > 0);
 	if (tmp <= *len) {
-		*rlen = tmp;
+		*len = tmp;
+		*rlen = tmp + sizeof(U16);
 		return p + sizeof(U16);
 	}
+	else { ASSERT(FALSE); }
 	return NULL;
 }
 
@@ -1639,7 +1662,8 @@ nbr_sock_rparser_bin32(char *p, int *len, int *rlen)
 	int tmp = GET_32(p);
 	ASSERT(tmp > 0);
 	if (tmp <= *len) {
-		*rlen = tmp;
+		*len = tmp;
+		*rlen = tmp + sizeof(U32);
 		return p + sizeof(U32);
 	}
 	return NULL;
@@ -1666,6 +1690,7 @@ nbr_sock_rparser_text(char *p, int *len, int *rlen)
 		}
 		w++;
 	}
+	*len = (w - p);
 	*rlen = (w - p) + tmp; /* +1 for \n */
 	return p;
 }
@@ -1692,7 +1717,7 @@ sock_rw(void *ptr, int rf, int wf, int dg)
 		asz = sizeof(addr);
 		rsz = ifp->recv(skd->fd, skd->rb + skd->nrb, skm->nrb - skd->nrb,
 				MSG_DONTWAIT, addr, (size_t *)&asz);
-//		TRACE("%u: time = %llu %s(%u) %u\n", nbr_osdep_getpid(), nbr_time(), __FILE__, __LINE__, rsz);
+//TRACE("%u: time = %llu %s(%u) %u\n", nbr_osdep_getpid(), nbr_time(), __FILE__, __LINE__, rsz);
 		switch(rsz) {
 		case -1:
 //			TRACE("%u: sock_io(%p) read: errno=%d\n", getpid(), skd, errno);
@@ -1723,9 +1748,9 @@ sock_rw(void *ptr, int rf, int wf, int dg)
 	while (skd->nrb > trsz) {
 		rsz = skd->nrb - trsz;
 		if ((p = skm->record_parser(skd->rb + trsz, &rsz, &ssz))) {
-			if ((rsz = skm->on_recv(sockmgr_make_sock(skd), p, ssz)) >= 0) {
+			if ((rsz = skm->on_recv(sockmgr_make_sock(skd), p, rsz)) >= 0) {
 				trsz += ssz;
-//				TRACE("%p: trsz -> %u(add %u)\n", skd, trsz, ssz);
+//				TRACE("%p: trsz -> %u(add %u(%u))\n", skd, trsz, ssz, rsz);
 			}
 		}
 		if (rsz < 0) {
@@ -1742,11 +1767,11 @@ sock_rw(void *ptr, int rf, int wf, int dg)
 		return skd;
 	}
 	if (wf && skd->nwb > 0) {
-//		TRACE("%u: time = %llu %s(%u)\n", nbr_osdep_getpid(), nbr_time(), __FILE__, __LINE__);
+		//TRACE("%u: time = %llu %s(%u) %u\n", nbr_osdep_getpid(), nbr_time(), __FILE__, __LINE__, skd->nwb);
 		ssz = ifp->send(skd->fd, skd->wb, skd->nwb, 0, skd->addr, skd->alen);
 		switch(ssz) {
 		case -1:
-//			TRACE("%u: sock_io(%p) write: errno=%d\n", getpid(), skd, errno);
+			//TRACE("%u: sock_io(%p) write: errno=%d\n", getpid(), skd, errno);
 			if (errno == EAGAIN || errno == EWOULDBLOCK) {
 				if (dg) { sock_set_writable(skd, FALSE); }
 			}
@@ -1759,7 +1784,7 @@ sock_rw(void *ptr, int rf, int wf, int dg)
 			break;
 		default:
 			ASSERT(ssz > 0);
-//			TRACE("%u: sock_io(%p) write %u byte/%u\n", getpid(),skd, ssz, skd->skm->nwb);
+			//TRACE("%u: sock_io(%p) write %u byte/%u\n", getpid(),skd, ssz, skd->skm->nwb);
 			sock_wb_shrink(skd, ssz);
 			break;
 		}
@@ -1819,6 +1844,7 @@ dgsk_accept(skmdata_t *skm)
 				}
 			}
 			if (sock_recv_dgram(skd, skd->serial, rb, rsz) < 0) {
+				ASSERT(FALSE);
 				sock_mark_close(skd, skd->serial, CLOSED_BY_ERROR);
 				continue;
 			}
@@ -1930,8 +1956,8 @@ nbr_sock_process_main()
 	sockbuf_t *skb;
 
 	if (MT_MODE()) {
-		if (!g_sock.free) { return; }
-		if (NBR_OK != nbr_mutex_lock(g_sock.lock)) { return; }
+		if (!g_sock.free) { goto skmevent; }
+		if (NBR_OK != nbr_mutex_lock(g_sock.lock)) { goto skmevent; }
 		skd = g_sock.free;
 		g_sock.free = NULL;
 		if (NBR_OK != nbr_mutex_unlock(g_sock.lock)) { ASSERT(FALSE); }
@@ -1939,6 +1965,7 @@ nbr_sock_process_main()
 			skd = skd->next;
 			sockmgr_cleanup_skd(tmp);
 		}
+skmevent:
 		if (g_sock.main.web->blen <= 0) {}
 		else if (NBR_OK == nbr_mutex_lock(g_sock.evlk)) {
 			j = &(g_sock.main);
@@ -1951,8 +1978,8 @@ nbr_sock_process_main()
 			e = (sockevent_t *)j->reb->buf;
 			le = (sockevent_t *)(j->reb->buf + j->reb->blen);
 			while (e < le) {
-				ASSERT(e->len > 0);
-				e->skm->on_mgr(e->skm, e->type, e->data, e->len);
+				ASSERT(e->len > sizeof(*e));
+				e->skm->on_mgr(e->skm, e->type, e->data, e->len - sizeof(*e));
 				e = (sockevent_t *)(((char *)e) + e->len);
 			}
 			j->reb->blen = 0;

@@ -38,8 +38,14 @@ int address::from(const char *a){
 void
 ringbuffer::fin()
 {
-	if (m_p) {nbr_mem_free(m_p); }
-	if (m_lk) { nbr_rwlock_destroy(m_lk); }
+	if (m_p) {
+		nbr_mem_free(m_p);
+		m_p = NULL;
+	}
+	if (m_lk) {
+		nbr_rwlock_destroy(m_lk);
+		m_lk = NULL;
+	}
 }
 
 bool
@@ -75,6 +81,7 @@ config::config()
 	m_option = opt_not_set;
 	m_ping_timeo = m_ping_intv = 0;
 	m_flag = config::cfg_flag_not_set;
+	m_ifname[0] = '\0';
 }
 
 config::config(BASE_CONFIG_PLIST) :
@@ -82,6 +89,7 @@ config::config(BASE_CONFIG_PLIST) :
 {
 	nbr_str_copy(m_name, sizeof(m_name), name, sizeof(m_name));
 	nbr_str_copy(m_host, sizeof(m_host), host, sizeof(m_host));
+	nbr_str_copy(m_ifname, sizeof(m_ifname), ifname, sizeof(m_ifname));
 }
 
 config::~config()
@@ -108,6 +116,7 @@ int config::str(const char *k, const char *&v) const
 	if (cmp("name", k)) { v = m_name; }
 	else if (cmp("host", k)) { v = m_host; }
 	else if (cmp("proto", k)) { v = m_proto_name; }
+	else if (cmp("ifname", k)) { v = m_ifname; }
 	return NBR_ENOTFOUND;
 }
 
@@ -164,10 +173,10 @@ int	config::set(const char *k, const char *v)
 		return nbr_str_atoi(v, &m_option, MAX_VALUE_STR);
 	}
 	else if (cmp("ping_timeo", k)) {
-		return nbr_str_atoi(v, &m_ping_timeo, MAX_VALUE_STR);
+		return nbr_str_atobn(v, (S64 *)&m_ping_timeo, MAX_VALUE_STR);
 	}
 	else if (cmp("ping_intv", k)) {
-		return nbr_str_atoi(v, &m_ping_intv, MAX_VALUE_STR);
+		return nbr_str_atobn(v, (S64 *)&m_ping_intv, MAX_VALUE_STR);
 	}
 	else if (cmp("taskspan", k)) {
 		return nbr_str_atobn(v, (S64 *)&m_taskspan, MAX_VALUE_STR);
@@ -181,6 +190,10 @@ int	config::set(const char *k, const char *v)
 			m_proto_name = v;
 		}
 		return pr ? NBR_OK : NBR_ENOTFOUND;
+	}
+	else if (cmp("ifname", k)) {
+		nbr_str_copy(m_ifname, sizeof(m_ifname), v, MAX_VALUE_STR);
+		return NBR_OK;
 	}
 	else if (cmp("sender", k)) {
 		m_fns = sender_from(v);
@@ -233,18 +246,4 @@ config::sender_from(const char *str)
 
 
 
-/*-------------------------------------------------------------*/
-/* sfc::finder::property									   */
-/*-------------------------------------------------------------*/
-using namespace finder;
-finder_property::finder_property(BASE_CONFIG_PLIST,
-	const char *mcastgrp, U16 mcastport, int ttl) :
-	config(BASE_CONFIG_CALL), m_mcastport(mcastport)
-{
-	if (!(*mcastgrp)) { mcastgrp = MCAST_GROUP; }
-	nbr_str_copy(m_mcastaddr, sizeof(m_mcastaddr),
-		mcastgrp, sizeof(m_mcastaddr));
-	m_mcastconf.mcast_addr = m_mcastaddr;
-	m_mcastconf.ttl = ttl;
-}
 

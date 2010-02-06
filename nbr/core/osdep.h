@@ -80,7 +80,8 @@ int		nbr_osdep_udp_sendto(DSCRPTR fd, const void *data, size_t len, int, const v
 
 /* common socket related */
 int		nbr_osdep_sockname(DSCRPTR fd, char *addr, int *len);
-
+int		nbr_osdep_ifaddr(DSCRPTR fd, const char *ifn, char *buf, int *len,
+						void *addr, int alen);
 /* clock related */
 int		nbr_clock_init();
 void	nbr_clock_poll();

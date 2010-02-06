@@ -58,7 +58,7 @@ int cluster_protocol_impl<S>::event_handler(S &s, int t, char *p, int l)
 	case nev_finder_reply_init:
 		return s.on_ev_finder_reply_init(p, l);
 	case nev_finder_reply_poll:
-		return s.on_ev_finder_reply_init(p, l);
+		return s.on_ev_finder_reply_poll(p, l);
 	default:
 		s.log(ERROR, "invalid event recv (%d)\n", *p);
 		break;
@@ -98,7 +98,7 @@ int cluster_factory_impl<S,P,D>::init(const config &cfg)
 		log(super::ERROR, "node: cannot init factory (%d)\n", r);
 		return r;
 	}
-	return finder().init_finder(cfg);
+	return cluster_finder_factory_container::init((const cluster_property &)cfg);
 }
 
 template <class S, class P, class D>
@@ -123,7 +123,7 @@ int cluster_factory_impl<S,P,D>::update_nodestate(const address &a, const D &p)
 		log(super::ERROR, "update_nodestate: data pack fail(%d)\n", r);
 		return r;
 	}
-	return send(finder().primary(), work, PUSH_LEN());
+	return send(primary(), work, PUSH_LEN());
 }
 
 template <class S, class P, class D>
@@ -142,6 +142,7 @@ void cluster_factory_impl<S,P,D>::poll(UTIME ut)
 	/* check mesh state and reconnection */
 	for (;it != pool().end();) {
 		tmp = it;
+		ASSERT(from_iter(tmp) == (NODE *)tmp.m_e->get());
 		it = pool().next(it);
 		if (tmp->valid()) 	{
 			if (tmp->poll(ut, false) < 0) {
@@ -150,51 +151,78 @@ void cluster_factory_impl<S,P,D>::poll(UTIME ut)
 				continue;
 			}
 			if (tmp->writable() > 0){ wc[n_wc++] = from_iter(tmp); }
-			else if ((ut - tmp->last_access()) > 5 * 1000 * 1000) {
-				/* takes too long time (5sec) to connect */
-				tmp->close();
-				nc[n_nc++] = from_iter(tmp);
+			/* takes too long time (5sec) to connect */
+			else if ((ut - tmp->last_access()) >
+				P::node_reconnection_timeout_sec * 1000 * 1000) {
+				super::log(super::ERROR, "takes too long time to connect\n");
+				tmp->incr_conn_retry();
+				if (tmp->conn_retry() > P::node_reconnection_retry_times) {
+					super::log(super::INFO,
+							"%s: retry too much (%u), unregister it\n",
+							(const char *)tmp->addr(), tmp->conn_retry());
+					tmp->fin();
+					pool().erase(tmp->addr());
+				}
+				else {
+					tmp->close();
+				}
 			}
 			else { c[n_c++] = from_iter(tmp); }
 		}
-		else { nc[n_nc++] = from_iter(tmp); }
+		else {
+			nc[n_nc++] = from_iter(tmp);
+		}
 	}
-	int n_establish = p.m_master ? pool().size() : p.m_multiplex;
+	int n_establish = p.m_master ? pool().use() : p.m_multiplex;
 	bool established = false;
+	TRACE("n_establish = %u\n", n_establish);
 	if (n_wc >= n_establish) {
-		established =
-			((p.m_master) ||
-			(finder().primary() && finder().primary()->writable() > 0));
+		established = ((p.m_master) ||(writable() > 0));
+	}
+	if (established) {
+		setstate(cluster_finder_factory_container::ns_establish);
+	}
+	else if (pool().use() > 0) {
+		setstate(cluster_finder_factory_container::ns_found);
 	}
 	if ((n_wc + n_c) < n_establish) {
-		NODE::sort(nc, n_nc);
+		if (!p.m_master && n_nc > 1) {
+			NODE::sort(nc, n_nc);
+		}
 		for (int i = 0; i < n_nc; i++) {
 			NODE *p = nc[i];
 			if ((r = factory::connect(p)) < 0) { continue; }
 			c[n_c++] = p;
+			p->update_access();
 			if ((n_wc + n_c) >= n_establish) { break; }
 		}
 	}
 	if (p.m_master) {
 		/* master: periodically sent mcast to find master */
-		finder().inquiry(p.m_sym_poll);
+		if (can_inquiry(ut)) {
+			if (finder().inquiry(p.m_sym_poll) >= 0) {
+				m_last_inquiry = ut;
+			}
+		}
 	}
 	else {
 		if (!established) {
-			/* servant: if primary is disabled, found new */
-			if (n_wc > 0) {
-				for (int i = 0; i < n_wc; i++) {
-					ASSERT(wc[i]);
-					if (wc[i]->writable() > 0) { set_new_primary(wc[0]); }
+			if (can_inquiry(ut)) {
+				if (finder().inquiry(p.m_sym_servant_init) >= 0) {
+					m_last_inquiry = ut;
 				}
 			}
 		}
-		if (pool().size() <= (n_establish + 1)) {
-			if (finder().primary() && finder().primary()->writable() > 0) {
-				/* number of known (and available) master is too short.
-				 * query latest master list to master server. */
-				char ch = (char)cluster_protocol::ncmd_get_master_list;
-				finder().primary()->send(&ch, 1);
+		else if (pool().use() <= (n_establish + 1)) {
+			if (primary() && primary()->writable() > 0) {
+				if (can_inquiry(ut)) {
+					/* number of known (and available) master is too short.
+					 * query latest master list to master server. */
+					char ch = (char)cluster_protocol::ncmd_get_master_list;
+					primary()->send(&ch, 1);
+					super::log(super::INFO, "query master list\n");
+					m_last_inquiry = ut;
+				}
 			}
 		}
 	}
@@ -231,10 +259,12 @@ int cluster_factory_impl<S,P,D>::on_ev_finder_reply_poll(char *p, int l)
 	address a;
 	NODE *n;
 	int r;
+	TRACE("on_ev_fider_reply_poll: %u\n", l);
 	POP_START(p, l);
 	POP_ADDR(a);
-	if (!(n = pool().find(a))) {
-		if (!(n = pool().create(a))) {
+	TRACE("on_ev_finder_reply_poll: found addr %s\n", (const char *)a);
+	if (!(n = (NODE *)pool().find(a))) {
+		if (!(n = (NODE *)pool().create(a))) {
 			return NBR_EEXPIRE;
 		}
 	}
@@ -264,8 +294,9 @@ int cluster_factory_impl<S,P,D>::on_recv(SOCK sk, char *p, int l)
 	if (s == NULL) {
 		return NBR_ENOTFOUND;
 	}
-	if (S::recvping((**s), p, l) < 0) {
-		return NBR_EINVAL;	/* invalid ping result received */
+	int r;
+	if ((r = S::recvping((**s), p, l)) <= 0) {
+		return r;
 	}
 	S *obj = *s;
 	typename P::impl *nf;
@@ -389,8 +420,9 @@ int servant_session_factory_impl<S>::on_recv(SOCK sk, char *p, int l)
 	if (s == NULL) {
 		return NBR_ENOTFOUND;
 	}
-	if (S::recvping((**s), p, l) < 0) {
-		return NBR_EINVAL;	/* invalid ping result received */
+	int r;
+	if ((r = S::recvping((**s), p, l)) <= 0) {
+		return r;
 	}
 	S *obj = *s;
 	servant_session_factory_impl<S> *nf;
@@ -409,7 +441,7 @@ int servant_session_factory_impl<S>::on_recv(SOCK sk, char *p, int l)
 
 
 /*-------------------------------------------------------------*/
-/* sfc::cluster::mastersession								   */
+/* sfc::cluster::master_session_factory_impl				   */
 /*-------------------------------------------------------------*/
 template <class S>
 int master_session_factory_impl<S>::init(const config &cfg)
@@ -471,8 +503,9 @@ int master_session_factory_impl<S>::on_recv(SOCK sk, char *p, int l)
 	if (s == NULL) {
 		return NBR_ENOTFOUND;
 	}
-	if (S::recvping((**s), p, l) < 0) {
-		return NBR_EINVAL;	/* invalid ping result received */
+	int r;
+	if ((r = S::recvping((**s), p, l)) <= 0) {
+		return r;
 	}
 	S *obj = *s;
 	master_session_factory_impl<S> *nf;
@@ -488,49 +521,57 @@ int master_session_factory_impl<S>::on_recv(SOCK sk, char *p, int l)
 	return NBR_OK;
 }
 
+/* servant_cluster_factory_impl */
+template <class C, class SN>
+int servant_cluster_factory_impl<C,SN>::init(const config &cfg)
+{
+	int r;
+	const property &p = (const property &)cfg;
+	if (!super::init_pool(p, sizeof(typename super::NODE))) {
+		super::log(super::ERROR, "servant node: cannot init mempool\n");
+		return NBR_ESHORT;
+	}
+	if ((r = super::init(p)) < 0) {
+		super::log(super::ERROR, "servant node: super::init fail(%d)\n", r);
+		return r;
+	}
+	if ((r = m_fccl.init(p.m_client_conf)) < 0) {
+		super::log(super::ERROR, "servant node: m_clint.init fail(%d)\n", r);
+		return r;
+	}
+	if (!super::finder().register_factory(this, p.m_sym_servant_init)) {
+		super::log(super::ERROR,
+				"servant node: fail to register factory for servant\n");
+		return NBR_EEXPIRE;
+	}
+	if ((r = super::finder().inquiry(p.m_sym_servant_init)) < 0) {
+		super::log(super::ERROR, "servant node: master inquiry fail (%d)\n", r);
+		return r;
+	}
+	return r;
+}
+
+template <class C, class SN>
+void servant_cluster_factory_impl<C,SN>::fin()
+{
+	m_fccl.fin();
+	super::fin();
+}
+
+template <class C, class SN>
+void servant_cluster_factory_impl<C,SN>::poll(UTIME ut)
+{
+	m_fccl.poll(ut);
+	super::poll(ut);
+}
+
 /* master_cluster_factory_impl */
 template <class M, class S, class N>
 int master_cluster_factory_impl<M,S,N>::init(const config &c)
 {
 	int r;
 	const property &p = (const property &)c;
-	if (p.m_master_conf.disabled() || p.m_servant_conf.disabled()) {
-		super::log(super::ERROR, "master node: master/servant factory cannot be disabled\n");
-		return NBR_ECONFIGURE;
-	}
-	if ((r = m_fcmstr.init(p.m_master_conf)) < 0) {
-		super::log(super::ERROR, "master node: fail to init master factory (%d)", r);
-		return r;
-	}
-	if ((r = m_fcsvnt.init(p.m_servant_conf)) < 0) {
-		super::log(super::ERROR, "master node: fail to init servant factory (%d)", r);
-		return r;
-	}
-	if (!super::pool().init(p.m_max_connection, p.m_max_connection,
-			sizeof(S), p.m_option)) {
-		super::log(super::ERROR, "master node: cannot init mempool\n");
-		return NBR_ESHORT;
-	}
-	address a;
-	if ((r = m_fcmstr.get(a)) < 0) {
-		super::log(super::ERROR, "master node: cannot get master bind addr(%d)\n", r);
-		return r;
-	}
-	/* to assure to get at least one master session when someone query
-	 * master server addr through finder, connect local master server */
-	typename super::NODE *lo = (typename super::NODE *)super::pool().create(a);
-	if (!lo) {
-		super::log(super::ERROR, "master node: cannot allocate loopback session");
-		return NBR_EEXPIRE;
-	}
-	/* store basic node info */
-	lo->setdata_from(m_fcsvnt);
-	if ((r = super::connect(lo, a)) < 0) {
-		super::log(super::ERROR, "master node: cannot connect to local master (%d)\n", r);
-		return r;
-	}
 	if (p.m_max_query <= 0) {
-		super::log(super::ERROR, "master node: node needs querymap\n");
 		return NBR_ECONFIGURE;
 	}
 	if (p.m_query_bufsz < (int)sizeof(typename S::querydata)) {
@@ -547,7 +588,38 @@ int master_cluster_factory_impl<M,S,N>::init(const config &c)
 		super::log(super::ERROR, "master node: cannot init factory (%d)\n", r);
 		return r;
 	}
-	if ((r = super::finder().init_finder(p)) < 0) {
+	if (p.m_master_conf.disabled() || p.m_servant_conf.disabled() ||
+		p.m_master_conf.client() || p.m_servant_conf.client()) {
+		super::log(super::ERROR, "master node: master/servant factory cannot be disabled\n");
+		return NBR_ECONFIGURE;
+	}
+	if ((r = m_fcmstr.init(p.m_master_conf)) < 0) {
+		super::log(super::ERROR, "master node: fail to init master factory (%d)", r);
+		return r;
+	}
+	if ((r = m_fcsvnt.init(p.m_servant_conf)) < 0) {
+		super::log(super::ERROR, "master node: fail to init servant factory (%d)", r);
+		return r;
+	}
+	if (!super::init_pool(p, sizeof(typename super::NODE))) {
+		super::log(super::ERROR, "master node: cannot init mempool\n");
+		return NBR_ESHORT;
+	}
+	/* to assure to get at least one master session when someone query
+	 * master server addr through finder, connect local master server */
+	typename super::NODE *lo =
+			(typename super::NODE *)super::pool().create(m_fcmstr.ifaddr());
+	if (!lo) {
+		super::log(super::ERROR, "master node: cannot allocate loopback session");
+		return NBR_EEXPIRE;
+	}
+	/* store basic node info */
+	lo->setdata_from(m_fcsvnt);
+	if ((r = super::connect(lo, m_fcmstr.ifaddr())) < 0) {
+		super::log(super::ERROR, "master node: cannot connect to local master (%d)\n", r);
+		return r;
+	}
+	if ((r = cluster_finder_factory_container::init(p)) < 0) {
 		super::log(super::ERROR, "fail to initialize finder (%d)\n", r);
 		return r;
 	}
@@ -560,6 +632,11 @@ int master_cluster_factory_impl<M,S,N>::init(const config &c)
 	if (!super::finder().register_factory(this, p.m_sym_servant_init)) {
 		super::log(super::ERROR,
 				"master node: fail to register factory for servant\n");
+		return NBR_EEXPIRE;
+	}
+	if (!super::finder().register_factory(this, p.m_sym_poll)) {
+		super::log(super::ERROR,
+				"master node: fail to register factory for master\n");
 		return NBR_EEXPIRE;
 	}
 	if ((r = super::finder().inquiry(p.m_sym_master_init)) < 0) {
@@ -596,65 +673,74 @@ int master_cluster_factory_impl<M,S,N>::on_finder_query_init(
 		return NBR_EINVAL;
 	}
 	if (l != sizeof(SOCK)) {
+		super::log(super::ERROR, "length illegal %u\n", l);
 		return NBR_EINVAL;
 	}
 	SOCK *sk = (SOCK *)p;
 	cluster_finder nf(*sk, &(super::finder()));
 	{
+		typename super::NODE *n;
 		char opt[finder_protocol::MAX_OPT_LEN];
 		char a[address::SIZE], nodeaddr[address::SIZE];
 		PUSH_START(opt, sizeof(opt));
-		PUSH_32(pool().size());
+		PUSH_8(finder_protocol::reply);
+		PUSH_STR(is_master ? c.m_sym_master_init : c.m_sym_servant_init);
+		PUSH_32(pool().use());
+		TRACE("found %u node\n", pool().use());
 		typename sspool::iterator s = pool().begin();
 		int r;
 		for (;s != pool().end(); s = pool().next(s)) {
 			if ((r = s->addr().addrpart(a, sizeof(a))) < 0) {
-				super::log(super::ERROR, "fail to get addrpart (%s)", s->addr());
+				super::log(super::ERROR, "fail to get addrpart (%s)",(const char *)s->addr());
 				return r;
 			}
-			nbr_str_printf(nodeaddr, sizeof(nodeaddr) - 1, "%s:%hu", a,
+			snprintf(nodeaddr, sizeof(nodeaddr) - 1, "%s:%hu", (const char *)a,
 				is_master ? c.m_master_port : c.m_servant_port);
 			PUSH_STR(nodeaddr);
-			if ((r = s->get().pack(PUSH_BUF(), PUSH_REMAIN())) < 0) {
+			TRACE("node addr=%s\n", nodeaddr);
+			n = from_iter(s);
+			if ((r = n->get().pack(PUSH_BUF(), PUSH_REMAIN())) < 0) {
 				super::log(super::ERROR, "fail to pack nodedata (%d)\n", r);
 				return r;
 			}
 			PUSH_SKIP(r);
+			TRACE("push len now = %u\n", PUSH_LEN());
 		}
+		TRACE("push len final = %u\n", PUSH_LEN());
 		return nf.send(opt, PUSH_LEN());
 	}
 }
 
 template <class M, class S, class N>
-int master_cluster_factory_impl<M,S,N>::on_finder_query_poll(char *p, int l)
+int master_cluster_factory_impl<M,S,N>::on_ev_finder_query_poll(char *p, int l)
 {
 	const property &c = (const property &)super::cfg();
 	if (!super::ready()) {
 		super::log(super::INFO, "this node not ready %u %u\n",
-				c.m_master, super::state());
+				c.m_master,super::state());
 		return NBR_EINVAL;
 	}
 	if (l != sizeof(SOCK)) {
+		super::log(super::ERROR, "length illegal %u\n", l);
+		ASSERT(false);
 		return NBR_EINVAL;
 	}
 	SOCK *sk = (SOCK *)p;
 	cluster_finder nf(*sk, &(super::finder()));
-	address a;
 	int r;
-	if ((r = m_fcmstr.get(a)) < 0) {
-		super::log(super::ERROR, "cannot get address (%d)\n", r);
-		return r;
-	}
-	typename super::NODE *n = pool().find(a);
+	typename super::NODE *n =
+			(typename super::NODE *)pool().find(m_fcmstr.ifaddr());
 	if (!n) {
-		super::log(super::ERROR, "node not found (%s)\n", a);
+		super::log(super::ERROR, "node not found (%s)\n",
+				(const char *)m_fcmstr.ifaddr());
 		return NBR_ENOTFOUND;
 	}
 	{
 		char opt[finder_protocol::MAX_OPT_LEN];
-		char a[address::SIZE], nodeaddr[address::SIZE];
 		PUSH_START(opt, sizeof(opt));
-		PUSH_ADDR(a);
+		PUSH_8(finder_protocol::reply);
+		PUSH_STR(c.m_sym_poll);
+		PUSH_ADDR(m_fcmstr.ifaddr());
 		if ((r = n->get().pack(PUSH_BUF(), PUSH_REMAIN())) < 0) {
 			super::log(super::ERROR, "fail to pack nodedata (%d)\n", r);
 			return r;
@@ -689,10 +775,10 @@ template <class MF, class SF>
 int master_cluster_property<MF,SF>::set(
 		const char *k, const char *v)
 {
-	if (nbr_mem_cmp(k, "master.", sizeof("master.") - 1)) {
+	if (nbr_mem_cmp(k, "master.", sizeof("master.") - 1) == 0) {
 		return m_master_conf.set(k + sizeof("master.") - 1, v);
 	}
-	else if (nbr_mem_cmp(k, "servant.", sizeof("servant.") - 1)) {
+	else if (nbr_mem_cmp(k, "servant.", sizeof("servant.") - 1) == 0) {
 		return m_master_conf.set(k + sizeof("servant.") - 1, v);
 	}
 	else {
@@ -714,3 +800,13 @@ int master_cluster_property<MF,SF>::set(
 	}
 }
 
+/* servant_cluster_property */
+template <class CF>
+int servant_cluster_property<CF>::set(
+		const char *k, const char *v)
+{
+	if (nbr_mem_cmp(k, "client.", sizeof("client.") - 1) == 0) {
+		return m_client_conf.set(k + sizeof("client.") - 1, v);
+	}
+	return cluster_property::set(k, v);
+}

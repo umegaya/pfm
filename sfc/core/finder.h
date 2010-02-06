@@ -24,18 +24,16 @@
 template <class S>
 int finder_protocol_impl<S>::on_recv(S &s, char *p, int l)
 {
-	char sym[SYM_SIZE], opt[MAX_OPT_LEN];
-	int olen = MAX_OPT_LEN;
+	char sym[SYM_SIZE];
 	U8 is_reply;
 	POP_START(p, l);
 	POP_8(is_reply);
 	POP_STR(sym, (int)sizeof(sym));
 	if (is_reply) {
-		POP_8A(opt, olen);
-		return s.on_reply(sym, opt, olen);
+		return s.on_reply(sym, POP_BUF(), POP_REMAIN());
 	}
 	else {
-		return s.on_inquiry(sym, opt, olen);
+		return s.on_inquiry(sym, POP_BUF(), POP_REMAIN());
 	}
 }
 

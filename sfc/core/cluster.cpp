@@ -32,10 +32,19 @@ using namespace sfc::cluster;
 /* cluster_finder */
 int cluster_finder::on_inquiry(const char *sym, char *opt, int olen)
 {
+#if defined(_DEBUG)
+	address a;
+	a.from(m_sk);
+	TRACE("on_inquery: from <%s> sym=<%s>\n", (const char *)a, sym);
+#endif
 	cluster_finder_factory *nf = (cluster_finder_factory *)m_f;
 	factory *msh = (factory *)nf->find_factory(sym);
-	cluster_property &p = (cluster_property &)msh->cfg();
 	int r = NBR_ENOTFOUND;
+	if (!msh) {
+		TRACE( "on_inquiry: no factory for <%s>\n", sym);
+		close(); return NBR_OK;
+	}
+	cluster_property &p = (cluster_property &)msh->cfg();
 	/* initialize phase */
 	if (config::cmp(p.m_sym_master_init, sym)) {
 		r = msh->event(cluster_protocol::nev_finder_query_master_init,
@@ -53,17 +62,24 @@ int cluster_finder::on_inquiry(const char *sym, char *opt, int olen)
 	if (r < 0) {
 		log(ERROR, "cannot send event for <%s>\n", sym);
 	}
-	/* no need for this session. closed */
-	close();
 	return NBR_OK;
 }
 
 int cluster_finder::on_reply(const char *sym, const char *opt, int olen)
 {
+#if defined(_DEBUG)
+	address a;
+	a.from(m_sk);
+	TRACE("on_reply: from <%s> sym=<%s>\n", (const char *)a, sym);
+#endif
 	cluster_finder_factory *nf = (cluster_finder_factory *)m_f;
 	factory *msh = (factory *)nf->find_factory(sym);
-	cluster_property &p = (cluster_property &)msh->cfg();
 	int r = NBR_ENOTFOUND;
+	if (!msh) {
+		TRACE( "on_reply: no factory for <%s>\n", sym);
+		close(); return NBR_OK;
+	}
+	cluster_property &p = (cluster_property &)msh->cfg();
 	if (config::cmp(p.m_sym_master_init, sym) || config::cmp(p.m_sym_servant_init, sym)) {
 		r = msh->event(cluster_protocol::nev_finder_reply_init, opt, olen);
 	}
@@ -73,8 +89,6 @@ int cluster_finder::on_reply(const char *sym, const char *opt, int olen)
 	if (r < 0) {
 		log(ERROR, "cannot send event for <%s>\n", sym);
 	}
-	/* no need for this session. closed */
-	close();
 	return NBR_OK;
 }
 /* cluster_finder_factory_container */
@@ -82,6 +96,14 @@ cluster_finder_factory cluster_finder_factory_container::m_finder;
 int cluster_finder_factory_container::init(const cluster_property &cfg)
 {
 	int r;
+	const cluster_property &p = (const cluster_property &)cfg;
+	if (!p.m_master) {	/* servant needs packet backup for failover */
+		int size = p.m_packet_backup_size > 0 ? p.m_packet_backup_size : p.m_wbuf;
+		if (!m_pkt_bkup.init(size)) {
+			TRACE("finder_mixin: packet backuper init fail\n");
+			return r;
+		}
+	}
 	if (!m_finder.is_initialized()) {
 		TRACE("initialize finder\n");
 		if ((r = m_finder.init(cfg.m_mcast,
@@ -95,32 +117,18 @@ int cluster_finder_factory_container::init(const cluster_property &cfg)
 
 void cluster_finder_factory_container::fin()
 {
+	m_pkt_bkup.fin();
 	if (m_finder.is_initialized()) {
 		m_finder.fin();
 	}
 }
 
-/* cluster_finder_factory */
-int cluster_finder_factory::writable() const
+int cluster_finder_factory_container::writable() const
 {
 	return primary() ? primary()->writable() : 0;
 }
 
-int cluster_finder_factory::init_finder(const config &cfg)
-{
-	int r;
-	const cluster_property &p = (const cluster_property &)cfg;
-	if (!p.m_master) {	/* servant needs packet backup for failover */
-		int size = p.m_packet_backup_size > 0 ? p.m_packet_backup_size : p.m_wbuf;
-		if (!m_pkt_bkup.init(size)) {
-			TRACE("finder_mixin: packet backuper init fail\n");
-			return r;
-		}
-	}
-	return cluster_finder_factory_container::init(p);
-}
-
-int cluster_finder_factory::unicast(const address &addr, U32 msgid, char *p, int l)
+int cluster_finder_factory_container::unicast(const address &addr, U32 msgid, char *p, int l)
 {
 	char buf[l + 1 + sizeof(addr) * 2 + sizeof(U32)];
 	PUSH_START(buf, sizeof(buf));
@@ -131,7 +139,7 @@ int cluster_finder_factory::unicast(const address &addr, U32 msgid, char *p, int
 	return send(*primary(), msgid, buf, PUSH_LEN());
 }
 
-int cluster_finder_factory::broadcast(U32 msgid, char *p, int l)
+int cluster_finder_factory_container::broadcast(U32 msgid, char *p, int l)
 {
 	char buf[l + 1 + sizeof(U32)];
 	PUSH_START(buf, sizeof(buf));
@@ -141,7 +149,7 @@ int cluster_finder_factory::broadcast(U32 msgid, char *p, int l)
 	return send(*primary(), msgid, buf, PUSH_LEN());
 }
 
-int cluster_finder_factory::send(session &s, U32 msgid, char *p, int l)
+int cluster_finder_factory_container::send(session &s, U32 msgid, char *p, int l)
 {
 	if (s.writable() >= l) {
 		U32 ret = l;
@@ -164,7 +172,7 @@ int cluster_finder_factory::send(session &s, U32 msgid, char *p, int l)
 	return NBR_ESHORT;
 }
 
-void cluster_finder_factory::switch_primary(node *new_node)
+void cluster_finder_factory_container::switch_primary(node *new_node)
 {
 
 }
@@ -172,10 +180,10 @@ void cluster_finder_factory::switch_primary(node *new_node)
 /* property */
 finder_property cluster_property::m_mcast("finder",
 		"0.0.0.0:8888",
-		10, 10, opt_expandable,/* max 10 session/10sec timeout */
+		10, 30, opt_expandable,/* max 10 session/30sec timeout */
 		256, 2048, /* send 256b,recv2kb */ 0, 0,/* no ping */
 		-1,0,/* no query buffer */
-		"UDP", 10 * 1000 * 1000/* 10 sec task span */,
+		"UDP", "eth0", 10 * 1000 * 1000/* 10 sec task span */,
 		0/* never wait ld recovery */,
 		kernel::INFO,
 		nbr_sock_rparser_bin16,
@@ -194,7 +202,7 @@ cluster_property::cluster_property(BASE_CONFIG_PLIST, const char *sym,
 int
 cluster_property::set(const char *k, const char *v)
 {
-	if (nbr_mem_cmp(k, "finder.", sizeof("finder.") - 1)) {
+	if (nbr_mem_cmp(k, "finder.", sizeof("finder.") - 1) == 0) {
 		return m_mcast.set(k + sizeof("finder.") - 1, v);
 	}
 	else if (cmp("packet_backup_size", k)) {
@@ -229,7 +237,7 @@ node::nodedata::setdata(factory &f)
 }
 
 int
-node::nodedata::pack(char *p, int l)
+node::nodedata::pack(char *p, int l) const
 {
 	PUSH_START(p, l);
 	PUSH_16(m_n_servant);
@@ -239,6 +247,7 @@ node::nodedata::pack(char *p, int l)
 int
 node::nodedata::unpack(const char *p, int l)
 {
+	ASSERT(l >= 2);
 	POP_START(p, l);
 	POP_16(m_n_servant);
 	return POP_LEN();

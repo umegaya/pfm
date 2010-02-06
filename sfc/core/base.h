@@ -61,11 +61,17 @@ template <class S, class P>
 bool factory_impl<S,P>::checkping(class session &s, UTIME ut)
 {
 	if (!cfg().client()) { return true; }
-	int intv = (int)(ut - s.last_ping());
+	UTIME intv = (ut - s.last_ping());
+//	TRACE("intv=%u,cfg=%u\n", intv, cfg().m_ping_intv * 1000 * 1000);
 	if (intv > cfg().m_ping_intv) {
-		if (S::sendping(s, ut) < 0) { return false; }
+		int r;
+		if ((r = S::sendping(s, ut)) < 0) {
+			ASSERT(false);
+			return false;
+		}
+		s.update_ping(ut);
 	}
-	return intv > cfg().m_ping_timeo;
+	return intv < cfg().m_ping_timeo;
 }
 
 
@@ -165,9 +171,9 @@ int factory_impl<S,P>::on_recv(SOCK sk, char *p, int l)
 		return NBR_ENOTFOUND;
 	}
 	S *obj = *s;
-	if (S::recvping((**s), p, l) < 0) {
-		obj->log(ERROR, "illegal ping recved\n");
-		return NBR_EINVAL;	/* invalid ping result received */
+	int r = S::recvping((**s), p, l);
+	if (r <= 0) {
+		return r;	/* invalid ping result received */
 	}
 	obj->update_access();
 	return obj->on_recv(p, l);

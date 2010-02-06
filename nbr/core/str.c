@@ -444,6 +444,7 @@ nbr_str_rchr(const char *in, char sep, int max)
 		if ((w - in) > max) {
 			return NULL;
 		}
+		w++;
 	}
 	return p;
 }

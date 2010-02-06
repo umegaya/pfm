@@ -377,7 +377,7 @@ nbr_sock_test(int max_thread, int max_client, int exec_dur, int max_query, char 
 
 	proto_if = proto_regist_by_name(proto, &proto_p);
 	/* server */
-	SOCKMGR skm = nbr_sockmgr_create(8 * 1024, 8 * 1024,
+	SOCKMGR skm = nbr_sockmgr_create(32 * 1024, 8 * 1024,
 						N_CLIENT + 1,
 						sizeof(workbuf_t),
 						f_udp ? 10 : 500 * 1000,

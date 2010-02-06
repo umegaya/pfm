@@ -110,6 +110,15 @@ int factory::init(const config &cfg,
 	nbr_sockmgr_set_callback(m_skm, cfg.m_fnp, aw, cw, pp, eh, poll);
 	nbr_sockmgr_set_connect_cb(m_skm, oc);
 	nbr_sockmgr_set_mgrevent_cb(m_skm, meh);
+	if (!cfg.client()) {
+		int r = nbr_sockmgr_get_ifaddr(
+				m_skm, cfg.m_ifname, m_ifaddr.a(), address::SIZE);
+		if (r < 0) {
+			log(ERROR, "get ifaddr fail (%d)\n", r);
+			return r;
+		}
+		m_ifaddr.setlen(r);
+	}
 	return NBR_OK;
 }
 
@@ -121,7 +130,6 @@ int factory::init(const config &cfg,
 int binprotocol::sendping(class session &s, UTIME ut)
 {
 	/* disabled ping? */
-	if (s.cfg().m_ping_timeo <= 0) { return NBR_OK; }
 	char work[64];
 	PUSH_START(work, sizeof(work));
 	PUSH_8(cmd_ping);
@@ -132,9 +140,8 @@ int binprotocol::sendping(class session &s, UTIME ut)
 int binprotocol::recvping(class session &s, char *p, int l)
 {
 	/* disabled ping? */
-	if (s.cfg().m_ping_timeo <= 0) { return NBR_OK; }
 	if (*p != 0) {
-		return NBR_OK;	/* not ping packet */
+		return no_ping;	/* not ping packet */
 	}
 	U8 cmd;
 	U64 ut;
@@ -162,15 +169,13 @@ int binprotocol::recvping(class session &s, char *p, int l)
 const char textprotocol::cmd_ping[] = "0";
 int textprotocol::sendping(class session &s, UTIME ut)
 {
-	/* disabled ping? */
-	if (s.cfg().m_ping_timeo <= 0) { return NBR_OK; }
 	char work[64];
 	PUSH_TEXT_START(work, cmd_ping);
 	if (s.cfg().client()) {
 		ut = nbr_time();
 	}
 	PUSH_TEXT_BIGNUM(ut);
-#if 1//defined(_DEBUG)
+#if defined(_DEBUG)
 	s.log(kernel::INFO, "sendping: at %llu\n", ut);
 #endif
 	return s.send(work, PUSH_TEXT_LEN());
@@ -178,9 +183,8 @@ int textprotocol::sendping(class session &s, UTIME ut)
 
 int textprotocol::recvping(class session &s, char *p, int l)
 {
-	if (s.cfg().m_ping_timeo <= 0) { return NBR_OK; }
 	if (*p != '0') {
-		return NBR_OK; /* no ping */
+		return no_ping; /* no ping */
 	}
 	/* disabled ping? */
 	char cmd[sizeof(cmd_ping) + 1];

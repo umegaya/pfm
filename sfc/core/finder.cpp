@@ -46,11 +46,7 @@ int finder_factory::init(const config &cfg)
 
 int finder_factory::init(const config &cfg, int (*pp)(SOCK, char*, int))
 {
-	finder_property c = (const finder_property &)cfg;
-	nbr_str_printf(c.m_host, sizeof(c.m_host) - 1, "0.0.0.0:%hu",
-		c.m_mcastport);
-	c.m_proto_name = "UDP";
-	c.m_flag |= config::cfg_flag_server;
+	const finder_property &c = (const finder_property &)cfg;
 	if (!m_sl.init(DEFAULT_REGISTER, DEFAULT_HASHSZ, -1, opt_threadsafe)) {
 		return NBR_EEXPIRE;
 	}
@@ -62,16 +58,32 @@ int finder_factory::inquiry(const char *sym)
 {
 	char work[1024], addr[1024];
 	PUSH_START(work, sizeof(work));
-	PUSH_8(0);
+	PUSH_16(0);
+	PUSH_8(finder_protocol::inquiry);
 	PUSH_STR(sym);
 	finder_property &p = (finder_property &)cfg();
 	nbr_str_printf(addr, sizeof(addr) - 1, "%s:%hu",
 		p.m_mcastaddr, p.m_mcastport);
+	SET_16(work, (PUSH_LEN() - sizeof(U16)));
+	log(INFO, "inquiry <%s> mcastg=<%s>\n", sym, addr);
 	return mcast(addr, work, PUSH_LEN());
 }
 
 /* property */
 const char 	finder_property::MCAST_GROUP[] = "239.192.1.2";
+finder_property::finder_property(BASE_CONFIG_PLIST,
+	const char *mcastgrp, U16 mcastport, int ttl) :
+	config(BASE_CONFIG_CALL), m_mcastport(mcastport)
+{
+	if (!(*mcastgrp)) { mcastgrp = MCAST_GROUP; }
+	nbr_str_copy(m_mcastaddr, sizeof(m_mcastaddr),
+		mcastgrp, sizeof(m_mcastaddr));
+	m_mcastconf.mcast_addr = m_mcastaddr;
+	m_mcastconf.ttl = ttl;
+	nbr_str_printf(m_host, sizeof(m_host) - 1, "0.0.0.0:%hu", m_mcastport);
+	m_flag |= config::cfg_flag_server;
+}
+
 int
 finder_property::set(const char *k, const char *v)
 {
@@ -81,9 +93,14 @@ finder_property::set(const char *k, const char *v)
 	}
 	else if (cmp("mcastport", k)) {
 		SAFETY_ATOI(v, m_mcastport, U16);
+		nbr_str_printf(m_host, sizeof(m_host) - 1, "0.0.0.0:%hu", m_mcastport);
 		return NBR_OK;
 	}
-	return config::set(k, v);
+	int r = config::set(k, v);
+	if (r >= 0) {
+		m_flag |= config::cfg_flag_server;
+	}
+	return r;
 }
 
 void*

@@ -41,7 +41,7 @@ public:
 		static const char code_exec_result[];
 		static const char code_exec_end[];
 		static char *debug_big_data;
-		static const size_t debug_big_datasize = (1024 * 1024);
+		static const size_t debug_big_datasize = (64 * 1024);
 	public:
 		void recv_cmd_list(U32 msgid) { ASSERT(false);return ; }
 		void recv_cmd_copyinit(U32 msgid, const char *path, int n_chunk, int chunksz) { ASSERT(false);return ; }
@@ -122,12 +122,16 @@ public:
 		pollret poll(UTIME ut, bool from_worker);
 	};
 
-	class shell_connector : public node, public textprotocol {
+	class shell_connector : public node, public protocol {
+	public:
+		typedef config property;
 	public:
 		shell_connector() : node() {}
 	};
-	typedef master_cluster_factory_impl<shellserver, shellserver, node> master_shell;
-	typedef servant_cluster_factory_impl<shellserver> servant_shell;
+	typedef master_cluster_factory_impl<shellserver, shellserver, shell_connector>
+		master_shell;
+	typedef servant_cluster_factory_impl<shellserver, shell_connector>
+		servant_shell;
 protected:
 	int m_server;
 	static THPOOL m_job;

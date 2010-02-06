@@ -241,7 +241,7 @@ testhttpd::create_config(config *cl[], int size)
 			128 * 1024, 1024,
 			0, 0,	/* no ping */
 			-1,0,	/* no query buffer */
-			"TCP",
+			"TCP", "eth0",
 			1 * 10 * 1000/* 100msec task span */,
 			1/* after 10ms, again try to connect */,
 			kernel::INFO,
@@ -257,7 +257,7 @@ testhttpd::create_config(config *cl[], int size)
 			1024, 32 * 1024,
 			0, 0,	/* no ping */
 			-1,0,	/* no query buffer */
-			"TCP",
+			"TCP", "eth0",
 			1 * 10 * 1000/* 100msec task span */,
 			0/* never wait ld recovery */,
 			kernel::INFO,

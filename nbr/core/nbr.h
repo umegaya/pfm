@@ -314,6 +314,8 @@ NBR_API void	*nbr_sockmgr_get_data(SOCKMGR s);
 NBR_API int		nbr_sockmgr_get_addr(SOCKMGR s, char *buf, int len);
 NBR_API int		nbr_sockmgr_event(SOCKMGR s, int type, char *p, int len);
 NBR_API int		nbr_sockmgr_get_stat(SOCKMGR s, SKMSTAT *st);
+NBR_API int		nbr_sockmgr_get_ifaddr(SOCKMGR s,
+					const char *ifn, char *buf, int len);
 NBR_API SOCKMGR	nbr_sock_get_mgr(SOCK s);
 NBR_API int 	nbr_sock_close(SOCK s);
 NBR_API int		nbr_sock_event(SOCK s, char *p, int len);

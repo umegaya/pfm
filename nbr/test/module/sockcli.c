@@ -433,7 +433,7 @@ main(int argc, char *argv[], char *envp[])
 	rl.rlim_max = RLIM_INFINITY;
 	setrlimit(RLIMIT_CORE, &rl);
 	/* client */
-	SOCKMGR skm = nbr_sockmgr_create(8 * 1024, 16 * 1024,
+	SOCKMGR skm = nbr_sockmgr_create(8 * 1024, 32 * 1024,
 						N_CLIENT + 1,
 						sizeof(workbuf_t),
 						f_udp ? 10 : 600,

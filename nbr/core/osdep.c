@@ -272,7 +272,7 @@ nbr_osdep_tcp_str2addr(const char *str, void *addr, int *len)
 	sa->sin_addr.s_addr = GET_32(hp->h_addr);
 	sa->sin_port = htons(port);
 //	TRACE("str2addr: %08x,%u,%u\n", sa->sin_addr.s_addr, sa->sin_port, *len);
-	ASSERT(sa->sin_addr.s_addr == 0 || sa->sin_addr.s_addr == 0x0100007f);
+//	ASSERT(sa->sin_addr.s_addr == 0 || sa->sin_addr.s_addr == 0x0100007f);
 	return *len;
 }
 
@@ -286,7 +286,7 @@ nbr_osdep_tcp_addr2str(void *addr, int len, char *str_addr, int str_len)
 		return LASTERR;
 	}
 //	TRACE("addr2str: %08x(%s):%hu\n", sa->sin_addr.s_addr, inet_ntoa(sa->sin_addr), sa->sin_port);
-	ASSERT(sa->sin_addr.s_addr != 0);
+//	ASSERT(sa->sin_addr.s_addr != 0);
 	return nbr_str_printf(str_addr, str_len, "%s:%hu", inet_ntoa(sa->sin_addr),
 		ntohs(sa->sin_port));
 }
@@ -452,7 +452,7 @@ DSCRPTR
 nbr_osdep_udp_socket(const char *addr, SKCONF *cfg)
 {
 	struct sockaddr_in sa;
-	struct ip_mreqn mreq;
+	struct ip_mreq mreq;
 	int alen, reuse;
 	UDPCONF *ucf = cfg->proto_p;
 	DSCRPTR fd = socket(PF_INET, SOCK_DGRAM, 0);
@@ -482,18 +482,40 @@ nbr_osdep_udp_socket(const char *addr, SKCONF *cfg)
 		}
 	}
 	if (ucf && ucf->mcast_addr) {
-		if (0 == inet_aton(ucf->mcast_addr, &(mreq.imr_multiaddr))) {
-			OSDEP_ERROUT(ERROR,SOCKET,"get mcast addr: (%s)\n", ucf->mcast_addr);
+		struct ifreq ifr;
+		nbr_mem_zero(&ifr, sizeof(ifr));
+		ifr.ifr_addr.sa_family = AF_INET;
+		nbr_str_copy(ifr.ifr_name, IFNAMSIZ-1, "eth0", IFNAMSIZ-1);
+		if (-1 == ioctl(fd, SIOCGIFADDR, &ifr)) {
+			OSDEP_ERROUT(ERROR,SYSCALL,"get local addr fail %u\n", errno);
 			goto error;
 		}
-		mreq.imr_address.s_addr = addr ? sa.sin_addr.s_addr : INADDR_ANY;
-		mreq.imr_ifindex = 0;
+#if defined(_DEBUG)
+			char tmpstr[256];
+			struct sockaddr tmp;
+			int sl = sizeof(tmp);
+			nbr_osdep_sockname(fd, (char *)&tmp, &sl);
+			nbr_osdep_udp_addr2str((char *)&(ifr.ifr_addr), sizeof(ifr.ifr_addr),
+					tmpstr, sizeof(tmpstr));
+			TRACE("localaddr/addr = %s/%s\n", tmpstr, addr);
+#endif
+		//mreq.imr_ifindex = 0;
 		if (setsockopt(fd,
-			IPPROTO_IP, IP_MULTICAST_IF, (char *)&(mreq), sizeof(mreq)) == -1) {
+			IPPROTO_IP, IP_MULTICAST_IF,
+			(char *)&(ifr.ifr_addr), sizeof(ifr.ifr_addr)) == -1) {
 			OSDEP_ERROUT(ERROR,SOCKOPT,"setmcastif : %d\n", errno);
 			goto error;
 		}
 		if (addr) { /* if bind is done */
+			struct in_addr in;
+			struct sockaddr_in *sa = (struct sockaddr_in *)&(ifr.ifr_addr);
+			if (0 == inet_aton(ucf->mcast_addr, &in)) {
+				OSDEP_ERROUT(ERROR,SOCKET,"get mcast addr: (%s)\n", ucf->mcast_addr);
+				goto error;
+			}
+			nbr_mem_zero(&mreq, sizeof(mreq));
+			mreq.imr_multiaddr.s_addr = in.s_addr;
+			mreq.imr_interface.s_addr = sa->sin_addr.s_addr;
 			if (setsockopt(fd,
 				IPPROTO_IP, IP_ADD_MEMBERSHIP, (char *)&(mreq), sizeof(mreq)) == -1) {
 				OSDEP_ERROUT(ERROR,SOCKOPT,"add member ship : %d\n", errno);
@@ -542,6 +564,35 @@ int		nbr_osdep_sockname(DSCRPTR fd, char *addr, int *len)
 	}
 	*len = (int)slen;
 	return NBR_OK;
+}
+
+/* ipv4 only */
+int		nbr_osdep_ifaddr(DSCRPTR fd, const char *ifn, char *buf, int *len,
+						void *addr, int alen)
+{
+	struct ifreq ifr;
+	struct sockaddr_in *saif, *sa;
+	socklen_t slen = alen;
+	if (slen < sizeof(struct sockaddr_in)) {
+		return NBR_ESHORT;
+	}
+	sa = (struct sockaddr_in *)addr;
+	nbr_mem_zero(&ifr, sizeof(ifr));
+	ifr.ifr_addr.sa_family = AF_INET;
+	nbr_str_copy(ifr.ifr_name, IFNAMSIZ-1, ifn, IFNAMSIZ-1);
+	if (-1 == ioctl(fd, SIOCGIFADDR, &ifr)) {
+		OSDEP_ERROUT(ERROR,SYSCALL,"ioctl fail %u\n", errno);
+		return NBR_ESYSCALL;
+	}
+	saif = (struct sockaddr_in *)&(ifr.ifr_addr);
+	if (sa) {
+		*len = nbr_str_printf(buf, *len, "%s:%hu",
+				inet_ntoa(saif->sin_addr), ntohs(sa->sin_port));
+	}
+	else {
+		*len = nbr_str_printf(buf, *len, "%s", inet_ntoa(saif->sin_addr));
+	}
+	return *len;
 }
 
 

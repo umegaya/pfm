@@ -43,6 +43,9 @@
 #define nbr_mem_cmp		memcmp
 #define nbr_mem_move	memmove
 
+/* ping related */
+#define NO_PING	(1)
+
 /* numerical conversion */
 #define SAFETY_ATOI(p, r, type)		\
 {									\
