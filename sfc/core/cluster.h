@@ -27,6 +27,8 @@ int cluster_protocol_impl<S>::recv_handler(S &s, SOCK sk, char *p, int l)
 	switch(*p) {
 	case ncmd_update_node_state:
 		return s.on_cmd_update_node_state(p, l);
+	case ncmd_update_master_node_state:
+		return s.on_cmd_update_master_node_state(p, l);
 	case ncmd_get_master_list:
 		return s.on_cmd_get_master_list(sk, p, l);
 	case ncmd_broadcast:
@@ -40,6 +42,7 @@ int cluster_protocol_impl<S>::recv_handler(S &s, SOCK sk, char *p, int l)
 		}
 	default:
 		s.log(ERROR, "invalid command recv (%d)\n", *p);
+		ASSERT(false);
 		break;
 	}
 	return NBR_OK;
@@ -59,6 +62,10 @@ int cluster_protocol_impl<S>::event_handler(S &s, int t, char *p, int l)
 		return s.on_ev_finder_reply_init(p, l);
 	case nev_finder_reply_poll:
 		return s.on_ev_finder_reply_poll(p, l);
+	case nev_get_master_list:
+		return s.on_ev_get_master_list(p, l);
+	case nev_update_servant_node_state:
+		return s.on_ev_update_servant_node_state(p, l);
 	default:
 		s.log(ERROR, "invalid event recv (%d)\n", *p);
 		break;
@@ -66,7 +73,13 @@ int cluster_protocol_impl<S>::event_handler(S &s, int t, char *p, int l)
 	return NBR_OK;
 }
 
-/* cluster_finder */
+/* node_impl */
+template <class S, class D>
+int node_impl<S,D>::compare(const void *a, const void *b) {
+	return D::cmp((*((const class node_impl<S,D> **)a))->get(),
+				(*((const class node_impl<S,D> **)b))->get());
+}
+
 
 /* cluster_factory_impl */
 template <class S, class P, class D>
@@ -111,22 +124,6 @@ void cluster_factory_impl<S,P,D>::fin()
 }
 
 template <class S, class P, class D>
-int cluster_factory_impl<S,P,D>::update_nodestate(const address &a, const D &p)
-{
-	typename NODE::data &d = (typename NODE::data &)p;
-	char work[sizeof(D) * 2];
-	int r;
-	PUSH_START(work, sizeof(work));
-	PUSH_8(cluster_protocol::ncmd_update_node_state);
-	PUSH_ADDR(a);
-	if ((r = d.pack(PUSH_BUF(), PUSH_REMAIN())) < 0) {
-		log(super::ERROR, "update_nodestate: data pack fail(%d)\n", r);
-		return r;
-	}
-	return send(primary(), work, PUSH_LEN());
-}
-
-template <class S, class P, class D>
 void cluster_factory_impl<S,P,D>::poll(UTIME ut)
 {
 	/* TODO: need to protect by mutex or something */
@@ -168,17 +165,18 @@ void cluster_factory_impl<S,P,D>::poll(UTIME ut)
 				}
 			}
 			else { c[n_c++] = from_iter(tmp); }
+#if defined(_DEBUG)
+			if (!master() && can_inquiry(ut)) { tmp->dump(); }
+#endif
 		}
 		else {
 			nc[n_nc++] = from_iter(tmp);
 		}
 	}
 	int n_establish = p.m_master ? pool().use() : p.m_multiplex;
-	bool established = false;
-	TRACE("n_establish = %u\n", n_establish);
-	if (n_wc >= n_establish) {
-		established = ((p.m_master) ||(writable() > 0));
-	}
+	bool established = (n_wc >= n_establish);
+	TRACE("n_establish = %u(%u):%s\n", n_establish, pool().use(),
+			established ? "ok" : "yet");
 	if (established) {
 		setstate(cluster_finder_factory_container::ns_establish);
 	}
@@ -208,19 +206,30 @@ void cluster_factory_impl<S,P,D>::poll(UTIME ut)
 	else {
 		if (!established) {
 			if (can_inquiry(ut)) {
+				super::log(super::INFO, "find master node\n");
 				if (finder().inquiry(p.m_sym_servant_init) >= 0) {
 					m_last_inquiry = ut;
 				}
 			}
 		}
-		else if (pool().use() <= (n_establish + 1)) {
-			if (primary() && primary()->writable() > 0) {
-				if (can_inquiry(ut)) {
+		else {
+			if (writable() <= 0) {
+				TRACE("writable <= 0: find primary\n");
+				for (int i = 0; i < n_wc; i++) {
+					TRACE("wc[%u]: writable = %d\n", i, wc[i]->writable());
+					if (wc[i]->writable() > 0) {
+						switch_primary(wc[i]);
+						break;
+					}
+				}
+			}
+			if (writable() > 0 && can_inquiry(ut)) {
+				if (pool().use() <= (n_establish + 1)) {
 					/* number of known (and available) master is too short.
 					 * query latest master list to master server. */
+					super::log(super::INFO, "get master list(%u)\n", pool().use());
 					char ch = (char)cluster_protocol::ncmd_get_master_list;
 					primary()->send(&ch, 1);
-					super::log(super::INFO, "query master list\n");
 					m_last_inquiry = ut;
 				}
 			}
@@ -236,11 +245,13 @@ int cluster_factory_impl<S,P,D>::on_ev_finder_reply_init(char *p, int l)
 	NODE *n;
 	POP_START(p, l);
 	U32 sz; int r;
+//	TRACE("on_ev_finder_reply_init : %u\n", l);
 	POP_32(sz);
 	for (U32 i = 0; i < sz; i++) {
 		POP_ADDR(a);
-		if (!(n = (NODE *)pool().find(a))) {
-			if (!(n = (NODE *)pool().create(a))) {
+//		TRACE("on_ev_finder_reply_init : addr<%s>\n", (const char *)a);
+		if (!(n = pool().find(a))) {
+			if (!(n = pool().create(a))) {
 				return NBR_EEXPIRE;
 			}
 		}
@@ -259,12 +270,10 @@ int cluster_factory_impl<S,P,D>::on_ev_finder_reply_poll(char *p, int l)
 	address a;
 	NODE *n;
 	int r;
-	TRACE("on_ev_fider_reply_poll: %u\n", l);
 	POP_START(p, l);
 	POP_ADDR(a);
-	TRACE("on_ev_finder_reply_poll: found addr %s\n", (const char *)a);
-	if (!(n = (NODE *)pool().find(a))) {
-		if (!(n = (NODE *)pool().create(a))) {
+	if (!(n = pool().find(a))) {
+		if (!(n = pool().create(a))) {
 			return NBR_EEXPIRE;
 		}
 	}
@@ -336,30 +345,29 @@ int cluster_factory_impl<S,P,D>::on_connect(SOCK sk, void *p)
 /*-------------------------------------------------------------*/
 /* servant_session_factory_impl								   */
 /*-------------------------------------------------------------*/
-template <class S>
-int servant_session_factory_impl<S>::init(const config &cfg)
+template <class S, class D>
+int servant_session_factory_impl<S,D>::init(const config &cfg)
 {
 	if (!super::pool().init(cfg.m_max_connection, cfg.m_max_connection,
-			sizeof(S), cfg.m_option)) {
+			sizeof(NODE), cfg.m_option)) {
 		return NBR_ESHORT;
 	}
 	return factory::init(cfg,
 			super::on_open,
 			super::on_close,
-			servant_session_factory_impl<S>::on_recv,
+			servant_session_factory_impl<S,D>::on_recv,
 			super::on_event,
-			NULL, /* use default */
+			servant_session_factory_impl<S,D>::on_mgr,
 			super::on_connect,
 			super::on_poll);
 }
 
-template <class S>
-int servant_session_factory_impl<S>::on_cmd_update_node_state(char *p, int l)
+template <class S, class D>
+int servant_session_factory_impl<S,D>::on_cmd_update_node_state(char *p, int l)
 {
-	if (super::broadcast(p, l) < 0) {
-		super::log(super::ERROR, "update_node_state: self bcast fail\n");
-		ASSERT(false);
-	}
+	/* servant node state updated :
+	 * broadcast to other master node (it also update servant session of
+	 * each master node */
 	if (master_node()->broadcast(p, l) < 0) {
 		super::log(super::ERROR, "update_node_state: mnode bcast fail\n");
 		ASSERT(false);
@@ -367,11 +375,10 @@ int servant_session_factory_impl<S>::on_cmd_update_node_state(char *p, int l)
 	return NBR_OK;
 }
 
-template <class S>
-int servant_session_factory_impl<S>::on_cmd_get_master_list(SOCK sk, char *p, int l)
+template <class S, class D>
+int servant_session_factory_impl<S,D>::on_cmd_get_master_list(SOCK sk, char *p, int l)
 {
-	if (master_node()->event(
-			cluster_protocol::nev_finder_query_servant_init,
+	if (master_node()->event(cluster_protocol::nev_get_master_list,
 			(char *)&sk, sizeof(sk)) < 0) {
 		super::log(super::ERROR, "get_master_list: send event fail\n");
 		ASSERT(false);
@@ -379,8 +386,8 @@ int servant_session_factory_impl<S>::on_cmd_get_master_list(SOCK sk, char *p, in
 	return NBR_OK;
 }
 
-template <class S>
-int servant_session_factory_impl<S>::on_cmd_broadcast(char *p, int l)
+template <class S, class D>
+int servant_session_factory_impl<S,D>::on_cmd_broadcast(char *p, int l)
 {
 	if (master_node()->broadcast(p, l) < 0) {
 		super::log(super::ERROR, "cmd_broadcast: mnode bcast fail\n");
@@ -394,8 +401,8 @@ int servant_session_factory_impl<S>::on_cmd_broadcast(char *p, int l)
 	return NBR_OK;
 }
 
-template <class S>
-int servant_session_factory_impl<S>::on_cmd_unicast(address &a, char *p, int l)
+template <class S, class D>
+int servant_session_factory_impl<S,D>::on_cmd_unicast(address &a, char *p, int l)
 {
 	S *nd = super::pool().find(a);
 	if (nd) {
@@ -413,8 +420,41 @@ int servant_session_factory_impl<S>::on_cmd_unicast(address &a, char *p, int l)
 	return NBR_OK;
 }
 
-template <class S>
-int servant_session_factory_impl<S>::on_recv(SOCK sk, char *p, int l)
+template <class S, class D>
+int servant_session_factory_impl<S,D>::on_ev_update_servant_node_state(
+											char *p, int l)
+{
+	address a;
+	NODE *n;
+	int r;
+	POP_START(p + 1, l - 1);
+	POP_ADDR(a);
+	if (!(n = super::pool().find(a))) {
+		if (!(n = super::pool().create(a))) {
+			return NBR_EEXPIRE;
+		}
+	}
+	n->setaddr(a);
+	if ((r = n->get().unpack(POP_BUF(), POP_REMAIN())) < 0) {
+		return r;
+	}
+#if defined(_DEBUG)
+	TRACE("update_node(servant) result: ");
+	n->dump();
+#endif
+	return NBR_OK;
+}
+
+template <class S, class D>
+void servant_session_factory_impl<S,D>::on_mgr(SOCKMGR s, int t, char *p, int l)
+{
+	servant_session_factory_impl<S,D> *nf =
+			(servant_session_factory_impl<S,D> *)nbr_sockmgr_get_data(s);
+	event_handler(*nf, t, p, l);
+}
+
+template <class S, class D>
+int servant_session_factory_impl<S,D>::on_recv(SOCK sk, char *p, int l)
 {
 	S **s = (S**)nbr_sock_get_data(sk, NULL);
 	if (s == NULL) {
@@ -425,13 +465,13 @@ int servant_session_factory_impl<S>::on_recv(SOCK sk, char *p, int l)
 		return r;
 	}
 	S *obj = *s;
-	servant_session_factory_impl<S> *nf;
+	servant_session_factory_impl<S,D> *nf;
 	switch(*p) {
 	case cluster_protocol::ncmd_app:
 		obj->on_recv(p + 1, l - 1);
 		break;
 	default:
-		nf = (servant_session_factory_impl<S> *)obj->f();
+		nf = (servant_session_factory_impl<S,D> *)obj->f();
 		recv_handler(*nf, sk, p, l);
 		break;
 	}
@@ -463,7 +503,21 @@ int master_session_factory_impl<S>::init(const config &cfg)
 template <class S>
 int master_session_factory_impl<S>::on_cmd_update_node_state(char *p, int l)
 {
-	if (super::broadcast(p, l) < 0) {
+	/* servant node state updated : send event to servant_session()
+	 * to update servant node data */
+	if (servant_session()->event(
+			cluster_protocol::nev_update_servant_node_state, p, l) < 0) {
+		super::log(super::ERROR, "update_node_state: send event fail\n");
+		ASSERT(false);
+	}
+	return NBR_OK;
+}
+
+template <class S>
+int master_session_factory_impl<S>::on_cmd_update_master_node_state(char *p, int l)
+{
+	/* master node state updated : send to normal node */
+	if (servant_session()->broadcast(p, l) < 0) {
 		super::log(super::ERROR, "update_node_state: self bcast fail\n");
 		ASSERT(false);
 	}
@@ -562,8 +616,38 @@ template <class C, class SN>
 void servant_cluster_factory_impl<C,SN>::poll(UTIME ut)
 {
 	m_fccl.poll(ut);
+	if (super::can_inquiry(ut)) {
+		if (update_node_state(&m_fccl) < 0) {
+			ASSERT(false);
+		}
+	}
 	super::poll(ut);
 }
+
+template <class C, class SN>
+int servant_cluster_factory_impl<C,SN>::update_node_state(
+		client_session_factory_impl<C> *fc)
+{
+	TRACE("update_nodestate(servant) : %s\n", (const char *)fc->ifaddr());
+	if (super::writable() <= 0) {
+		TRACE("upate_nodestate(servant) : no establish conn\n");
+		return NBR_OK;
+	}
+	char work[address::SIZE + 1 + sizeof(typename super::NODE) * 2];
+	int r;
+	PUSH_START(work, sizeof(work));
+	PUSH_8(cluster_protocol::ncmd_update_node_state);
+	PUSH_ADDR(fc->ifaddr());
+	typename super::NODE d;
+	setdata_to(*fc, d);
+	if ((r = d.get().pack(PUSH_BUF(), PUSH_REMAIN())) < 0) {
+		log(super::ERROR, "update_nodestate: data pack fail(%d)\n", r);
+		return r;
+	}
+	PUSH_SKIP(r);
+	return super::primary()->send(work, PUSH_LEN());
+}
+
 
 /* master_cluster_factory_impl */
 template <class M, class S, class N>
@@ -614,7 +698,7 @@ int master_cluster_factory_impl<M,S,N>::init(const config &c)
 		return NBR_EEXPIRE;
 	}
 	/* store basic node info */
-	lo->setdata_from(m_fcsvnt);
+	setdata_to(m_fcmstr, *lo);
 	if ((r = super::connect(lo, m_fcmstr.ifaddr())) < 0) {
 		super::log(super::ERROR, "master node: cannot connect to local master (%d)\n", r);
 		return r;
@@ -659,12 +743,38 @@ void master_cluster_factory_impl<M,S,N>::poll(UTIME ut)
 {
 	m_fcmstr.poll(ut);
 	m_fcsvnt.poll(ut);
+	if (super::can_inquiry(ut)) {
+		if (update_node_state(&m_fcsvnt) < 0) {
+			ASSERT(false);
+		}
+	}
 	super::poll(ut);
 }
 
 template <class M, class S, class N>
+int master_cluster_factory_impl<M,S,N>::update_node_state(
+		servant_session_factory_impl<S> *fc)
+{
+	TRACE("update_nodestate(master) : %s\n",(const char *)fc->ifaddr());
+	char work[address::SIZE + 1 + sizeof(typename super::NODE) * 2];
+	int r;
+	PUSH_START(work, sizeof(work));
+	PUSH_8(cluster_protocol::ncmd_update_master_node_state);
+	PUSH_ADDR(fc->ifaddr());
+	typename super::NODE d;
+	setdata_to(*fc, d);
+	if ((r = d.get().pack(PUSH_BUF(), PUSH_REMAIN())) < 0) {
+		log(super::ERROR, "update_nodestate: data pack fail(%d)\n", r);
+		return r;
+	}
+	PUSH_SKIP(r);
+	return super::broadcast(work, PUSH_LEN());
+}
+
+
+template <class M, class S, class N>
 int master_cluster_factory_impl<M,S,N>::on_finder_query_init(
-		bool is_master, char *p, int l)
+		bool is_master, bool from_cmd, char *p, int l)
 {
 	const property &c = (const property &)super::cfg();
 	if (!super::ready()) {
@@ -677,14 +787,18 @@ int master_cluster_factory_impl<M,S,N>::on_finder_query_init(
 		return NBR_EINVAL;
 	}
 	SOCK *sk = (SOCK *)p;
-	cluster_finder nf(*sk, &(super::finder()));
 	{
 		typename super::NODE *n;
 		char opt[finder_protocol::MAX_OPT_LEN];
 		char a[address::SIZE], nodeaddr[address::SIZE];
 		PUSH_START(opt, sizeof(opt));
-		PUSH_8(finder_protocol::reply);
-		PUSH_STR(is_master ? c.m_sym_master_init : c.m_sym_servant_init);
+		if (from_cmd) {
+			PUSH_8(cluster_protocol::ncmd_get_master_list);
+		}
+		else {
+			PUSH_8(finder_protocol::reply);
+			PUSH_STR(is_master ? c.m_sym_master_init : c.m_sym_servant_init);
+		}
 		PUSH_32(pool().use());
 		TRACE("found %u node\n", pool().use());
 		typename sspool::iterator s = pool().begin();
@@ -704,10 +818,15 @@ int master_cluster_factory_impl<M,S,N>::on_finder_query_init(
 				return r;
 			}
 			PUSH_SKIP(r);
-			TRACE("push len now = %u\n", PUSH_LEN());
 		}
-		TRACE("push len final = %u\n", PUSH_LEN());
-		return nf.send(opt, PUSH_LEN());
+		if (from_cmd) {
+			cluster_finder nf(*sk, &m_fcsvnt);
+			return nf.send(opt, PUSH_LEN());
+		}
+		else {
+			cluster_finder nf(*sk, &(super::finder()));
+			return nf.send(opt, PUSH_LEN());
+		}
 	}
 }
 

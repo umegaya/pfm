@@ -61,7 +61,7 @@ int shelld::protocol::sendping(class session &s, UTIME ut)
 #if defined(_DEBUG)
 	//s.log(kernel::INFO, "sendping: at %llu\n", ut);
 #endif
-	return s.send(work, PUSH_TEXT_LEN());
+	return ((shell_node &)s).senddata(0, work, PUSH_TEXT_LEN());
 }
 
 int shelld::protocol::recvping(class session &s, char *p, int l)
@@ -208,7 +208,7 @@ int shelld::protocol_impl<S>::send_code_exec_end(S &s,
 	PUSH_TEXT_START(buf, code_exec_end);
 	PUSH_TEXT_NUM(msgid);
 	PUSH_TEXT_STR(result);
-	return s.send(buf, PUSH_TEXT_LEN());
+	return s.senddata(msgid, buf, PUSH_TEXT_LEN());
 }
 
 template <class S>
@@ -376,8 +376,8 @@ shelld::create_config(config *cl[], int size)
 				1 * 1000 * 1000/* 1msec task span */,
 				10/* after 10ms, again try to connect */,
 				kernel::INFO,
-				nbr_sock_rparser_text,
-				nbr_sock_send_text,
+				nbr_sock_rparser_bin32,
+				nbr_sock_send_bin32,
 				config::cfg_flag_not_set,
 				"shell", 2,	-1, /* finder sym is 'shell' and multiplexity = 2
 								 packet backup size is auto decided */
@@ -393,8 +393,8 @@ shelld::create_config(config *cl[], int size)
 						1 * 1000 * 1000/* 1msec task span */,
 						10/* after 10ms, again try to connect */,
 						kernel::INFO,
-						nbr_sock_rparser_text,
-						nbr_sock_send_text,
+						nbr_sock_rparser_bin32,
+						nbr_sock_send_bin32,
 						config::cfg_flag_server),
 				config("for_svnt",	/* server for servant:config */
 						"0.0.0.0:54321",
@@ -407,8 +407,8 @@ shelld::create_config(config *cl[], int size)
 						1 * 1000 * 1000/* 1msec task span */,
 						10/* after 10ms, again try to connect */,
 						kernel::INFO,
-						nbr_sock_rparser_text,
-						nbr_sock_send_text,
+						nbr_sock_rparser_bin32,
+						nbr_sock_send_bin32,
 						config::cfg_flag_server)
 			);
 	cl[0] = new servant_shell::property (
@@ -423,8 +423,8 @@ shelld::create_config(config *cl[], int size)
 				1 * 1000 * 1000/* 10msec task span */,
 				0/* never wait ld recovery */,
 				kernel::INFO,
-				nbr_sock_rparser_text,
-				nbr_sock_send_text,
+				nbr_sock_rparser_bin32,
+				nbr_sock_send_bin32,
 				config::cfg_flag_not_set,
 				"shell", 2,	-1 /* finder sym is 'shell' and multiplexity = 2 */,
 				config("for_client",	/* server for client:config */
@@ -438,8 +438,8 @@ shelld::create_config(config *cl[], int size)
 						1 * 1000 * 1000/* 1msec task span */,
 						10/* after 10ms, again try to connect */,
 						kernel::INFO,
-						nbr_sock_rparser_text,
-						nbr_sock_send_text,
+						nbr_sock_rparser_bin32,
+						nbr_sock_send_bin32,
 						config::cfg_flag_server)
 			);
 	return 2;

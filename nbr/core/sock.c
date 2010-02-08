@@ -1979,6 +1979,7 @@ skmevent:
 			le = (sockevent_t *)(j->reb->buf + j->reb->blen);
 			while (e < le) {
 				ASSERT(e->len > sizeof(*e));
+				ASSERT(e->skm->on_mgr != sockmgr_mgr_event_noop);
 				e->skm->on_mgr(e->skm, e->type, e->data, e->len - sizeof(*e));
 				e = (sockevent_t *)(((char *)e) + e->len);
 			}

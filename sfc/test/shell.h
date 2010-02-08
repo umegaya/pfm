@@ -26,8 +26,19 @@ using namespace app;
 using namespace cluster;
 class shelld : public daemon {
 public:
-	typedef node servant;
-	typedef node master;
+#if 1
+	class shell_node : public node {
+	public:
+		shell_node() : node() {}
+		int senddata(U32 msgid, char *p, int l) {
+			return nbr_sock_send_bin32(m_sk, p, l + 1/* send last '\0' also */);
+		}
+	};
+#else
+	typedef session shell_node;
+#endif
+	typedef shell_node servant;
+	typedef shell_node master;
 	class protocol : public textprotocol {
 	public:
 		static const char cmd_list[];
@@ -122,11 +133,11 @@ public:
 		pollret poll(UTIME ut, bool from_worker);
 	};
 
-	class shell_connector : public node, public protocol {
+	class shell_connector : public shell_node, public protocol {
 	public:
 		typedef config property;
 	public:
-		shell_connector() : node() {}
+		shell_connector() : shell_node() {}
 	};
 	typedef master_cluster_factory_impl<shellserver, shellserver, shell_connector>
 		master_shell;

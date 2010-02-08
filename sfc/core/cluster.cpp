@@ -139,7 +139,7 @@ int cluster_finder_factory_container::unicast(const address &addr, U32 msgid, ch
 	return send(*primary(), msgid, buf, PUSH_LEN());
 }
 
-int cluster_finder_factory_container::broadcast(U32 msgid, char *p, int l)
+int cluster_finder_factory_container::cluster_broadcast(U32 msgid, char *p, int l)
 {
 	char buf[l + 1 + sizeof(U32)];
 	PUSH_START(buf, sizeof(buf));
@@ -174,7 +174,9 @@ int cluster_finder_factory_container::send(session &s, U32 msgid, char *p, int l
 
 void cluster_finder_factory_container::switch_primary(node *new_node)
 {
-
+	new_node->f()->log(kernel::INFO,
+			"[%s] primary: to <%s>\n", (const char *)new_node->addr());
+	m_primary = new_node;
 }
 
 /* property */
