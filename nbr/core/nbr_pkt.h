@@ -55,7 +55,7 @@ static inline U64 htonll(U64 n) { return (((U64)htonl(n)) << 32) + htonl(n >> 32
 #define POP_LEN()				_ofs
 #define	POP_BUF()				((char *)_data)
 #define POP_REMAIN()			(_len - _ofs)
-#define POP_SKIP(n)				(_ofs += n)
+#define POP_SKIP(n)				(_ofs += n, _data += n)
 #define POP_HAS_REMAIN()		(_len > _ofs)
 #define	POP_LENGTHCHECK(x)		if ((_ofs + (int)sizeof(x)) > _len) {__RETURN -1;}
 #define	POP_8(i)				{POP_LENGTHCHECK(i); i = *_data;_data+=sizeof(i); _ofs+=sizeof(i);}
@@ -75,7 +75,7 @@ static inline U64 htonll(U64 n) { return (((U64)htonl(n)) << 32) + htonl(n >> 32
 #define	PUSH_LEN()				_ofs
 #define	PUSH_BUF()				_work
 #define PUSH_REMAIN()			(_outmax - _ofs)
-#define PUSH_SKIP(n)			(_ofs += n)
+#define PUSH_SKIP(n)			(_ofs += n, _work += n)
 #define	PUSH_LENGTHCHECK(x)		if ((_ofs + (int)sizeof(x)) > _outmax) {__RETURN -1;}
 #define PUSH_8(i)				{PUSH_LENGTHCHECK(U8); *_work = (U8)i; _work+=sizeof(U8); _ofs+=sizeof(U8);}
 #define	PUSH_16(i)				{U16 __ts;	PUSH_LENGTHCHECK(__ts); __ts = htons((U16)(i));   U32 _i = 0; do{_work[_i] = ((char *)(&__ts))[_i];}while(++_i < 2); _work+=sizeof(__ts); _ofs+=sizeof(__ts);}

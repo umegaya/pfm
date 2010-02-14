@@ -67,7 +67,7 @@ int cluster_finder::on_inquiry(const char *sym, char *opt, int olen)
 
 int cluster_finder::on_reply(const char *sym, const char *opt, int olen)
 {
-#if defined(_DEBUG)
+#if defined(_DEBUG) && 0
 	address a;
 	a.from(m_sk);
 	TRACE("on_reply: from <%s> sym=<%s>\n", (const char *)a, sym);
@@ -108,7 +108,7 @@ int cluster_finder_factory_container::init(const cluster_property &cfg)
 		TRACE("initialize finder\n");
 		if ((r = m_finder.init(cfg.m_mcast,
 				finder_factory::on_recv<cluster_finder>)) < 0) {
-			TRACE("finder_mixin: cannot init finder (%d)\n", r);
+			TRACE("container: cannot init finder (%d)\n", r);
 			return r;
 		}
 	}
@@ -128,46 +128,55 @@ int cluster_finder_factory_container::writable() const
 	return primary() ? primary()->writable() : 0;
 }
 
-int cluster_finder_factory_container::unicast(const address &addr, U32 msgid, char *p, int l)
+int cluster_finder_factory_container::cluster_unicast(session *sender, bool reply,
+		const address &addr, U32 msgid, const char *p, int l)
 {
 	char buf[l + 1 + sizeof(addr) * 2 + sizeof(U32)];
 	PUSH_START(buf, sizeof(buf));
-	PUSH_8(cluster_protocol::ncmd_unicast);
+	PUSH_8(reply ? cluster_protocol::ncmd_unicast_reply :
+				cluster_protocol::ncmd_unicast);
 	PUSH_ADDR(addr);
 	PUSH_32(msgid);
 	PUSH_MEM(p, l);
-	return send(*primary(), msgid, buf, PUSH_LEN());
+#if defined(_DEBUG)
+	hexdump(p, l);
+	hexdump(buf, PUSH_LEN());
+#endif
+	return send(*primary(), sender, msgid, buf, PUSH_LEN());
 }
 
-int cluster_finder_factory_container::cluster_broadcast(U32 msgid, char *p, int l)
+int cluster_finder_factory_container::cluster_broadcast(session *sender,
+		U32 msgid, const char *p, int l)
 {
 	char buf[l + 1 + sizeof(U32)];
 	PUSH_START(buf, sizeof(buf));
 	PUSH_8(cluster_protocol::ncmd_broadcast);
 	PUSH_32(msgid);
 	PUSH_MEM(p, l);
-	return send(*primary(), msgid, buf, PUSH_LEN());
+	return send(*primary(), sender, msgid, buf, PUSH_LEN());
 }
 
-int cluster_finder_factory_container::send(session &s, U32 msgid, char *p, int l)
+int cluster_finder_factory_container::send(session &s, session *sender,
+		U32 msgid, const char *p, int l)
 {
 	if (s.writable() >= l) {
-		U32 ret = l;
-/*		session::factory::query *q;
-		if (msgid != 0) {
-			char *ptr = (char *)m_pkt_bkup.write((U8 *)p, l, ret);
-			q = s.f()->querymap().create(msgid);
-			if (q) {
-				((nodequery *)q->data)->p = ptr;
-				((nodequery *)q->data)->l = ret;
+		node::querydata *q;
+		if (msgid != 0 && sender) {
+			//char *ptr = (char *)m_pkt_bkup.write((U8 *)p, l, ret);
+			if ((q = (node::querydata *)s.f()->querymap().create(msgid))) {
+				//((nodequery *)q->data)->p = ptr;
+				//((nodequery *)q->data)->l = ret;
+				q->s = sender;
+				q->msgid = msgid;
+				q->sk = sender->sk();
 			}
 			else { return NBR_EEXPIRE; }
 		}
-*/		if (s.send(p, ret) < 0) {
-//			if (q) { s.f()->querymap().erase(msgid); }
+		if (s.send(p, l) < 0) {
+			if (q) { s.f()->querymap().erase(msgid); }
 			return NBR_ESEND;
 		}
-		return ret;
+		return l;
 	}
 	return NBR_ESHORT;
 }
@@ -177,6 +186,17 @@ void cluster_finder_factory_container::switch_primary(node *new_node)
 	new_node->f()->log(kernel::INFO,
 			"[%s] primary: to <%s>\n", (const char *)new_node->addr());
 	m_primary = new_node;
+}
+
+int cluster_finder_factory_container::bcast_sender::senddata(
+		U32 msgid, const char *p, int l) {
+	return m_c.cluster_broadcast(m_s, msgid, p, l);
+}
+
+int cluster_finder_factory_container::ucast_sender::senddata(
+		U32 msgid, const char *p, int l) {
+	ASSERT(p[l - 1] == 0);
+	return m_c->cluster_unicast(m_s, m_reply != 0, m_a, msgid, p, l);
 }
 
 /* property */
@@ -236,6 +256,7 @@ node::nodedata::setdata(factory &f)
 	SKMSTAT st;
 	f.stat(st);
 	m_n_servant = st.n_connection;
+	ASSERT(m_n_servant < 1000);
 }
 
 int
@@ -243,6 +264,7 @@ node::nodedata::pack(char *p, int l) const
 {
 	PUSH_START(p, l);
 	PUSH_16(m_n_servant);
+	ASSERT(m_n_servant < 1000);
 	return PUSH_LEN();
 }
 
@@ -252,6 +274,7 @@ node::nodedata::unpack(const char *p, int l)
 	ASSERT(l >= 2);
 	POP_START(p, l);
 	POP_16(m_n_servant);
+	ASSERT(m_n_servant < 1000);
 	return POP_LEN();
 }
 

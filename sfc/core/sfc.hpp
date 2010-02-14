@@ -40,7 +40,10 @@ public:
 	address(const char *p) { from(p); }
 	address() : m_len(0) { m_a[0] = '\0'; }
 	operator const char*() const { return m_a; }
+	bool operator == (const address &a) const { return
+		m_len == a.len() && nbr_mem_cmp(m_a, a.a(), m_len); }
 	char *a() { return m_a; }
+	const char *a() const { return m_a; }
 	int len() const { return m_len; }
 	void setlen(int len) { m_len = (U8)len; }
 	int from(const char *a);
@@ -470,6 +473,17 @@ public:
 	static sender sender_from(const char *str);
 };
 
+#if defined(_DEBUG)
+inline void hexdump(const char *p, int l)
+{
+	TRACE("hexdump(%p:%u)[%02x", p, l, *p);
+	for (int i = 1; i < l; i++) {
+		TRACE(":%02x", *((U8 *)(p + i)));
+	}
+	TRACE("]\n");
+}
+#endif
+
 #include "util.h"
 }	//namespace util
 //using namespace util;
@@ -624,6 +638,7 @@ protected:
 public:
 	typedef	typename P::sspool sspool;
 	typedef typename P::iterator iterator;
+	typedef S	session_type;
 public:
 	factory_impl() : factory(), m_container() {}
 	~factory_impl() { fin(); }
@@ -681,6 +696,7 @@ public:	/* usually dont need to touch */
 	const config &cfg() const 		{ return f()->cfg(); }
 	factory *f() 					{ return m_f; }
 	const factory *f() const		{ return m_f; }
+	SOCK sk() const 				{ return m_sk; }
 public: /* attributes */
 	void update_access() 			{ m_last_access = nbr_clock(); }
 	void update_ping(UTIME ut)		{ m_last_ping = ut; }
@@ -691,9 +707,10 @@ public: /* attributes */
 	bool valid() const				{ return m_state != ss_invalid && m_state != ss_closed; }
 	bool closed() const				{ return m_state == ss_closed; }
 	void setstate(ssstate s)		{ m_state = s; }
+	int state() const				{ return (int)m_state; }
 	void setaddr(char *a = NULL);
 	void setaddr(const address &a) 	{ m_addr = a; }
-	int senddata(U32 msgid, char *p, int l) { UNUSED(msgid); return send(p, l); }
+	int senddata(U32 msgid, const char *p, int l) { return send(p, l); }
 	const address &addr() const		{ return m_addr; }
 	address &addr() 				{ return m_addr; }
 	int localaddr(address &a)		{
@@ -727,6 +744,7 @@ public: /* callback */
 		return NBR_OK;
 	}
 	int on_close(int reason)		{
+		ASSERT(reason != CLOSED_BY_TIMEOUT);
 		log(INFO, "%s %s(%d)\n",
 			cfg().client() ? "disconnected from" : "close",
 			(const char *)addr(), reason);
@@ -831,11 +849,13 @@ public:
 	typedef enum {
 		ncmd_invalid,
 		ncmd_app,
+		ncmd_app_cast,
 		ncmd_update_node_state,
 		ncmd_update_master_node_state,
 		ncmd_get_master_list,
 		ncmd_broadcast,
 		ncmd_unicast,
+		ncmd_unicast_reply,
 	} nodecmd;
 	typedef enum {
 		nev_finder_invalid,
@@ -853,12 +873,15 @@ public:
 		node_resend_inquiry_sec = 10,			/* 10sec */
 	};
 public:
-	int on_cmd_app(char *, int){ ASSERT(false); return NBR_OK; }
+	int on_cmd_app(SOCK sk, address *a, char *, int){ ASSERT(false); return NBR_OK; }
 	int on_cmd_update_node_state(char *p, int l){ ASSERT(false); return NBR_OK; }
 	int on_cmd_update_master_node_state(char *p, int l){ ASSERT(false); return NBR_OK; }
 	int on_cmd_get_master_list(SOCK sk, char *p, int l){ ASSERT(false); return NBR_OK; }
-	int on_cmd_broadcast(char *p, int l){ ASSERT(false); return NBR_OK; }
-	int on_cmd_unicast(address &a, char *p, int l){ ASSERT(false); return NBR_OK; }
+	int on_cmd_broadcast(SOCK sk, char *p, int l){ ASSERT(false); return NBR_OK; }
+	int on_cmd_unicast(SOCK sk, address &a, char *p, int l, char *org_p, int org_l){
+		ASSERT(false); return NBR_OK; }
+	int on_cmd_unicast_reply(SOCK sk, address &a, char *p, int l, char *org_p, int org_l) {
+		ASSERT(false); return NBR_OK; }
 
 	int on_ev_finder_query_master_init(char *p, int l){ ASSERT(false); return NBR_OK; }
 	int on_ev_finder_query_servant_init(char *p, int l){ ASSERT(false); return NBR_OK; }
@@ -919,6 +942,38 @@ public:
 		ns_establish,	/* connection done. */
 	} nodestate;
 public:
+	class bcast_sender {
+	protected:
+		class cluster_finder_factory_container &m_c;
+		session *m_s;
+	public:
+		bcast_sender(cluster_finder_factory_container &c,
+				session *s) : m_c(c), m_s(s) {}
+		int senddata(U32 msgid, const char *p, int l);
+		int writable() const { return m_c.writable(); }
+	};
+	class ucast_sender {
+	protected:
+		class cluster_finder_factory_container *m_c;
+		address m_a;
+		session *m_s;
+		U8 m_reply, padd[3];
+	public:
+		ucast_sender(cluster_finder_factory_container &c,
+			address *a, session *s, U8 reply) :
+			m_c(&c), m_a(*a), m_s(s), m_reply(reply) {}
+		ucast_sender(cluster_finder_factory_container &c,
+			const char *a, session *s, U8 reply) :
+			m_c(&c), m_s(s), m_reply(reply) { m_a.from(a); }
+		ucast_sender(cluster_finder_factory_container &c,
+			SOCK sk, session *s, U8 reply) :
+			m_c(&c), m_s(s), m_reply(reply) { m_a.from(sk); }
+		ucast_sender() : m_c(NULL), m_a(), m_s(NULL), m_reply(0) {}
+		int senddata(U32 msgid, const char *p, int l);
+		const char *to() const { return (const char *)m_a; }
+		int writable() const { return m_c->writable(); }
+	};
+public:
 	static cluster_finder_factory &finder() { return m_finder; }
 	int init(const cluster_property &cfg);
 	void fin();
@@ -932,11 +987,20 @@ public:
 	const class node *primary() const { return m_primary; }
 	int writable() const;
 public:
-	int send(session &s, U32 msgid, char *p, int l);
-	int unicast(const address &a, U32 msgid, char *p, int l);
-	int cluster_broadcast(U32 msgid, char *p, int l);
+	int send(session &s, session *sender, U32 msgid, const char *p, int l);
+	int cluster_unicast(session *sender, bool reply, const address &a,
+			U32 msgid, const char *p, int l);
+	int cluster_broadcast(session *sender,
+			U32 msgid, const char *p, int l);
 	void switch_primary(node *new_node);
+	bcast_sender bcaster(session *s) { return bcast_sender(*this, s); }
+	ucast_sender ucaster(const char *a, session *s, bool r = false) {
+		return ucast_sender(*this, a, s, r ? 1 : 0); }
+	ucast_sender ucaster(SOCK sk, session *s, bool r = false) {
+		return ucast_sender(*this, sk,s, r ? 1 : 0); }
 };
+typedef cluster_finder_factory_container::bcast_sender bcast_sender;
+typedef cluster_finder_factory_container::ucast_sender ucast_sender;
 
 class cluster_finder :
 	public finder_session,
@@ -972,10 +1036,24 @@ public:
 	struct querydata {
 		char *p;
 		int l;
+		U32 msgid;
+		SOCK sk;
+		session *s;
 	};
 public:
 	node() : session() {}
 	~node() {}
+	int on_cluster_recv(ucast_sender *u, char *p, int l) {
+		if (u) {
+			log(kernel::ERROR,
+				"cluster_recv from(%s) not process\n"
+				"to process it, please implement on_cluster_recv properly\n",
+				u->to());
+			ASSERT(false);
+			return NBR_ENOTSUPPORT;
+		}
+		return on_recv(p, l);
+	}
 };
 
 /* node_impl */
@@ -997,8 +1075,12 @@ public:
 	static void sort(node_impl<S,D> **list, int n_list) {
 		::qsort(list, n_list, sizeof(node_impl<S,D>*), compare);
 	}
+	int on_cluster_recv(ucast_sender *u, char *p, int l) {
+		return u ? S::on_cluster_recv(u, p, l) : S::on_recv(p, l);
+	}
 #if defined(_DEBUG)
-	void dump() { TRACE("state<%s>: ", (const char *)S::addr()); m_data.dump(); }
+	void dump() { TRACE("state<%s>:%s(%u): ", (const char *)S::addr(),
+		S::valid() ? "valid" : "invalid", S::state()); m_data.dump(); }
 #endif
 };
 
@@ -1015,7 +1097,7 @@ protected:
 	typedef typename super::sspool sspool;
 	typedef typename sspool::iterator iterator;
 public:
-	cluster_factory_impl() : super(), P() {}
+	cluster_factory_impl() : super(), P(), cluster_finder_factory_container() {TRACE("cfi=%p\n", this);}
 	~cluster_factory_impl() { fin(); }
 	sspool &pool() { return super::pool(); }
 	static inline NODE *from_iter(iterator i) { return &(*i); }
@@ -1028,6 +1110,7 @@ public:
 public:/* finder related */
 	int on_ev_finder_reply_init(char *p, int l);
 	int on_ev_finder_reply_poll(char *p, int l);
+	int on_cmd_app(SOCK sk, address *a, char *p, int l);
 	int on_cmd_update_master_node_state(char *p, int l) {
 		ASSERT(l > 1); /* skip first byte of command type */
 		return on_ev_finder_reply_poll(p + 1, l - 1);
@@ -1055,20 +1138,28 @@ class servant_session_factory_impl :
 	public cluster_protocol_impl<servant_session_factory_impl<S,D> > {
 protected:
 	factory *m_mnode;
+	cluster_finder_factory_container *m_c;
 public:
 	typedef factory_impl<node_impl<S,D> > super;
 	typedef node_impl<S,D> NODE;
 public:
 	servant_session_factory_impl(factory *f) : super(), m_mnode(f) {}
 	~servant_session_factory_impl() {}
+	void set_container(cluster_finder_factory_container *c) { m_c = c; }
 	factory *master_node() { return m_mnode; }
+	cluster_finder_factory_container *container() { return m_c; }
 	int init(const config &cfg);
 	static int on_recv(SOCK, char*, int);
 	static void on_mgr(SOCKMGR, int, char*, int);
+	int on_cmd_app(SOCK sk, address *a, char *p, int l);
 	int on_cmd_update_node_state(char *p, int l);
 	int on_cmd_get_master_list(SOCK sk, char *p, int l);
-	int on_cmd_broadcast(char *p, int l);
-	int on_cmd_unicast(address &a, char *p, int l);
+	int on_cmd_broadcast(SOCK sk, char *p, int l);
+	int on_cmd_unicast_common(SOCK sk, address &a, char *p, int l, char *org_p, int org_l, bool reply);
+	int on_cmd_unicast(SOCK sk, address &a, char *p, int l, char *org_p, int org_l) {
+		return on_cmd_unicast_common(sk, a, p, l, org_p, org_l, false); }
+	int on_cmd_unicast_reply(SOCK sk, address &a, char *p, int l, char *org_p, int org_l) {
+		return on_cmd_unicast_common(sk, a, p, l, org_p, org_l, true); }
 	int on_ev_update_servant_node_state(char *p, int l);
 };
 
@@ -1092,21 +1183,21 @@ public:
 	int on_cmd_update_node_state(char *p, int l);
 	int on_cmd_update_master_node_state(char *p, int l);
 //	int on_cmd_get_master_list(SOCK sk, char *p, int l);
-	int on_cmd_broadcast(char *p, int l);
-	int on_cmd_unicast(address &a, char *p, int l);
+	int on_cmd_broadcast(SOCK sk, char *p, int l);
+	int on_cmd_unicast(SOCK sk, address &a, char *p, int l, char *org_p, int org_l);
 };
 
 /* client_session_factory_impl */
 template <class S>
 class client_session_factory_impl : public factory_impl<S> {
 protected:
-	factory *m_mnode;
+	factory *m_snode;
 public:
 	typedef factory_impl<S> super;
 public:
-	client_session_factory_impl(factory *mnode) : super(), m_mnode(mnode) {}
+	client_session_factory_impl(factory *snode) : super(), m_snode(snode) {}
 	~client_session_factory_impl() {}
-	factory *master_node() { return m_mnode; }
+	factory *servant_node() { return m_snode; }
 };
 
 /* servant_cluster_property */
@@ -1134,17 +1225,21 @@ public:
 		cluster_protocol_impl<servant_cluster_factory_impl<C,SN> > > super;
 	typedef typename super::sspool sspool;
 	typedef servant_cluster_property<C> property;
+	typedef client_session_factory_impl<C> session_factory;
 protected:
 	client_session_factory_impl<C>	m_fccl;
 public:
 	servant_cluster_factory_impl() : super(), m_fccl(this) {}
 	~servant_cluster_factory_impl() {}
 	int update_node_state(client_session_factory_impl<C> *fc);
+	static super *cluster_conn_from(factory *f) {
+		return (super *)((session_factory *)f)->servant_node(); }
 public:
 	int init(const config &cfg);
 	void fin();
 	void poll(UTIME ut);
 	int on_ev_finder_query_servant_init(char *, int) { return NBR_OK; }
+	int on_cmd_unicast_reply(SOCK sk, address &a, char *p, int l, char *org_p, int org_l);
 };
 
 /* master_cluster_property */
@@ -1175,14 +1270,19 @@ public:
 		cluster_protocol_impl<master_cluster_factory_impl<M,S,N> > > super;
 	typedef typename super::sspool sspool;
 	typedef master_cluster_property<M,S> property;
+	typedef servant_session_factory_impl<S> session_factory;
 protected:
 	master_session_factory_impl<M> m_fcmstr;	/* master factory */
 	servant_session_factory_impl<S> m_fcsvnt;	/* servant factory */
 public:
 	master_cluster_factory_impl() : super(),
-		m_fcmstr(this, &m_fcsvnt), m_fcsvnt(this) {}
+		m_fcmstr(this, &m_fcsvnt), m_fcsvnt(this) {
+		m_fcsvnt.set_container(this);
+	}
 	~master_cluster_factory_impl() {}
 	sspool &pool() { return super::pool(); }
+	static super *cluster_conn_from(factory *f) {
+		return (super *)((session_factory *)f)->master_node(); }
 	int update_node_state(servant_session_factory_impl<S> *fc);
 	int init(const config &cfg);
 	void fin();

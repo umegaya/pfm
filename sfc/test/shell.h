@@ -26,19 +26,6 @@ using namespace app;
 using namespace cluster;
 class shelld : public daemon {
 public:
-#if 1
-	class shell_node : public node {
-	public:
-		shell_node() : node() {}
-		int senddata(U32 msgid, char *p, int l) {
-			return nbr_sock_send_bin32(m_sk, p, l + 1/* send last '\0' also */);
-		}
-	};
-#else
-	typedef session shell_node;
-#endif
-	typedef shell_node servant;
-	typedef shell_node master;
 	class protocol : public textprotocol {
 	public:
 		static const char cmd_list[];
@@ -52,12 +39,14 @@ public:
 		static const char code_exec_result[];
 		static const char code_exec_end[];
 		static char *debug_big_data;
-		static const size_t debug_big_datasize = (64 * 1024);
+		static const size_t debug_big_datasize = 16;//(64 * 1024);
 	public:
 		void recv_cmd_list(U32 msgid) { ASSERT(false);return ; }
 		void recv_cmd_copyinit(U32 msgid, const char *path, int n_chunk, int chunksz) { ASSERT(false);return ; }
 		void recv_cmd_copychunk(U32 msgid, int chunkno, const char *chunk, int clen) { ASSERT(false);return ; }
 		void recv_cmd_exec(U32 msgid, const char *path) { ASSERT(false);return ; }
+		void recv_cmd_bcast(U32 msgid, const char *cmd, int cmdl) { ASSERT(false);return ; }
+		void recv_cmd_unicast(U32 msgid, const char *addr, const char *cmd, int cmdl) { ASSERT(false);return ; }
 		void recv_code_list(U32 msgid, int n_host, const char *p_hostdata[]) { ASSERT(false);return ; }
 		void recv_code_copyinit(U32 msgid, const char *result) { ASSERT(false);return ; }
 		void recv_code_copychunk(U32 msgid, const char *result) { ASSERT(false);return ; }
@@ -83,6 +72,40 @@ public:
 		int send_code_exec_result(S &s, U32 msgid, const char *line);
 		int send_code_exec_end(S &s, U32 msgid, const char *result);
 	};
+	class shell_ucaster : public ucast_sender, public protocol_impl<shell_ucaster> {
+	public:
+		void recv_cmd_exec(U32 msgid, const char *cmd);
+		int senddata(U32 msgid, const char *p, int l) {
+			return ucast_sender::senddata(msgid, p, l + 1);
+		}
+	};
+#if 1
+	class shell_node : public node {
+	public:
+		int m_textmode;
+		int m_master_node;
+	public:
+		shell_node(int tm, int mn) : node(),
+			m_textmode(tm), m_master_node(mn) {}
+		bool master_node() const { return m_master_node != 0; }
+		int senddata(U32 msgid, char *p, int l) {
+			if (m_textmode) {
+				return cfg().m_fns(m_sk, p, l);
+			}
+			else {
+				return cfg().m_fns(m_sk, p, l + 1/* send last '\0' also */);
+			}
+		}
+		int on_cluster_recv(ucast_sender *u, char *p, int l) {
+			ASSERT(u);
+			return protocol_impl<shell_ucaster>::on_recv((shell_ucaster &)*u, p, l);
+		}
+	};
+#else
+	typedef session shell_node;
+#endif
+	typedef shell_node servant;
+	typedef shell_node master;
 	class shellclient : public servant, public protocol_impl<shellclient> {
 	protected:
 		char	m_cmd[256];
@@ -91,7 +114,7 @@ public:
 					arraypool<shellclient> > factory;
 		typedef config property;
 	public:
-		shellclient() : servant() { m_cmd[0] = '\0'; }
+		shellclient() : servant(1, 0) { m_cmd[0] = '\0'; }
 		~shellclient() {}
 	public:
 		void fin()						{}
@@ -108,19 +131,11 @@ public:
 	};
 	class shellserver : public master, public protocol_impl<shellserver> {
 	public:
-		struct exec_ctx {
-			char cmd[256];
-			shellserver *s;
-			U32 msgid;
-			int alive;
-		};
-	protected:
-		exec_ctx m_ctx;
-	public:
 		typedef factory_impl<shellserver> factory;
 		typedef config property;
 	public:
-		shellserver() : master() {}
+		shellserver() : master(0, 1) {}
+		shellserver(int tm, int mn) : master(tm, mn) {}
 		~shellserver() {}
 	public:
 		void fin()						{}
@@ -130,6 +145,8 @@ public:
 		}
 		int on_event(char *p, int l)	{ return NBR_OK; }
 		void recv_cmd_exec(U32 msgid, const char *cmd);
+		void recv_cmd_bcast(U32 msgid, const char *cmd, int cmdl);
+		void recv_cmd_unicast(U32 msgid, const char *addr, const char *cmd, int cmdl);
 		pollret poll(UTIME ut, bool from_worker);
 	};
 
@@ -137,14 +154,27 @@ public:
 	public:
 		typedef config property;
 	public:
-		shell_connector() : shell_node() {}
+		shell_connector() : shell_node(0, 0) {}
+	};
+	class svnt_shellserver : public shellserver {
+	public:
+		svnt_shellserver() : shellserver(1, 0) {}
 	};
 	typedef master_cluster_factory_impl<shellserver, shellserver, shell_connector>
 		master_shell;
-	typedef servant_cluster_factory_impl<shellserver, shell_connector>
+	typedef servant_cluster_factory_impl<svnt_shellserver, shell_connector>
 		servant_shell;
+public:
+	struct exec_ctx {
+		char cmd[256];
+		void *s;
+		shell_ucaster uc;
+		U32 msgid;
+		int alive;
+	};
 protected:
 	int m_server;
+	static array<exec_ctx> m_el;
 	static THPOOL m_job;
 public:
 	shelld() : daemon(), m_server(0) {}
@@ -153,9 +183,10 @@ public:
 	int			boot(int argc, char *argv[]);
 	int			initlib(CONFIG &c);
 	void		shutdown();
-	static int	addjob(shellserver::exec_ctx *ctx);
-protected:
-	static void	*popen_job(void *ctx);
+public:
+	static array<exec_ctx> &allocator() { return m_el; }
+	template <class S> static int	addjob(exec_ctx *ctx);
+	template <class S> static void	*popen_job(void *ctx);
 };
 }	//namespace sfc
 

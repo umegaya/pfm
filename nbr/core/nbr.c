@@ -24,7 +24,6 @@
 #include "osdep.h"
 #include "thread.h"
 #include "sock.h"
-#include "cluster.h"
 #include "sig.h"
 
 

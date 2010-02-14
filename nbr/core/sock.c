@@ -1452,8 +1452,10 @@ nbr_sock_valid(SOCK s)
 {
 	sockdata_t *skd = s.p;
 	if (!skd) {
+		ASSERT(FALSE);
 		return 0;	/* maybe initialized by nbr_sock_clear */
 	}
+	ASSERT(skd->serial == s.s);
 	return (int)(skd->serial == s.s &&
 		(skd->stat <= SS_CLOSING || skd->stat >= SS_CONNECTING));
 }

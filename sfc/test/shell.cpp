@@ -66,6 +66,7 @@ int shelld::protocol::sendping(class session &s, UTIME ut)
 
 int shelld::protocol::recvping(class session &s, char *p, int l)
 {
+	TRACE("recv ping from (%s)\n", (const char *)s.addr());
 	if (*p != '0') {
 		return no_ping; /* no ping */
 	}
@@ -76,12 +77,17 @@ int shelld::protocol::recvping(class session &s, char *p, int l)
 	POP_TEXT_START(p, l);
 	POP_TEXT_STR(cmd, sizeof(cmd));
 	POP_TEXT_BIGNUM(ut, U64);
-	POP_TEXT_STR(dbd, sizeof(dbd));
+	if ((size_t )(l - (__buf - p)) >= debug_big_datasize) {
+		POP_TEXT_STR(dbd, sizeof(dbd));
+	}
+	else {
+		TRACE("debug bigdata not available\n");
+	}
 	if (s.cfg().client()) {
 		U64 now = nbr_time();
 		s.update_latency((U32)(now - ut));
 #if defined(_DEBUG)
-		s.log(kernel::INFO, "recvping: lacency=%u(%llu,%llu)\n", s.latency(),
+		s.log(kernel::INFO, "recvping(shd): lacency=%u(%llu,%llu)\n", s.latency(),
 				now, ut);
 #endif
 	}
@@ -197,6 +203,7 @@ int shelld::protocol_impl<S>::send_code_exec_result(S &s,
 	PUSH_TEXT_START(buf, code_exec_result);
 	PUSH_TEXT_NUM(msgid);
 	PUSH_TEXT_STR(line);
+	TRACE("send<%s>\n", buf);
 	return s.senddata(msgid, buf, PUSH_TEXT_LEN());
 }
 
@@ -237,8 +244,9 @@ int shelld::protocol_impl<S>::on_recv(S &s, char *p, int l)
 		s.recv_cmd_copychunk(msgid, n1, chunk, n3);
 	}
 	else if (cmp(cmd, cmd_exec)) {
-		POP_TEXT_STR(path, sizeof(path));
-		s.recv_cmd_exec(msgid, path);
+		n1 = sizeof(line);
+		POP_TEXT_STRLOW(line, n1, "");
+		s.recv_cmd_exec(msgid, line);
 	}
 	else if (cmp(cmd, code_list)) {
 		POP_TEXT_NUM(n1,int);
@@ -269,6 +277,18 @@ int shelld::protocol_impl<S>::on_recv(S &s, char *p, int l)
 	else if (cmp(cmd, code_exec_end)) {
 		POP_TEXT_STR(path, sizeof(path));
 		s.recv_code_exec_end(msgid, path);
+	}
+	else if (cmp(cmd, "*")) {
+		/* cluster_broadcast */
+		n1 = sizeof(line);
+		POP_TEXT_STRLOW(line, n1, "");
+		s.recv_cmd_bcast(msgid, line, n1);	/* add last null ch */
+	}
+	else {
+		/* unicast */
+		n1 = sizeof(line);
+		POP_TEXT_STRLOW(line, n1, "");
+		s.recv_cmd_unicast(msgid, cmd, line, n1); /* add last null ch */
 	}
 	return NBR_OK;
 }
@@ -332,28 +352,81 @@ session::pollret shelld::shellserver::poll(UTIME ut, bool thread)
 void shelld::shellserver::recv_cmd_exec(U32 msgid, const char *cmd)
 {
 	log(INFO, "cmd_exec: %s(%u)\n", cmd, msgid);
-	m_ctx.msgid = msgid;
-	nbr_str_copy(m_ctx.cmd, sizeof(m_ctx.cmd), cmd, sizeof(m_ctx.cmd));
-	m_ctx.s = this;
-	m_ctx.alive = 1;
-	shelld::addjob(&m_ctx);
+	shelld::exec_ctx *ctx = shelld::allocator().create();
+	if (!ctx) {
+		send_code_exec_start(*this, msgid, "resource expire");
+		return;
+	}
+	ctx->msgid = msgid;
+	nbr_str_copy(ctx->cmd, sizeof(ctx->cmd), cmd, sizeof(ctx->cmd));
+	ctx->s = this;
+	ctx->alive = 1;
+	shelld::addjob<shellserver>(ctx);
 }
+
+void shelld::shell_ucaster::recv_cmd_exec(U32 msgid, const char *cmd)
+{
+	daemon::log(INFO, "cmd_exec: %s(%u)\n", cmd, msgid);
+	ASSERT(strlen(cmd) <= 6);
+	shelld::exec_ctx *ctx = shelld::allocator().create();
+	if (!ctx) {
+		send_code_exec_start(*this, msgid, "resource expire");
+		return;
+	}
+	ctx->msgid = msgid;
+	nbr_str_copy(ctx->cmd, sizeof(ctx->cmd), cmd, sizeof(ctx->cmd));
+	ctx->uc = *this;
+	ctx->alive = 1;
+	shelld::addjob<shell_ucaster>(ctx);
+}
+
+void shelld::shellserver::recv_cmd_bcast(U32 msgid, const char *cmd, int cmdl)
+{
+	 if (master_node()) {
+		 master_shell::super *sp = master_shell::cluster_conn_from(f());
+		 sp->bcaster(this).senddata(msgid, cmd, cmdl);
+	 }
+	 else {
+		 servant_shell::super *sp = servant_shell::cluster_conn_from(f());
+		 sp->bcaster(this).senddata(msgid, cmd, cmdl);
+	 }
+}
+
+void shelld::shellserver::recv_cmd_unicast(
+		U32 msgid, const char *addr, const char *cmd, int cmdl)
+{
+	shell_ucaster *shc;
+	if (master_node()) {
+		master_shell::super *sp = master_shell::cluster_conn_from(f());
+		ucast_sender uc = sp->ucaster(addr, this);
+		shc = (shell_ucaster *)(&uc);
+	}
+	else {
+		servant_shell::super *sp = servant_shell::cluster_conn_from(f());
+		ucast_sender uc = sp->ucaster(addr, this);
+		shc = (shell_ucaster *)(&uc);
+	}
+	shc->senddata(msgid, cmd, cmdl);
+}
+
 
 
 /*-------------------------------------------------------------*/
 /* shelld													   */
 /*-------------------------------------------------------------*/
 THPOOL shelld::m_job = NULL;
+array<shelld::exec_ctx> shelld::m_el;
+
 factory *
 shelld::create_factory(const char *sname)
 {
 	TRACE("create_factory: sname=<%s>\n", sname);
 	if (config::cmp(sname, "sv")) {
-		return new master_cluster_factory_impl<shell_connector, shellserver, shell_connector>;
+		return new master_shell;
 	}
 	if (config::cmp(sname, "cl")) {
 		/* this shellserver means, shellserver feature + cluster node */
-		return new servant_cluster_factory_impl<shellserver, shell_connector>;
+		return new servant_shell;
 	}
 	return NULL;
 }
@@ -371,7 +444,7 @@ shelld::create_config(config *cl[], int size)
 				60, opt_expandable,
 				256 * 1024, 256 * 1024,
 				10 * 1000 * 1000, 2 * 1000 * 1000,	/* 10sec timeout, 2sec ping intv */
-				1000,0,	/* 1000 query buffer, size is auto generated */
+				1000, sizeof(node::querydata),	/* 1000 query buffer, size is auto generated */
 				"TCP", "eth0",
 				1 * 1000 * 1000/* 1msec task span */,
 				10/* after 10ms, again try to connect */,
@@ -418,7 +491,7 @@ shelld::create_config(config *cl[], int size)
 				60, opt_not_set,
 				256 * 1024, 256 * 1024,
 				10 * 1000 * 1000, 2 * 1000 * 1000,	/* 10sec timeout, 2sec ping intv */
-				1000,0,	/* 1000 query buffer,size is auto generated */
+				1000,sizeof(node::querydata),	/* 1000 query buffer,size is auto generated */
 				"TCP", "eth0",
 				1 * 1000 * 1000/* 10msec task span */,
 				0/* never wait ld recovery */,
@@ -438,8 +511,8 @@ shelld::create_config(config *cl[], int size)
 						1 * 1000 * 1000/* 1msec task span */,
 						10/* after 10ms, again try to connect */,
 						kernel::INFO,
-						nbr_sock_rparser_bin32,
-						nbr_sock_send_bin32,
+						nbr_sock_rparser_text,
+						nbr_sock_send_text,
 						config::cfg_flag_server)
 			);
 	return 2;
@@ -452,17 +525,28 @@ shelld::initlib(CONFIG &c)
 	return NBR_OK;
 }
 
-int
-shelld::addjob(shellserver::exec_ctx *ctx)
+template <class S> int
+shelld::addjob(exec_ctx *ctx)
 {
-	return nbr_thpool_addjob(m_job, (void *)ctx, shelld::popen_job);
+	return nbr_thpool_addjob(m_job, (void *)ctx, popen_job<S>);
 }
 
-void *
+template <class S>
+S *get_from_context(shelld::exec_ctx *ctx)
+{
+	return (S *)ctx->s;
+}
+template <>
+shelld::shell_ucaster *get_from_context(shelld::exec_ctx *ctx)
+{
+	return &(ctx->uc);
+}
+
+template <class S> void *
 shelld::popen_job(void *p)
 {
-	shellserver::exec_ctx *c = (shellserver::exec_ctx *)p;
-	shellserver *s = c->s;
+	exec_ctx *c = (exec_ctx *)p;
+	S *s = get_from_context<S>(c);
 	FILE *fp = popen(c->cmd, "r");
 	const char *r = "ok";
 	bool start_sent = false;
@@ -486,6 +570,7 @@ shelld::popen_job(void *p)
 		if (!(str = nbr_str_chop(buffer))) {
 			continue;
 		}
+		TRACE("result = <%s>\n", str);
 		if (s->send_code_exec_result(*s, c->msgid, str) < 0) {
 			r = "packet send fail at popen result";
 			goto end;
@@ -519,6 +604,9 @@ shelld::boot(int argc, char *argv[])
 			return r;
 		}
 	}
+	if (!m_el.initialized()) {
+		m_el.init(100, -1, opt_threadsafe);
+	}
 	return NBR_OK;
 }
 
@@ -528,6 +616,9 @@ shelld::shutdown()
 	if (m_job) {
 		nbr_thpool_destroy(m_job);
 		m_job = NULL;
+	}
+	if (m_el.initialized()) {
+		m_el.fin();
 	}
 }
 

@@ -264,10 +264,11 @@ nbr_str_divide_tag_and_val(char sep, const char *line, char *tag, int taglen)
 }
 
 NBR_API const char *
-nbr_str_divide(const char *sep, const char *line, char *tag, int tlen)
+nbr_str_divide(const char *sep, const char *line, char *tag, int *tlen)
 {
 	const char *w = line, *tmp = tag;
 	const char *s;
+	int maxlen = *tlen;
 	while(*w) {
 		s = sep;
 		while (*s) {
@@ -278,13 +279,14 @@ nbr_str_divide(const char *sep, const char *line, char *tag, int tlen)
 			s++;
 		}
 		*tag++ = *w++;
-		if ((int)(w - line) > tlen) {
+		if ((int)(w - line) > maxlen) {
 			ASSERT(FALSE);
 			return NULL;
 		}
 	}
 
 	*tag = '\0';
+	*tlen = (w - line);
 	return tmp;
 }
 

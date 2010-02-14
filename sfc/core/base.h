@@ -50,6 +50,9 @@ int factory_impl<S,P>::broadcast(char *p, int l)
 	int r;
 	iterator it = pool().begin();
 	for (;it != pool().end(); it = pool().next(it)) {
+		if (!it->valid()) {
+			continue;
+		}
 		if ((r = it->send(p, l)) < 0) {
 			return r;
 		}
@@ -62,7 +65,8 @@ bool factory_impl<S,P>::checkping(class session &s, UTIME ut)
 {
 	if (!cfg().client()) { return true; }
 	UTIME intv = (ut - s.last_ping());
-//	TRACE("intv=%u,cfg=%u\n", intv, cfg().m_ping_intv * 1000 * 1000);
+	log(kernel::INFO, "intv=%llu,ut=%llu,cfg=%llu\n",
+			intv, ut, cfg().m_ping_intv * 1000 * 1000);
 	if (intv > cfg().m_ping_intv) {
 		int r;
 		if ((r = S::sendping(s, ut)) < 0) {
@@ -124,6 +128,7 @@ int factory_impl<S,P>::on_open(SOCK sk)
 		return r;
 	}
 	obj->clear_conn_retry();
+	obj->update_ping(nbr_clock());
 	obj->setstate(session::ss_connected);
 	return NBR_OK;
 }
@@ -202,6 +207,7 @@ UTIME factory_impl<S,P>::on_poll(SOCK sk)
 	if (fc->cfg().m_ping_timeo > 0 && !fc->checkping(*obj, ut)) {
 		obj->log(ERROR, "pingtimeout: %u\n",fc->cfg().m_ping_timeo);
 		obj->close();
+		ASSERT(false);
 		return ut + obj->cfg().m_taskspan;
 	}
 	obj->poll(ut, true);

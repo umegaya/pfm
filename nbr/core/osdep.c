@@ -62,7 +62,7 @@ NBR_INLINE UTIME
 clock_from_ostime(ostime_t *t)
 {
 #if defined(__NBR_LINUX__)
-	return (UTIME)(t->tv_sec * 1000000 + t->tv_usec);
+	return (((UTIME)t->tv_sec) * 1000000 + (UTIME)t->tv_usec);
 #elif defined(__NBR_WINDOWS__)
 	return (UTIME)((t->tm_round << 32 + t->tm_tick) * 1000);
 #endif
@@ -83,7 +83,8 @@ NBR_INLINE UTIME
 clock_get_time_diff(ostime_t *t)
 {
 #if defined(__NBR_LINUX__)
-	return (UTIME)((t->tv_sec - g_start.tv_sec) * 1000000 +
+	ASSERT(t->tv_sec > g_start.tv_sec || t->tv_usec >= g_start.tv_usec);
+	return (UTIME)(((UTIME)(t->tv_sec - g_start.tv_sec)) * 1000000 +
 			(int)(t->tv_usec - g_start.tv_usec));
 #elif defined(__NBR_WINDOWS__)
 	return (UTIME)((t->tm_tick - g_start.tm_tick) +
@@ -657,6 +658,7 @@ void nbr_clock_poll()
 	ostime_t	ost;
 	clock_get_ostime(&ost);
 	g_clock = clock_get_time_diff(&ost);
+	ASSERT((g_clock & 0xFFFFFFFF00000000LL) != 0xFFFFFFFF00000000LL);
 }
 
 NBR_API UTIME
@@ -671,7 +673,15 @@ nbr_time()
 #if defined(__NBR_LINUX__)
 	ostime_t ost;
 	gettimeofday(&ost, NULL);
-	return ost.tv_sec * 1000 * 1000 + ost.tv_usec;
+#if defined(_DEBUG)
+	{
+		UTIME ut = (((UTIME)ost.tv_sec) * 1000 * 1000 + ((UTIME)ost.tv_usec));
+		ASSERT(ut >= 0x00000000FFFFFFFFLL);
+		return ut;
+	}
+#else
+	return (((UTIME)ost.tv_sec) * 1000 * 1000 + ((UTIME)ost.tv_usec));
+#endif
 #else
 	return 0LL;
 #endif

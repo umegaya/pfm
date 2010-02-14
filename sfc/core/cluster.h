@@ -24,7 +24,18 @@
 template <class S>
 int cluster_protocol_impl<S>::recv_handler(S &s, SOCK sk, char *p, int l)
 {
-	switch(*p) {
+	U8 cmd;
+	U32 msgid;
+	address a;
+	POP_START(p, l);
+	POP_8(cmd);
+	switch(cmd) {
+	case ncmd_app:
+		return s.on_cmd_app(sk, NULL, POP_BUF(), POP_REMAIN());
+	case ncmd_app_cast:
+		POP_ADDR(a);
+		POP_32(msgid);
+		return s.on_cmd_app(sk, &a, POP_BUF(), POP_REMAIN());
 	case ncmd_update_node_state:
 		return s.on_cmd_update_node_state(p, l);
 	case ncmd_update_master_node_state:
@@ -32,14 +43,13 @@ int cluster_protocol_impl<S>::recv_handler(S &s, SOCK sk, char *p, int l)
 	case ncmd_get_master_list:
 		return s.on_cmd_get_master_list(sk, p, l);
 	case ncmd_broadcast:
-		return s.on_cmd_broadcast(p, l);
+		return s.on_cmd_broadcast(sk, p, l);
 	case ncmd_unicast:
-		{
-			address a;
-			POP_START(p, l);
-			POP_ADDR(a);
-			return s.on_cmd_unicast(a, POP_BUF(), POP_REMAIN());
-		}
+		POP_ADDR(a);
+		return s.on_cmd_unicast(sk, a, POP_BUF(), POP_REMAIN(), p, l);
+	case ncmd_unicast_reply:
+		POP_ADDR(a);
+		return s.on_cmd_unicast_reply(sk, a, POP_BUF(), POP_REMAIN(), p, l);
 	default:
 		s.log(ERROR, "invalid command recv (%d)\n", *p);
 		ASSERT(false);
@@ -142,36 +152,34 @@ void cluster_factory_impl<S,P,D>::poll(UTIME ut)
 		ASSERT(from_iter(tmp) == (NODE *)tmp.m_e->get());
 		it = pool().next(it);
 		if (tmp->valid()) 	{
-			if (tmp->poll(ut, false) < 0) {
-				tmp->fin();
-				pool().erase(tmp->addr());
-				continue;
-			}
 			if (tmp->writable() > 0){ wc[n_wc++] = from_iter(tmp); }
 			/* takes too long time (5sec) to connect */
 			else if ((ut - tmp->last_access()) >
 				P::node_reconnection_timeout_sec * 1000 * 1000) {
-				super::log(super::ERROR, "takes too long time to connect\n");
+				super::log(super::ERROR,
+						"takes too long time to connect (%d)\n", tmp->state());
 				tmp->incr_conn_retry();
-				if (tmp->conn_retry() > P::node_reconnection_retry_times) {
-					super::log(super::INFO,
-							"%s: retry too much (%u), unregister it\n",
-							(const char *)tmp->addr(), tmp->conn_retry());
-					tmp->fin();
-					pool().erase(tmp->addr());
-				}
-				else {
-					tmp->close();
-				}
+				tmp->close();
 			}
 			else { c[n_c++] = from_iter(tmp); }
 #if defined(_DEBUG)
-			if (!master() && can_inquiry(ut)) { tmp->dump(); }
+			if (can_inquiry(ut)) { tmp->dump(); }
 #endif
+			continue;
 		}
+		else if (tmp->conn_retry() > P::node_reconnection_retry_times) {
+			super::log(super::INFO,
+					"%s: retry too much (%u), unregister it\n",
+					(const char *)tmp->addr(), tmp->conn_retry());
+		}
+		else if (tmp->poll(ut, false) < 0) {}
 		else {
 			nc[n_nc++] = from_iter(tmp);
+			continue;
 		}
+		address a = tmp->addr();
+		tmp->fin();
+		pool().erase(a);
 	}
 	int n_establish = p.m_master ? pool().use() : p.m_multiplex;
 	bool established = (n_wc >= n_establish);
@@ -285,6 +293,19 @@ int cluster_factory_impl<S,P,D>::on_ev_finder_reply_poll(char *p, int l)
 }
 
 template <class S, class P, class D>
+int cluster_factory_impl<S,P,D>::on_cmd_app(
+		SOCK sk, address *a, char *p, int l)
+{
+	NODE **obj = (NODE**)nbr_sock_get_data(sk, NULL);
+	if (!obj) { ASSERT(false); return NBR_OK; }
+	if (a) {
+		ucast_sender uc = ucaster(*a, NULL, true);
+		return (*obj)->on_cluster_recv(&uc, p, l);
+	}
+	return (*obj)->on_cluster_recv(NULL, p, l);
+}
+
+template <class S, class P, class D>
 int cluster_factory_impl<S,P,D>::on_open(SOCK sk)
 {
 	return factory_impl<S>::on_open(sk);
@@ -307,17 +328,9 @@ int cluster_factory_impl<S,P,D>::on_recv(SOCK sk, char *p, int l)
 	if ((r = S::recvping((**s), p, l)) <= 0) {
 		return r;
 	}
-	S *obj = *s;
 	typename P::impl *nf;
-	switch(*p) {
-	case cluster_protocol::ncmd_app:
-		obj->on_recv(p, l);
-		break;
-	default:
-		nf = (typename P::impl *)obj->f();
-		P::recv_handler(*nf, sk, p, l);
-		break;
-	}
+	nf = (typename P::impl *)(*s)->f();
+	P::recv_handler(*nf, sk, p, l);
 	return NBR_OK;
 }
 
@@ -362,6 +375,22 @@ int servant_session_factory_impl<S,D>::init(const config &cfg)
 			super::on_poll);
 }
 
+
+template <class S, class D>
+int servant_session_factory_impl<S,D>::on_cmd_app(
+		SOCK sk, address *a, char *p, int l)
+{
+	NODE **obj = (NODE**)nbr_sock_get_data(sk, NULL);
+	if (!obj) { ASSERT(false); return NBR_OK; }
+	if (a) {
+		ucast_sender uc = container()->ucaster(*a, NULL, true);
+		return (*obj)->on_cluster_recv(&uc, p, l);
+	}
+	else {
+		return (*obj)->on_cluster_recv(NULL, p, l);
+	}
+}
+
 template <class S, class D>
 int servant_session_factory_impl<S,D>::on_cmd_update_node_state(char *p, int l)
 {
@@ -387,13 +416,17 @@ int servant_session_factory_impl<S,D>::on_cmd_get_master_list(SOCK sk, char *p, 
 }
 
 template <class S, class D>
-int servant_session_factory_impl<S,D>::on_cmd_broadcast(char *p, int l)
+int servant_session_factory_impl<S,D>::on_cmd_broadcast(SOCK sk, char *p, int l)
 {
 	if (master_node()->broadcast(p, l) < 0) {
 		super::log(super::ERROR, "cmd_broadcast: mnode bcast fail\n");
 		ASSERT(false);
 	}
-	*p = cluster_protocol::ncmd_app;
+	char data[1 + sizeof(address) + l];
+	PUSH_START(data, 1 + sizeof(address) + l);
+	PUSH_8(cluster_protocol::ncmd_app_cast);
+	PUSH_SOCKADDR(sk);
+	PUSH_MEM(p + 1, l - 1);
 	if (super::broadcast(p, l) < 0) {
 		super::log(super::ERROR, "cmd_broadcast: self bcast fail\n");
 		ASSERT(false);
@@ -402,18 +435,31 @@ int servant_session_factory_impl<S,D>::on_cmd_broadcast(char *p, int l)
 }
 
 template <class S, class D>
-int servant_session_factory_impl<S,D>::on_cmd_unicast(address &a, char *p, int l)
+int servant_session_factory_impl<S,D>::on_cmd_unicast_common(SOCK sk,
+		address &a, char *p, int l, char *org_p, int org_l, bool reply)
 {
+	TRACE("servant_session_factory: to <%s><%s>\n",
+			(const char *)a, (const char *)super::ifaddr());
 	S *nd = super::pool().find(a);
-	if (nd) {
-		/* add 1byte for ncmd_app */
-		*(p - 1) = cluster_protocol::ncmd_app;
-		if (nd->send(p - 1, l + 1) < 0) {
+	char work[1 + sizeof(address) + org_l];
+	if (nd && nd->valid()) {
+		TRACE("node found %p\n", nd);
+		PUSH_START(work, 1 + sizeof(address) + org_l);
+		PUSH_8(reply ? cluster_protocol::ncmd_unicast_reply :
+			cluster_protocol::ncmd_app_cast);
+		PUSH_SOCKADDR(sk);
+		PUSH_MEM(p, l);
+#if defined(_DEBUG)
+		hexdump(p, l);
+		ASSERT(p[l - 1] == 0);
+#endif
+		if (nd->send(work, PUSH_LEN()) < 0) {
 			super::log(super::ERROR, "cmd_unicast: send fail\n");
 			ASSERT(false);
 		}
 	}
-	else if (master_node()->broadcast(p, l) < 0) {
+	/* forward to another node */
+	else if (master_node()->broadcast(org_p, org_l) < 0) {
 		super::log(super::ERROR, "unicast: mnode bcast fail\n");
 		ASSERT(false);
 	}
@@ -439,8 +485,10 @@ int servant_session_factory_impl<S,D>::on_ev_update_servant_node_state(
 		return r;
 	}
 #if defined(_DEBUG)
-	TRACE("update_node(servant) result: ");
-	n->dump();
+	TRACE("update_node(servant)\n");
+	for (typename super::iterator i = super::pool().begin(); i != super::pool().end(); i = super::pool().next(i)) {
+		i->dump();
+	}
 #endif
 	return NBR_OK;
 }
@@ -464,17 +512,9 @@ int servant_session_factory_impl<S,D>::on_recv(SOCK sk, char *p, int l)
 	if ((r = S::recvping((**s), p, l)) <= 0) {
 		return r;
 	}
-	S *obj = *s;
 	servant_session_factory_impl<S,D> *nf;
-	switch(*p) {
-	case cluster_protocol::ncmd_app:
-		obj->on_recv(p + 1, l - 1);
-		break;
-	default:
-		nf = (servant_session_factory_impl<S,D> *)obj->f();
-		recv_handler(*nf, sk, p, l);
-		break;
-	}
+	nf = (servant_session_factory_impl<S,D> *)(*s)->f();
+	recv_handler(*nf, sk, p, l);
 	return NBR_OK;
 }
 
@@ -525,7 +565,7 @@ int master_session_factory_impl<S>::on_cmd_update_master_node_state(char *p, int
 }
 
 template <class S>
-int master_session_factory_impl<S>::on_cmd_broadcast(char *p, int l)
+int master_session_factory_impl<S>::on_cmd_broadcast(SOCK sk, char *p, int l)
 {
 	*p = cluster_protocol::ncmd_app;
 	if (servant_session()->broadcast(p, l) < 0) {
@@ -536,7 +576,8 @@ int master_session_factory_impl<S>::on_cmd_broadcast(char *p, int l)
 }
 
 template <class S>
-int master_session_factory_impl<S>::on_cmd_unicast(address &a, char *p, int l)
+int master_session_factory_impl<S>::on_cmd_unicast(SOCK sk,
+		address &a, char *p, int l, char *org_p, int org_l)
 {
 	S *nd = super::pool().find(a);
 	if (nd) {
@@ -561,17 +602,9 @@ int master_session_factory_impl<S>::on_recv(SOCK sk, char *p, int l)
 	if ((r = S::recvping((**s), p, l)) <= 0) {
 		return r;
 	}
-	S *obj = *s;
 	master_session_factory_impl<S> *nf;
-	switch(*p) {
-	case cluster_protocol::ncmd_app:
-		obj->on_recv(p + 1, l - 1);
-		break;
-	default:
-		nf = (master_session_factory_impl<S> *)obj->f();
-		recv_handler(*nf, sk, p, l);
-		break;
-	}
+	nf = (master_session_factory_impl<S> *)(*s)->f();
+	recv_handler(*nf, sk, p, l);
 	return NBR_OK;
 }
 
@@ -623,6 +656,29 @@ void servant_cluster_factory_impl<C,SN>::poll(UTIME ut)
 	}
 	super::poll(ut);
 }
+
+template <class C, class SN>
+int servant_cluster_factory_impl<C,SN>::on_cmd_unicast_reply(
+		SOCK sk, address &a, char *p, int l, char *org_p, int org_l)
+{
+	U32 msgid;
+	POP_START(p, l);
+	POP_32(msgid);
+	typename C::querydata *q =
+			(typename C::querydata *)super::querymap().find(msgid);
+	if (q) {
+		int r = NBR_EINVAL;
+		if (nbr_sock_is_same(q->sk, q->s->sk())) {
+			r = q->s->senddata(msgid, POP_BUF(), POP_REMAIN());
+		}
+		super::log(super::INFO, "query result(%d:%u)\n", r, msgid);
+//		super::querymap().erase(msgid);
+		return r;
+	}
+	super::log(super::INFO, "query not found (%u)\n", msgid);
+	return NBR_OK;
+}
+
 
 template <class C, class SN>
 int servant_cluster_factory_impl<C,SN>::update_node_state(
@@ -817,6 +873,8 @@ int master_cluster_factory_impl<M,S,N>::on_finder_query_init(
 				super::log(super::ERROR, "fail to pack nodedata (%d)\n", r);
 				return r;
 			}
+			ASSERT(r > 0);
+			TRACE("r = %u\n", r);
 			PUSH_SKIP(r);
 		}
 		if (from_cmd) {

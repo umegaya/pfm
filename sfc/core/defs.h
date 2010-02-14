@@ -72,6 +72,10 @@
 	a.setlen(__r);					\
 }
 #define PUSH_ADDR(a) PUSH_STR((const char *)a)
+#define PUSH_SOCKADDR(sk) {			\
+	int __r = (nbr_sock_get_addr(sk, PUSH_BUF(), PUSH_REMAIN()) + 1);	\
+	PUSH_SKIP(__r);														\
+}
 
 #define PUSH_TEXT_START(p,s)	char *__buf = p, *__p = p; size_t __max = sizeof(p);	\
 								PUSH_TEXT(s)
@@ -87,7 +91,8 @@
 #define PUSH_TEXT_LEN()		(__buf - __p)
 
 #define POP_TEXT_START(p,l)	char *__buf = p;
-#define POP_TEXT_STR(s,l)	if (!(__buf = (char *)nbr_str_divide(" ",__buf, s, l))) { \
+#define POP_TEXT_STR(s,l)	{ int __l = l; POP_TEXT_STRLOW(s,__l," ") }
+#define POP_TEXT_STRLOW(s,l,sep)	if (!(__buf = (char *)nbr_str_divide(sep,__buf, s, &l))) { \
 								TRACE("pop err@%s(%u)\n", __FILE__, __LINE__);	\
 								return NBR_ESHORT; }
 #define POP_TEXT_NUM(n,t)	{ char __tmp[256]; POP_TEXT_STR(__tmp, sizeof(__tmp)); \

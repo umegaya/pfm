@@ -247,7 +247,7 @@ NBR_API char		*nbr_str_chop(char *buffer);
 NBR_API int			nbr_str_parse_url(const char *in, int max, char *host, U16 *port, char *url);
 NBR_API size_t		nbr_str_utf8_copy(char *dst, int dlen, const char *src, int smax, int len);
 NBR_API const char	*nbr_str_divide_tag_and_val(char sep, const char *line, char *tag, int tlen);
-NBR_API const char	*nbr_str_divide(const char *sep, const char *line, char *tag, int tlen);
+NBR_API const char	*nbr_str_divide(const char *sep, const char *line, char *tag, int *tlen);
 NBR_API int 		nbr_parse_http_req_str(const char *req, const char *tag, char *buf, int buflen);
 NBR_API int 		nbr_parse_http_req_int(const char *req, const char *tag, int *buf);
 NBR_API int 		nbr_parse_http_req_bigint(const char *req, const char *tag, long long *buf);
