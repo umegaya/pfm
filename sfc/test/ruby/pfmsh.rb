@@ -9,6 +9,7 @@ class Pfmsh
 		@hostname = host
 		@s = TCPSocket.open(@hostname, @port)
 		@m = Mutex.new
+		@hosts = Hash.new
 		@wb = String.new
 		@rb = String.new
 		@msgid = 0
@@ -69,9 +70,15 @@ class Pfmsh
 	end
 	def getcmd(cmd, args)
 		msgid = getmsgid
-		prefix = args[0] =~ /(\*|[0-9]*\.[0-9]*\.[0-9]*\.[0-9])/ ? 
-			args.shift.to_s + ' ' + msgid.to_s + ' ' : ''
-		return "#{prefix}#{cmd} #{msgid} #{args.join(' ')}\n"
+		if args then
+			prefix = args[0] =~ /(\*|[0-9]*\.[0-9]*\.[0-9]*\.[0-9])/ ? 
+				args.shift.to_s + ' ' + msgid.to_s + ' ' : ''
+			arglist = ' ' + args.join(' ')
+		else
+			prefix = ''
+			arglist = ''
+		end
+		return "#{prefix}#{cmd} #{msgid}#{arglist}\n"
 	end
 	def exec(*args)
 		str = getcmd('exec', args)
@@ -89,5 +96,23 @@ class Pfmsh
 			next
 		end
 	end
+	def list
+		str = getcmd('list', nil)
+		process_packet(str) do |s|
+			r = s.split(/ /)
+			return r if r[0] == "0"
+			if r[0] == "list_r" then
+				@hosts.clear
+				n = 0
+				r[2].to_i.each do
+					@hosts.store(n, r[2 + n + 1])
+					p n + ">" + r[2 + n + 1]
+				end
+				return
+			end
+			next
+		end
+	end
+			
 end
 

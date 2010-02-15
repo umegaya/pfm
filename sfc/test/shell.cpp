@@ -66,7 +66,7 @@ int shelld::protocol::sendping(class session &s, UTIME ut)
 
 int shelld::protocol::recvping(class session &s, char *p, int l)
 {
-	TRACE("recv ping from (%s)\n", (const char *)s.addr());
+//	TRACE("recv ping from (%s)\n", (const char *)s.addr());
 	if (*p != '0') {
 		return no_ping; /* no ping */
 	}
@@ -152,7 +152,7 @@ template <class S>
 int shelld::protocol_impl<S>::send_code_list(S &s,
 		U32 msgid, const char *hostdata[], int n_host)
 {
-	char buf[2048 + n_host * 1024];
+	char buf[2048 + 256 * 1024];
 	PUSH_TEXT_START(buf, code_list);
 	PUSH_TEXT_NUM(msgid);
 	PUSH_TEXT_NUM(n_host);
@@ -219,7 +219,7 @@ int shelld::protocol_impl<S>::send_code_exec_end(S &s,
 }
 
 template <class S>
-int shelld::protocol_impl<S>::on_recv(S &s, char *p, int l)
+int shelld::protocol_impl<S>::on_recv(S &s, ucast_sender *u, char *p, int l)
 {
 	char cmd[256], path[256], line[1024];
 	int n1, n2, n3;
@@ -228,7 +228,7 @@ int shelld::protocol_impl<S>::on_recv(S &s, char *p, int l)
 	POP_TEXT_STR(cmd, sizeof(cmd));
 	POP_TEXT_NUM(msgid,U32);
 	if (cmp(cmd, cmd_list)) {
-		s.recv_cmd_list(msgid);
+		s.recv_cmd_list(u, msgid);
 	}
 	else if (cmp(cmd, cmd_copyinit)) {
 		POP_TEXT_STR(path, sizeof(path));
@@ -246,6 +246,10 @@ int shelld::protocol_impl<S>::on_recv(S &s, char *p, int l)
 	else if (cmp(cmd, cmd_exec)) {
 		n1 = sizeof(line);
 		POP_TEXT_STRLOW(line, n1, "");
+		if (u) {
+			((shell_ucaster *)u)->recv_cmd_exec(msgid, line);
+			return NBR_OK;
+		}
 		s.recv_cmd_exec(msgid, line);
 	}
 	else if (cmp(cmd, code_list)) {
@@ -364,10 +368,32 @@ void shelld::shellserver::recv_cmd_exec(U32 msgid, const char *cmd)
 	shelld::addjob<shellserver>(ctx);
 }
 
+void shelld::shellserver::recv_cmd_list(ucast_sender *u, U32 msgid)
+{
+	log(INFO, "cmd_list (%s)\n", master_node() ? "master" : "servant");
+	if (u && master_node()) {
+		shell_ucaster *shc = (shell_ucaster *)u;
+		master_shell::session_factory *sf = (master_shell::session_factory *)f();
+		int nsize = sf->pool().size();
+		const char *hosts[nsize];
+		master_shell::svntiter p = sf->pool().begin();
+		for (int i = 0; i < nsize; i++, p = sf->pool().next(p)) {
+			hosts[i] = p->addr();
+		}
+		shc->send_code_list(*shc, msgid, hosts, nsize);
+	}
+	else {
+		shell_ucaster *shc;
+		servant_shell::super *sp = servant_shell::cluster_conn_from(f());
+		ucast_sender uc = sp->ucaster(sp->primary()->addr(), this);
+		shc = (shell_ucaster *)(&uc);
+		shc->send_cmd_list(*shc, msgid);
+	}
+}
+
 void shelld::shell_ucaster::recv_cmd_exec(U32 msgid, const char *cmd)
 {
 	daemon::log(INFO, "cmd_exec: %s(%u)\n", cmd, msgid);
-	ASSERT(strlen(cmd) <= 6);
 	shelld::exec_ctx *ctx = shelld::allocator().create();
 	if (!ctx) {
 		send_code_exec_start(*this, msgid, "resource expire");
@@ -382,14 +408,18 @@ void shelld::shell_ucaster::recv_cmd_exec(U32 msgid, const char *cmd)
 
 void shelld::shellserver::recv_cmd_bcast(U32 msgid, const char *cmd, int cmdl)
 {
-	 if (master_node()) {
-		 master_shell::super *sp = master_shell::cluster_conn_from(f());
-		 sp->bcaster(this).senddata(msgid, cmd, cmdl);
-	 }
-	 else {
-		 servant_shell::super *sp = servant_shell::cluster_conn_from(f());
-		 sp->bcaster(this).senddata(msgid, cmd, cmdl);
-	 }
+	shell_bcaster *shc;
+	if (master_node()) {
+		master_shell::super *sp = master_shell::cluster_conn_from(f());
+		bcast_sender bc = sp->bcaster(this);
+		shc = (shell_bcaster *)(&bc);
+	}
+	else {
+		servant_shell::super *sp = servant_shell::cluster_conn_from(f());
+		bcast_sender bc = sp->bcaster(this);
+		shc = (shell_bcaster *)(&bc);
+	}
+	shc->senddata(msgid, cmd, cmdl);
 }
 
 void shelld::shellserver::recv_cmd_unicast(

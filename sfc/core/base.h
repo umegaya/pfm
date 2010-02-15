@@ -65,8 +65,8 @@ bool factory_impl<S,P>::checkping(class session &s, UTIME ut)
 {
 	if (!cfg().client()) { return true; }
 	UTIME intv = (ut - s.last_ping());
-	log(kernel::INFO, "intv=%llu,ut=%llu,cfg=%llu\n",
-			intv, ut, cfg().m_ping_intv * 1000 * 1000);
+//	log(kernel::INFO, "intv=%llu,ut=%llu,cfg=%llu\n",
+//			intv, ut, cfg().m_ping_intv * 1000 * 1000);
 	if (intv > cfg().m_ping_intv) {
 		int r;
 		if ((r = S::sendping(s, ut)) < 0) {

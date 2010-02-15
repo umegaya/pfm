@@ -418,17 +418,18 @@ int servant_session_factory_impl<S,D>::on_cmd_get_master_list(SOCK sk, char *p, 
 template <class S, class D>
 int servant_session_factory_impl<S,D>::on_cmd_broadcast(SOCK sk, char *p, int l)
 {
-	if (master_node()->broadcast(p, l) < 0) {
-		super::log(super::ERROR, "cmd_broadcast: mnode bcast fail\n");
-		ASSERT(false);
-	}
-	char data[1 + sizeof(address) + l];
-	PUSH_START(data, 1 + sizeof(address) + l);
+	char work[2 + sizeof(address) + l];
+	PUSH_START(work, 2 + sizeof(address) + l);
+	PUSH_8(cluster_protocol::ncmd_broadcast);
 	PUSH_8(cluster_protocol::ncmd_app_cast);
 	PUSH_SOCKADDR(sk);
-	PUSH_MEM(p + 1, l - 1);
-	if (super::broadcast(p, l) < 0) {
-		super::log(super::ERROR, "cmd_broadcast: self bcast fail\n");
+	PUSH_MEM(p + 1, l - 1); /* remove first command byte */
+#if defined(_DEBUG)
+	hexdump(p, l);
+	ASSERT(p[l - 1] == 0);
+#endif
+	if (master_node()->broadcast(work, PUSH_LEN()) < 0) {
+		super::log(super::ERROR, "cmd_broadcast: mnode bcast fail\n");
 		ASSERT(false);
 	}
 	return NBR_OK;
@@ -440,26 +441,21 @@ int servant_session_factory_impl<S,D>::on_cmd_unicast_common(SOCK sk,
 {
 	TRACE("servant_session_factory: to <%s><%s>\n",
 			(const char *)a, (const char *)super::ifaddr());
-	S *nd = super::pool().find(a);
-	char work[1 + sizeof(address) + org_l];
-	if (nd && nd->valid()) {
-		TRACE("node found %p\n", nd);
-		PUSH_START(work, 1 + sizeof(address) + org_l);
-		PUSH_8(reply ? cluster_protocol::ncmd_unicast_reply :
-			cluster_protocol::ncmd_app_cast);
-		PUSH_SOCKADDR(sk);
-		PUSH_MEM(p, l);
+	char work[2 * (1 + sizeof(address)) + org_l];
+	PUSH_START(work, 2 * (1 + sizeof(address)) + org_l);
+	PUSH_8(reply ? cluster_protocol::ncmd_unicast_reply :
+				cluster_protocol::ncmd_unicast);
+	PUSH_ADDR(a);
+	PUSH_8(reply ? cluster_protocol::ncmd_unicast_reply :
+		cluster_protocol::ncmd_app_cast);
+	PUSH_SOCKADDR(sk);
+	PUSH_MEM(p, l);
 #if defined(_DEBUG)
-		hexdump(p, l);
-		ASSERT(p[l - 1] == 0);
+	hexdump(p, l);
+	ASSERT(p[l - 1] == 0);
 #endif
-		if (nd->send(work, PUSH_LEN()) < 0) {
-			super::log(super::ERROR, "cmd_unicast: send fail\n");
-			ASSERT(false);
-		}
-	}
 	/* forward to another node */
-	else if (master_node()->broadcast(org_p, org_l) < 0) {
+	if (master_node()->broadcast(work, PUSH_LEN()) < 0) {
 		super::log(super::ERROR, "unicast: mnode bcast fail\n");
 		ASSERT(false);
 	}
@@ -567,8 +563,11 @@ int master_session_factory_impl<S>::on_cmd_update_master_node_state(char *p, int
 template <class S>
 int master_session_factory_impl<S>::on_cmd_broadcast(SOCK sk, char *p, int l)
 {
-	*p = cluster_protocol::ncmd_app;
-	if (servant_session()->broadcast(p, l) < 0) {
+#if defined(_DEBUG)
+	hexdump(p, l);
+	ASSERT(p[l - 1] == 0);
+#endif
+	if (servant_session()->broadcast(p + 1, l - 1) < 0) {
 		super::log(super::ERROR, "cmd_broadcast: svnt bcast fail\n");
 		ASSERT(false);
 	}
@@ -576,15 +575,20 @@ int master_session_factory_impl<S>::on_cmd_broadcast(SOCK sk, char *p, int l)
 }
 
 template <class S>
-int master_session_factory_impl<S>::on_cmd_unicast(SOCK sk,
-		address &a, char *p, int l, char *org_p, int org_l)
+int master_session_factory_impl<S>::on_cmd_unicast_common(SOCK sk,
+		address &a, char *p, int l, char *org_p, int org_l, bool reply)
 {
-	S *nd = super::pool().find(a);
-	if (nd) {
-		/* add 1byte for ncmd_app */
-		*(p - 1) = cluster_protocol::ncmd_app;
-		if (nd->send(p - 1, l + 1) < 0) {
-			super::log(super::ERROR, "cmd_unicas: send fail\n");
+	session *nd = super::pool().find(a);
+	if (!nd) {
+		nd = ((factory_impl<session> *)servant_session())->pool().find(a);
+	}
+	if (nd && nd->valid()) {
+#if defined(_DEBUG)
+		hexdump(p, l);
+		ASSERT(p[l - 1] == 0);
+#endif
+		if (nd->send(p, l) < 0) {
+			super::log(super::ERROR, "cmd_unicast: send fail\n");
 			ASSERT(false);
 		}
 	}

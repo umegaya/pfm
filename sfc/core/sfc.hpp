@@ -1091,6 +1091,7 @@ class cluster_factory_impl : public factory_impl<node_impl<S,D> >,
 	public P, public cluster_finder_factory_container {
 public:
 	typedef factory_impl<node_impl<S,D> > super;
+	typedef super cluster_factory;
 	typedef P protocol;
 protected:
 	typedef node_impl<S,D>	NODE;
@@ -1184,7 +1185,12 @@ public:
 	int on_cmd_update_master_node_state(char *p, int l);
 //	int on_cmd_get_master_list(SOCK sk, char *p, int l);
 	int on_cmd_broadcast(SOCK sk, char *p, int l);
-	int on_cmd_unicast(SOCK sk, address &a, char *p, int l, char *org_p, int org_l);
+	int on_cmd_unicast_common(SOCK sk, address &a, char *p, int l, char *org_p, int org_l, bool reply);
+	int on_cmd_unicast(SOCK sk, address &a, char *p, int l, char *org_p, int org_l) {
+		return on_cmd_unicast_common(sk, a, p, l, org_p, org_l, false); }
+	int on_cmd_unicast_reply(SOCK sk, address &a, char *p, int l, char *org_p, int org_l) {
+		return on_cmd_unicast_common(sk, a, p, l, org_p, org_l, true); }
+
 };
 
 /* client_session_factory_impl */
@@ -1226,6 +1232,8 @@ public:
 	typedef typename super::sspool sspool;
 	typedef servant_cluster_property<C> property;
 	typedef client_session_factory_impl<C> session_factory;
+	typedef typename session_factory::sspool clpool;
+	typedef typename session_factory::iterator cliter;
 protected:
 	client_session_factory_impl<C>	m_fccl;
 public:
@@ -1271,6 +1279,8 @@ public:
 	typedef typename super::sspool sspool;
 	typedef master_cluster_property<M,S> property;
 	typedef servant_session_factory_impl<S> session_factory;
+	typedef typename session_factory::sspool svntpool;
+	typedef typename session_factory::iterator svntiter;
 protected:
 	master_session_factory_impl<M> m_fcmstr;	/* master factory */
 	servant_session_factory_impl<S> m_fcsvnt;	/* servant factory */

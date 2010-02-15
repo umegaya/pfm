@@ -41,7 +41,7 @@ public:
 		static char *debug_big_data;
 		static const size_t debug_big_datasize = 16;//(64 * 1024);
 	public:
-		void recv_cmd_list(U32 msgid) { ASSERT(false);return ; }
+		void recv_cmd_list(ucast_sender *u, U32 msgid) { ASSERT(false);return ; }
 		void recv_cmd_copyinit(U32 msgid, const char *path, int n_chunk, int chunksz) { ASSERT(false);return ; }
 		void recv_cmd_copychunk(U32 msgid, int chunkno, const char *chunk, int clen) { ASSERT(false);return ; }
 		void recv_cmd_exec(U32 msgid, const char *path) { ASSERT(false);return ; }
@@ -60,7 +60,7 @@ public:
 	template <class S>
 	class protocol_impl : public protocol {
 	public:
-		static int on_recv(S &, char *, int);
+		static int on_recv(S &, ucast_sender *, char *, int);
 		int send_cmd_list(S &s, U32 msgid);
 		int send_cmd_copyinit(S &s, U32 msgid, const char *dst, int n_chunk, int chunksz);
 		int send_cmd_copychunk(S &s, U32 msgid, int chunkno, const char *chunk, int clen);
@@ -79,6 +79,12 @@ public:
 			return ucast_sender::senddata(msgid, p, l + 1);
 		}
 	};
+	class shell_bcaster : public bcast_sender {
+	public:
+		int senddata(U32 msgid, const char *p, int l) {
+			return bcast_sender::senddata(msgid, p, l + 1);
+		}
+	};
 #if 1
 	class shell_node : public node {
 	public:
@@ -95,10 +101,6 @@ public:
 			else {
 				return cfg().m_fns(m_sk, p, l + 1/* send last '\0' also */);
 			}
-		}
-		int on_cluster_recv(ucast_sender *u, char *p, int l) {
-			ASSERT(u);
-			return protocol_impl<shell_ucaster>::on_recv((shell_ucaster &)*u, p, l);
 		}
 	};
 #else
@@ -119,7 +121,11 @@ public:
 	public:
 		void fin()						{}
 		int on_recv(char *p, int l)		{
-			return protocol_impl<shellclient>::on_recv(*this, p, l);
+			return protocol_impl<shellclient>::on_recv(*this, NULL, p, l);
+		}
+		int on_cluster_recv(ucast_sender *u, char *p, int l) {
+			ASSERT(u);
+			return protocol_impl<shellclient>::on_recv(*this, u, p, l);
 		}
 		int on_event(char *p, int l)	{ return NBR_OK; }
 		int on_open(const config &cfg);
@@ -141,10 +147,15 @@ public:
 		void fin()						{}
 		int on_recv(char *p, int l)		{
 			TRACE("%u: time = %llu %s(%u)\n", nbr_osdep_getpid(), nbr_time(), __FILE__, __LINE__);
-			return protocol_impl<shellserver>::on_recv(*this, p, l);
+			return protocol_impl<shellserver>::on_recv(*this, NULL, p, l);
+		}
+		int on_cluster_recv(ucast_sender *u, char *p, int l) {
+			ASSERT(u);
+			return protocol_impl<shellserver>::on_recv(*this, u, p, l);
 		}
 		int on_event(char *p, int l)	{ return NBR_OK; }
 		void recv_cmd_exec(U32 msgid, const char *cmd);
+		void recv_cmd_list(ucast_sender *u, U32 msgid);
 		void recv_cmd_bcast(U32 msgid, const char *cmd, int cmdl);
 		void recv_cmd_unicast(U32 msgid, const char *addr, const char *cmd, int cmdl);
 		pollret poll(UTIME ut, bool from_worker);
@@ -155,6 +166,10 @@ public:
 		typedef config property;
 	public:
 		shell_connector() : shell_node(0, 0) {}
+		int on_cluster_recv(ucast_sender *u, char *p, int l) {
+			ASSERT(u);
+			return protocol_impl<shell_ucaster>::on_recv(*(shell_ucaster *)u, u, p, l);
+		}
 	};
 	class svnt_shellserver : public shellserver {
 	public:
