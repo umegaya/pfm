@@ -208,7 +208,7 @@ array_check_align(const array_t *a, const element_t *e)
 {
 	ASSERT(a->size > 0);
 	return ((
-		(((unsigned int)e) - ((unsigned int)array_get_top(a)))
+		(((U8*)e) - ((U8*)array_get_top(a)))
 		%
 		element_get_size(a->size)
 		) == 0);
@@ -219,7 +219,7 @@ array_get_index(const array_t *a, const element_t *e)
 {
 	if (array_check_align(a, e)) {
 		return (
-			(((unsigned int)e) - ((unsigned int)array_get_top(a)))
+			(((U8*)e) - ((U8*)array_get_top(a)))
 			/
 			element_get_size(a->size)
 			);
@@ -246,7 +246,7 @@ array_get_data_ofs()
 NBR_INLINE element_t *
 array_get_top_address(const void *p)
 {
-	return (element_t *)(((unsigned int)p) - array_get_data_ofs());
+	return (element_t *)(((U8*)p) - ((size_t)array_get_data_ofs()));
 }
 
 NBR_INLINE BOOL

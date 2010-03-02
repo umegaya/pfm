@@ -539,7 +539,7 @@ error:
 }
 
 int
-nbr_osdep_udp_recvfrom(DSCRPTR fd, void *data, size_t len, int flag, void *addr, size_t *alen)
+nbr_osdep_udp_recvfrom(DSCRPTR fd, void *data, size_t len, int flag, void *addr, socklen_t *alen)
 {
 //	TRACE("recv(%d,%d)\n", fd, len);
 	return recvfrom(fd, data, len, 0, addr, alen);

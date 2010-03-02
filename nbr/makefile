@@ -31,6 +31,9 @@ LIBSRCS = $(shell find $(LIBDIR) -regex .*\\.c$$ -printf %f\\n)
 LIBOBJS = $(LIBSRCS:%.c=$(OBJS)/$(LIBDIR)/%.o)
 LIBDEPS = $(LIBSRCS:%.c=$(DEPS)/$(LIBDIR)/%.d)
 LIBREQLIBS = pthread gcc_s
+define EXTLIBS 
+	$(shell find $(EXLIB) -regex .*\\.a$$)
+endef
 LIBNAME = nbr
 LIBRARY = lib$(LIBNAME).a
 
@@ -115,19 +118,24 @@ $(MODDIR)/%.elf: $(MODDIR)/%.c
 #-----------------------------------------------------------------------
 #	make target
 #-----------------------------------------------------------------------
-all: $(LIBRARY) $(PLUGIN) $(UNITTEST) $(MODULES) 
+all: $(EXLIB) $(LIBRARY) $(PLUGIN) $(UNITTEST) $(MODULES) 
 
 test: all
 	./$(TESTDIR)/$(UNITTEST) $(RUNTEST)
+	make -C $(EXLIB) test
 
-$(LIBRARY): $(LIBOBJS)
-	$(AR) $(LIBRARY) $(LIBOBJS) $(EXTLIBS)
+.PHONY : $(EXLIB)
+$(EXLIB) : ; make -C $(EXLIB)
+
+$(LIBRARY) : $(LIBOBJS)
+	$(AR) $(LIBRARY) $(LIBOBJS) $(shell find $(EXLIB) -regex .*\\.o$$)
 
 $(UNITTEST) : $(TESTOBJS)
 	$(CC) -o $(TESTDIR)/$(UNITTEST) $(CFLAG) $(DEFS) $(INS) $(TESTOBJS) $(LIBS) $(TESTLIBS) $(PLUGIN)
 
 clean:
 	rm -f $(LIBOBJS) $(TESTOBJS) $(TESTDIR)/$(UNITTEST) $(MODULES) $(LIBRARY) $(COREFILE) $(PLUGIN)
+	make -C $(EXLIB) clean
 	
 cleanup: clean
 	rm -rf $(OBJS) $(DEPS)

@@ -75,7 +75,7 @@ DSCRPTR	nbr_osdep_udp_accept(DSCRPTR fd, void *addr, int *len, SKCONF *cfg);
 #define	nbr_osdep_udp_close		nbr_osdep_tcp_close
 #define nbr_osdep_udp_recv		nbr_osdep_tcp_recv
 #define nbr_osdep_udp_send		nbr_osdep_tcp_send
-int		nbr_osdep_udp_recvfrom(DSCRPTR fd, void *data, size_t len, int, void *addr, size_t *alen);
+int		nbr_osdep_udp_recvfrom(DSCRPTR fd, void *data, size_t len, int, void *addr, socklen_t *alen);
 int		nbr_osdep_udp_sendto(DSCRPTR fd, const void *data, size_t len, int, const void *addr, size_t alen);
 
 /* common socket related */

@@ -673,7 +673,7 @@ int servant_cluster_factory_impl<C,SN>::on_cmd_unicast_reply(
 	if (q) {
 		int r = NBR_EINVAL;
 		if (nbr_sock_is_same(q->sk, q->s->sk())) {
-			r = q->s->senddata(msgid, POP_BUF(), POP_REMAIN());
+			r = q->s->send(POP_BUF(), POP_REMAIN());
 		}
 		super::log(super::INFO, "query result(%d:%u)\n", r, msgid);
 //		super::querymap().erase(msgid);

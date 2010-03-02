@@ -65,8 +65,8 @@ bool factory_impl<S,P>::checkping(class session &s, UTIME ut)
 {
 	if (!cfg().client()) { return true; }
 	UTIME intv = (ut - s.last_ping());
-//	log(kernel::INFO, "intv=%llu,ut=%llu,cfg=%llu\n",
-//			intv, ut, cfg().m_ping_intv * 1000 * 1000);
+	log(kernel::INFO, "intv=%llu,ut=%llu,cfg=%llu\n",
+			intv, ut, cfg().m_ping_intv * 1000 * 1000);
 	if (intv > cfg().m_ping_intv) {
 		int r;
 		if ((r = S::sendping(s, ut)) < 0) {
@@ -212,4 +212,44 @@ UTIME factory_impl<S,P>::on_poll(SOCK sk)
 	}
 	obj->poll(ut, true);
 	return ut + obj->cfg().m_taskspan;
+}
+
+template <class S, class P>
+char *factory_impl<S,P>::senddata(S &via, class session &sender,
+		U32 msgid, char *p, size_t l)
+{
+	char *q = insert_query(msgid);
+	if (!q) {
+		log(ERROR, "senddata(%u) fail\n", msgid);
+		ASSERT(false);
+		return NULL;
+	}
+	if (via.send(p, l) >= 0) {
+		return q;
+	}
+	log(ERROR, "send fail\n");
+	remove_query(msgid);
+	return NULL;
+
+}
+
+
+template <class S, class P>
+char *factory_impl<S,P>::insert_query(U32 msgid)
+{
+	query *q = querymap().create(msgid);
+	return q ? q->data : NULL;
+}
+
+template <class S, class P>
+char *factory_impl<S,P>::find_query(U32 msgid)
+{
+	query *q = querymap().find(msgid);
+	return q ? q->data : NULL;
+}
+
+template <class S, class P>
+void factory_impl<S,P>::remove_query(U32 msgid)
+{
+	querymap().erase(msgid);
 }

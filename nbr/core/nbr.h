@@ -108,12 +108,18 @@ typedef void				*THREAD;
 typedef void				*THPOOL;
 typedef void				*MUTEX;
 typedef void				*RWLOCK;
-typedef void				*CLUSTER;
+typedef void				*CONHASH;
 typedef void				*NODE;
 typedef U32					THRID;
 /* system type */
 typedef U64					UTIME;
 /* system struct */
+typedef struct  node_s 
+{
+	char iden[32]; /* node name or some thing identifies the node */    
+	U32 replicas; /* number of replica virtual nodes */    
+	U32 flag;
+}					CHNODE;
 typedef struct	nbr_sock_t
 {
 	int		s;
@@ -164,9 +170,10 @@ typedef struct	nbr_init_t
 	NIOCONF 	ioc;
 	NODECONF	ndc;
 }							CONFIG;
-typedef int					DSCRPTR;
+typedef long					DSCRPTR;
 typedef int	(*RECVFUNC) (DSCRPTR, void*, size_t, int, ...);
 typedef int	(*SENDFUNC)	(DSCRPTR, const void*, size_t, ...);
+typedef long	(*STRHASHFUNC)	(const char *, size_t);
 typedef void (*SIGFUNC)	(int);
 typedef struct	nbr_proto_t
 {
@@ -348,18 +355,6 @@ NBR_API char	*nbr_sock_rparser_text(char *p, int *len, int *rlen);
 NBR_API char	*nbr_sock_rparser_raw(char *p, int *len, int *rlen);
 
 
-/* cluster.c */
-NBR_API CLUSTER	nbr_cluster_create(U16 clst_id, int max_servant, int nrb, int nwb,
-					void *my_nodedata, int my_ndlen,
-					int (*mstrproc)(void*, NDEVENT, char *, int), int mstr_ndlen,
-					int (*svntproc)(void*, NDEVENT, char *, int), int svnt_ndlen,
-					int (*sort)(NODE*, int));
-NBR_API void	nbr_cluster_destroy(CLUSTER c);
-NBR_API int		nbr_cluster_is_master(CLUSTER c);
-NBR_API int		nbr_cluster_is_ready(CLUSTER c);
-NBR_API int 	nbr_cluster_send_master(CLUSTER c, char *data, int len);
-
-
 /* sig.c */
 NBR_API int		nbr_sig_set_handler(int signum, SIGFUNC fn);
 NBR_API void	nbr_sig_set_ignore_handler(SIGFUNC fn);
@@ -395,6 +390,17 @@ NBR_API int 	nbr_rwlock_destroy(RWLOCK rw)	MTSAFE;
 NBR_API	int		nbr_rwlock_rdlock(RWLOCK rw)	MTSAFE;
 NBR_API	int		nbr_rwlock_wrlock(RWLOCK rw)	MTSAFE;
 NBR_API	int		nbr_rwlock_unlock(RWLOCK rw)	MTSAFE;
+
+
+/* exlib/libconhash */
+NBR_API CONHASH		nbr_conhash_init(STRHASHFUNC fn, int max_node, int max_replica);
+NBR_API void		nbr_conhash_fin(CONHASH ch);
+NBR_API void		nbr_conhash_set_node(CHNODE *n, const char *id, U32 rep);
+NBR_API int		nbr_conhash_add_node(CONHASH ch, CHNODE *n);
+NBR_API int		nbr_conhash_del_node(CONHASH ch, CHNODE *n);
+NBR_API CHNODE		*nbr_conhash_lookup(CONHASH ch, const char *obj, size_t sz);
+NBR_API void		nbr_conhash_get_vnodes(CONHASH ch, long *values, int size);
+NBR_API U32		nbr_conhash_get_vnodes_num(CONHASH ch);
 
 #ifdef __cplusplus    /* When the user is Using C++,use C-linkage by this */
 }

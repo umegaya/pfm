@@ -109,7 +109,7 @@ typedef struct	sockmgrdata
 	void		*data;		/* user data */
 	int			(*on_accept)		(SOCK);					/* accept watcher */
 	int			(*on_close)			(SOCK, int);			/* close watcher */
-	char		*(*record_parser)	(char *, int *, int*);	/* protocol parcer */
+	char		*(*record_parser)	(char *, int *, int *);	/* protocol parcer */
 	int			(*on_recv)			(SOCK, char *, int);	/* protocol callback */
 	int			(*on_event)			(SOCK, char *, int);	/* event watcher */
 	UTIME		(*on_poll)			(SOCK);					/* polling proc */
@@ -692,7 +692,7 @@ sockmgr_detach_epoll(int epfd, skmdata_t *skm)
 	return epoll_ctl(epfd, EPOLL_CTL_DEL, sockmgr_get_realfd(skm), &e);
 }
 
-STATIC_ASSERT(sizeof(void*) == sizeof(U32));
+//STATIC_ASSERT(sizeof(void*) == sizeof(U32));
 NBR_INLINE int
 sock_attach_epoll(int epfd, sockdata_t *skd, int modify, int r, int w)
 {
@@ -1452,10 +1452,8 @@ nbr_sock_valid(SOCK s)
 {
 	sockdata_t *skd = s.p;
 	if (!skd) {
-		ASSERT(FALSE);
 		return 0;	/* maybe initialized by nbr_sock_clear */
 	}
-	ASSERT(skd->serial == s.s);
 	return (int)(skd->serial == s.s &&
 		(skd->stat <= SS_CLOSING || skd->stat >= SS_CONNECTING));
 }
@@ -1710,7 +1708,9 @@ NBR_INLINE void *
 sock_rw(void *ptr, int rf, int wf, int dg)
 {
 	sockdata_t *skd = ptr;
-	int rsz, ssz, asz, trsz, cnt = 0;
+	int rsz, ssz, trsz;
+	int cnt = 0;
+	socklen_t asz;
 	char *p, addr[ADRL];
 	PROTOCOL *ifp = skd->skm->proto;
 	skmdata_t *skm = skd->skm;
@@ -1718,7 +1718,7 @@ sock_rw(void *ptr, int rf, int wf, int dg)
 	if (rf && skd->nrb < skm->nrb) {
 		asz = sizeof(addr);
 		rsz = ifp->recv(skd->fd, skd->rb + skd->nrb, skm->nrb - skd->nrb,
-				MSG_DONTWAIT, addr, (size_t *)&asz);
+				MSG_DONTWAIT, addr, &asz);
 //TRACE("%u: time = %llu %s(%u) %u\n", nbr_osdep_getpid(), nbr_time(), __FILE__, __LINE__, rsz);
 		switch(rsz) {
 		case -1:
@@ -1803,12 +1803,13 @@ dgsk_accept(skmdata_t *skm)
 {
 	sockdata_t *skd;
 	char addr[ADRL], rb[skm->nrb];
-	int addrlen, cnt = 0, rsz, r;
+	socklen_t addrlen;
+	int cnt = 0, rsz, r;
 	PROTOCOL *ifp = skm->proto;
 	while(cnt++ < skm->cf.n_record_process) {
 		addrlen = sizeof(addr);
 //		TRACE("dgsk_io(%p): try read %d byte\n", skm, skm->nrb);
-		rsz = ifp->recv(skm->fd, rb, skm->nrb, 0, addr, (size_t *)&addrlen);
+		rsz = ifp->recv(skm->fd, rb, skm->nrb, 0, addr, &addrlen);
 //		TRACE("dgsk_io(%p): read %d byte\n", skm, rsz);
 		if (rsz == -1) {
 			if (errno == EAGAIN || errno == EWOULDBLOCK) { break; }

@@ -66,7 +66,7 @@ static inline U64 htonll(U64 n) { return (((U64)htonl(n)) << 32) + htonl(n >> 32
 #define	POP_16A(ia, ialen)		{U32 __ii;U32 __max_len=ialen; POP_16(ialen); if (ialen>__max_len) {__RETURN -3;} for (__ii = 0 ; __ii < ialen ; __ii++) { POP_U16(ia[__ii]); }}
 #define	POP_32A(ia, ialen)		{U32 __ii;U32 __max_len=ialen; POP_16(ialen); if (ialen>__max_len) {__RETURN -3;} for (__ii = 0 ; __ii < ialen ; __ii++) { POP_U32(ia[__ii]); }}
 #define	POP_64A(ia, ialen)		{U32 __ii;U32 __max_len=ialen; POP_16(ialen); if (ialen>__max_len) {__RETURN -3;} for (__ii = 0 ; __ii < ialen ; __ii++) { POP_U64(ia[__ii]); }}
-#define	POP_STR(buf, buf_len)	{char *__strt=(char *)buf; int __i=0; while (*_data!='\0') {*__strt=*_data; _data++; __strt++; _ofs++; __i++; POP_LENGTHCHECK(char); if (buf_len<=__i+1) {break;}} *__strt='\0';_ofs++;_data++;}
+#define	POP_STR(buf, buf_len)	{char *__strt=(char *)buf; size_t __i=0; while (*_data!='\0') {*__strt=*_data; _data++; __strt++; _ofs++; __i++; POP_LENGTHCHECK(char); if (buf_len<=__i+1) {break;}} *__strt='\0';_ofs++;_data++;}
 #define	POP_STR2(buf, buf_len,__i)	{char *__strt=(char *)buf; __i=0; while (*_data!='\0') {*__strt=*_data; _data++; __strt++; _ofs++; __i++; POP_LENGTHCHECK(char); if (buf_len<=__i+1) {break;}} *__strt='\0';_ofs++;_data++;}
 #define POP_MEM(buf, buf_len)   {if ((_ofs + (int)buf_len) > _len) { __RETURN -1; } memcpy(buf, _data, buf_len); _data += buf_len; _ofs += buf_len; }
 
@@ -81,7 +81,7 @@ static inline U64 htonll(U64 n) { return (((U64)htonl(n)) << 32) + htonl(n >> 32
 #define	PUSH_16(i)				{U16 __ts;	PUSH_LENGTHCHECK(__ts); __ts = htons((U16)(i));   U32 _i = 0; do{_work[_i] = ((char *)(&__ts))[_i];}while(++_i < 2); _work+=sizeof(__ts); _ofs+=sizeof(__ts);}
 #define PUSH_32(i)				{U32 __tl;  PUSH_LENGTHCHECK(__tl); __tl = htonl((U32)(i)); U32 _i = 0; do{_work[_i] = ((char *)(&__tl))[_i];}while(++_i < 4); _work+=sizeof(__tl); _ofs+=sizeof(__tl);}
 #define	PUSH_64(i)				{U64 __tll; PUSH_LENGTHCHECK(__tll); __tll = htonll((U64)(i));U32 _i = 0; do{_work[_i] = ((char *)(&__tll))[_i];}while(++_i < 8); _work+=sizeof(__tll); _ofs+=sizeof(__tll);}
-#define	PUSH_8A(a, alen)		{PUSH_16((U16)alen); if (alen > 0) { if ((_ofs + (alen)) > _outmax) {__RETURN -1;} memcpy(_work, (a), (alen)); _work+=(long)(alen); _ofs+=(long)(alen); }}
+#define	PUSH_8A(a, alen)		{PUSH_16((U16)alen); if ((((size_t)_ofs) + (alen)) > ((size_t)_outmax)) {__RETURN -1;} memcpy(_work, (a), (alen)); _work+=(long)(alen); _ofs+=(long)(alen); }
 #define	PUSH_16A(a, alen)		{U32 __ii;  PUSH_16((S16)alen); for (__ii=0 ; __ii<alen ; __ii++) { PUSH_16(a[__ii]); }}
 #define	PUSH_32A(a, alen)		{U32 __ii;  PUSH_16((S16)alen); for (__ii=0 ; __ii<alen ; __ii++) { PUSH_32(a[__ii]); }}
 #define	PUSH_64A(a, alen)		{U32 __ii;  PUSH_16((S16)alen); for (__ii=0 ; __ii<alen ; __ii++) { PUSH_16(a[__ii]); }}

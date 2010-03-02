@@ -21,11 +21,9 @@
 
 #include "nbr.h"
 #include <stdlib.h>
-
-namespace sfc {
-
 #include "defs.h"
 
+namespace sfc {
 namespace util {
 /*-------------------------------------------------------------*/
 /* sfc::util::address										   */
@@ -47,6 +45,15 @@ public:
 	int len() const { return m_len; }
 	void setlen(int len) { m_len = (U8)len; }
 	int from(const char *a);
+	int from(const char *p, size_t size) {
+		nbr_mem_copy(m_a, p, SIZE);
+		if (size < SIZE) {
+			m_a[size] = '\0';
+			return size;
+		}
+		m_a[SIZE - 1] = '\0';
+		return SIZE - 1;
+	}
 	int from(SOCKMGR skm) {
 		int r = nbr_sockmgr_get_addr(skm, m_a, SIZE);
 		if (r < 0) { return r; }
@@ -151,6 +158,7 @@ public:
 			void	operator	delete	(void*) {}
 			void	set(value v) { ((value)*this) = v; }
 			retval	*get() { return this; }
+			static class element *to_e(retval *v) { return (class element *)v; }
 		};
 	};
 	template<typename T>
@@ -170,6 +178,7 @@ public:
 			void	operator	delete	(void*) {}
 			void	set(value v) { data = v; }
 			retval	*get() { return data; }
+			static class element *to_e(retval *v) { ASSERT(false); return NULL; }
 		};
 	};
 	template<typename T, size_t N>
@@ -191,6 +200,7 @@ public:
 				for (int i = 0; i < N; i++) { data[i] = v[i]; }
 			}
 			retval	*get() { return data; }
+			static class element *to_e(retval *v) { return (class element *)v; }
 		};
 	};
 	typedef typename vcont<E>::element	element;
@@ -218,6 +228,7 @@ public:
 	inline iterator insert(value v);
 	inline retval	*create();
 	inline void 	erase(iterator p);
+	inline void		destroy(retval *v);
 	inline int		size() const;
 	inline int		use() const;
 	inline int		max() const;
@@ -254,13 +265,13 @@ public:
 			return nbr_search_init_mem_engine(max, opt, hashsz, sizeof(T));
 		}
 		static int regist(SEARCH s, type t, element *v) {
-			return nbr_search_mem_regist(s, &t, sizeof(T), v);
+			return nbr_search_mem_regist(s, (const char *)&t, sizeof(T), v);
 		}
 		static void unregist(SEARCH s, type t) {
-			nbr_search_mem_unregist(s, &t, sizeof(T));
+			nbr_search_mem_unregist(s, (const char *)&t, sizeof(T));
 		}
 		static element *get(SEARCH s, type t) {
-			return (element *)nbr_search_mem_get(s, &t, sizeof(T));
+			return (element *)nbr_search_mem_get(s, (const char *)&t, sizeof(T));
 		}
 	};
 	template <class C>
@@ -286,13 +297,13 @@ public:
 			return nbr_search_init_mem_engine(max, opt, hashsz, sizeof(T) * N);
 		}
 		static int regist(SEARCH s, type t, element *v) {
-			return nbr_search_mem_regist(s, t, sizeof(T) * N, v);
+			return nbr_search_mem_regist(s, (const char *)t, sizeof(T) * N, v);
 		}
 		static void unregist(SEARCH s, type t) {
-			nbr_search_mem_unregist(s, t, sizeof(T) * N);
+			nbr_search_mem_unregist(s, (const char *)t, sizeof(T) * N);
 		}
 		static element *get(SEARCH s, type t) {
-			return (element *)nbr_search_mem_get(s, t, sizeof(T) * N);
+			return (element *)nbr_search_mem_get(s, (const char *)t, sizeof(T) * N);
 		}
 	};
 	template <class C, typename T>
@@ -302,13 +313,13 @@ public:
 			return nbr_search_init_mem_engine(max, opt, hashsz, sizeof(T));
 		}
 		static int regist(SEARCH s, type t, element *v) {
-			return nbr_search_mem_regist(s, t, sizeof(T), v);
+			return nbr_search_mem_regist(s, (const char *)t, sizeof(T), v);
 		}
 		static void unregist(SEARCH s, type t) {
-			nbr_search_mem_unregist(s, t, sizeof(T));
+			nbr_search_mem_unregist(s, (const char *)t, sizeof(T));
 		}
 		static element *get(SEARCH s, type t) {
-			return (element *)nbr_search_mem_get(s, t, sizeof(T));
+			return (element *)nbr_search_mem_get(s, (const char *)t, sizeof(T));
 		}
 	};
 	template <class C>
@@ -558,14 +569,12 @@ public:
 	int event(int t, const char *p, int l) {
 		return nbr_sockmgr_event(m_skm, t, (char *)p, l); }
 	inline U32 msgid() {
-		++m_msgid_seed;
-		if (m_msgid_seed > MSGID_LIMIT) { m_msgid_seed = 1; }
-		return m_msgid_seed;
+		if (m_msgid_seed >= MSGID_LIMIT) { m_msgid_seed = 0; }
+		return ++m_msgid_seed;
 	}
 	inline U16 compact_msgid() {
-		++m_msgid_seed;
-		if (m_msgid_seed > MSGID_COMPACT_LIMIT) { m_msgid_seed = 1; }
-		return m_msgid_seed;
+		if (m_msgid_seed >= MSGID_COMPACT_LIMIT) { m_msgid_seed = 0; }
+		return ++m_msgid_seed;
 	}
 protected:
 	int init(const config &cfg,
@@ -639,6 +648,7 @@ public:
 	typedef	typename P::sspool sspool;
 	typedef typename P::iterator iterator;
 	typedef S	session_type;
+//	typedef typename S::querydata querydata;
 public:
 	factory_impl() : factory(), m_container() {}
 	~factory_impl() { fin(); }
@@ -648,6 +658,11 @@ public:
 		return m_container.init(cfg, size); }
 	int broadcast(char *p, int l);
 	bool checkping(class session &s, UTIME ut);
+	char *senddata(S &via, class session &sender,
+			U32 msgid, char *p, size_t l);
+	char *insert_query(U32 msgid);
+	char *find_query(U32 msgid);
+	void remove_query(U32 msgid);
 public:
 	int init(const config &cfg);
 	void fin();
@@ -678,6 +693,10 @@ public:
 		pr_server_stop_client_continue = 0,
 		pr_stop = -1,
 	} pollret;
+	typedef struct {
+		session *s;
+		SOCK	sk;
+	} querydata;
 	static const size_t SOCK_ADDR_SIZE = address::SIZE;
 protected:
 	SOCK 	m_sk;
@@ -710,7 +729,6 @@ public: /* attributes */
 	int state() const				{ return (int)m_state; }
 	void setaddr(char *a = NULL);
 	void setaddr(const address &a) 	{ m_addr = a; }
-	int senddata(U32 msgid, const char *p, int l) { return send(p, l); }
 	const address &addr() const		{ return m_addr; }
 	address &addr() 				{ return m_addr; }
 	int localaddr(address &a)		{

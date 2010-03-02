@@ -245,6 +245,13 @@ array<E>::create()
 }
 
 template<class E> void
+array<E>::destroy(retval *v)
+{
+	element *e = element::to_e(v);
+	if (e) { nbr_array_free(m_a, e); }
+}
+
+template<class E> void
 array<E>::erase(iterator p)
 {
 	if (p != end()) {

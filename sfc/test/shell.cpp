@@ -66,7 +66,7 @@ int shelld::protocol::sendping(class session &s, UTIME ut)
 
 int shelld::protocol::recvping(class session &s, char *p, int l)
 {
-//	TRACE("recv ping from (%s)\n", (const char *)s.addr());
+	TRACE("recv ping from (%s)\n", (const char *)s.addr());
 	if (*p != '0') {
 		return no_ping; /* no ping */
 	}

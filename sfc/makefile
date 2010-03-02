@@ -24,8 +24,8 @@ endif
 NBRDIR = ../nbr
 NBRCOREDIR = $(NBRDIR)/core
 COREFILE = core.*
-LIBS = -L$(NBRDIR) -L. -L./lib -lsfc -lnbr
-INCS = -I$(NBRCOREDIR) -I. -Icore -Ilib -Itest 
+LIBS = -L. -L./lib -L$(NBRDIR) -lsfc -lnbr
+INCS = -I. -Icore -Ilib -Itest -I$(NBRCOREDIR)
 DEPS = dep
 OBJS = obj
 

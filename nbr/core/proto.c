@@ -62,7 +62,7 @@ static	PROTOCOL	g_tcp = {
 	(RECVFUNC)nbr_osdep_tcp_recv,
 	(SENDFUNC)nbr_osdep_tcp_send,
 #else
-	close,
+	nbr_osdep_tcp_close,
 	(RECVFUNC)recv,
 	(SENDFUNC)send,
 #endif
@@ -86,7 +86,7 @@ static	PROTOCOL	g_udp = {
 	(RECVFUNC)nbr_osdep_udp_recvfrom,
 	(SENDFUNC)nbr_osdep_udp_sendto,
 #else
-	close,
+	nbr_osdep_tcp_close,
 	(RECVFUNC)recvfrom,
 	(SENDFUNC)sendto,
 #endif
