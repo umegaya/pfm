@@ -3,6 +3,7 @@
 
 #include "conhash.h"
 #include "conhash_inter.h"
+#include "macro.h"
 
 NBR_API
 CONHASH nbr_conhash_init(STRHASHFUNC pfhash, int max_vnode, int multiplex)
@@ -83,6 +84,7 @@ void nbr_conhash_set_node(struct node_s *node, const char *iden, u_int replica)
 NBR_API
 int nbr_conhash_add_node(CONHASH ch, struct node_s *node)
 {
+	TRACE("ch_add : id = <%s>\n", node->iden);
 	struct conhash_s *conhash = (struct conhash_s *)ch;
     if((conhash==NULL) || (node==NULL)) 
     {
@@ -105,6 +107,7 @@ int nbr_conhash_add_node(CONHASH ch, struct node_s *node)
 NBR_API
 int nbr_conhash_del_node(CONHASH ch, struct node_s *node)
 {
+	TRACE("ch_del : id = <%s>\n", node->iden);
  struct conhash_s *conhash = (struct conhash_s *)ch;
    if((conhash==NULL) || (node==NULL)) 
     {
@@ -127,6 +130,7 @@ int nbr_conhash_del_node(CONHASH ch, struct node_s *node)
 NBR_API
 CHNODE *nbr_conhash_lookup(CONHASH ch, const char *object, size_t sz)
 {
+	TRACE("ch_lkup: obj size = %d\n", sz);
  struct conhash_s *conhash = (struct conhash_s *)ch;
     long hash;
     const util_rbtree_node_t *rbnode;
@@ -136,6 +140,7 @@ CHNODE *nbr_conhash_lookup(CONHASH ch, const char *object, size_t sz)
     }
     /* calc hash value */
     hash = conhash->cb_hashfunc(object, sz);
+    TRACE("ch_lkup : hash value = %lu\n", hash);
     
     nbr_rwlock_rdlock(conhash->lock);
     rbnode = util_rbtree_lookup(&(conhash->vnode_tree), hash);

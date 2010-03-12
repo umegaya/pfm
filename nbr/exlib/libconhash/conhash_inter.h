@@ -27,7 +27,7 @@ struct conhash_s
 {
 	util_rbtree_t vnode_tree; /* rbtree of virtual nodes */
     u_int ivnodes; /* virtual node number */
-	ARRAY vnode_a, rbnode_a;
+	ARRAY vnode_a, rbnode_a, node_a;
 	RWLOCK lock;
 	long (*cb_hashfunc)(const char *, size_t);
 };

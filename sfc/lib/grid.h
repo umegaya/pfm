@@ -24,7 +24,11 @@
 namespace sfc {
 using namespace base;
 namespace grid {
-template <class S, class K, template <class C> class CP> class connector_factory_impl;
+template <class S, class K, template <class C> class CP>
+	class connector_factory_impl;
+template <class S, typename K, template <class C> class CP>
+	class grid_servant_factory_impl;
+
 template <class S, class K, template <class C> class CP>
 class connector_impl {
 public:
@@ -32,6 +36,7 @@ public:
 	class connector_session : public S {
 		struct failover_chain *m_chain;
 	public:
+		typedef connector_factory_impl<S,K,CP> factory;
 		connector_session() : S(), m_chain(NULL) {}
 		struct failover_chain *chain() { return m_chain; }
 		void insert(struct failover_chain *c);
@@ -46,6 +51,7 @@ public:
 		void insert(struct failover_chain *c) {
 			if (m_next) { m_next->m_prev = c; }
 			c->m_prev = this;
+			c->m_next = m_next;
 			m_next = c;
 		}
 		void unlink() {
@@ -69,8 +75,10 @@ public:
 			struct querydata *m_top, *m_last;
 		} m_sent, m_fail;
 		struct connector *m_next_ct, *m_prev_ct;
+		grid_servant_factory_impl<S,K,CP> *m_gsf;
+		static RWLOCK m_lock;
 	public:
-		connector() : super(), protocol(), m_next_ct(NULL), m_prev_ct(NULL) {
+		connector() : super(), protocol(this), m_next_ct(NULL), m_prev_ct(NULL) {
 			memset(&m_sent, 0, sizeof(m_sent));
 			memset(&m_fail, 0, sizeof(m_fail));
 		}
@@ -78,15 +86,20 @@ public:
 		~connector();
 	public:
 		typedef failover_chain super;
+		const grid_servant_factory_impl<S,K,CP> *gsf() const { return m_gsf; }
 		failover_chain *chain() { return super::m_next; }
 		const failover_chain *chain() const { return super::m_next; }
 		querydata *sent_list() { return m_sent.m_top; }
 		const querydata *sent_list() const { return m_sent.m_top; }
 		querydata *fail_list() { return m_fail.m_top; }
 		const querydata *fail_list() const { return m_fail.m_top; }
-		bool check_chain_validity() { try_resend(); return true; }
+		bool check_chain_validity() {
+			try_resend();
+			return true;
+		}
 		/* TODO: all insert and unlink need to be thread safe */
 		void insert(querylist &list, querydata *q) {
+			lock lk(connector::m_lock, true);
 			q->m_c = this;
 			q->m_next_q = NULL;
 			q->m_prev_q = list.m_last;
@@ -94,6 +107,7 @@ public:
 			if (!list.m_top) { list.m_top = q; }
 		}
 		void unlink(querylist &list, querydata *q) {
+			lock lk(connector::m_lock, true);
 			if (list.m_top == q) {
 				list.m_top = list.m_top->m_next_q;
 			}
@@ -117,16 +131,27 @@ public:
 		}
 		querydata *sendlow(U32 msgid, char*p, size_t l,
 				int *r, querydata *fq);
-		void try_resend();
+		int try_resend();
+		void remove_processed_packet(U32 last_processed);
 		int send(char *p, size_t l) {
 			int r;
-			querydata *q = sendlow(0, p, l, &r, NULL);
+			sendlow(0, p, l, &r, NULL);
 			return r;
 		}
 		querydata *senddata(S &s, U32 msgid, char *p, size_t l) {
-			return senddatalow(s, msgid, p, l, NULL);
+			int r;
+			return senddatalow(s, msgid, p, l, &r, NULL);
 		}
-		querydata *senddatalow(S &, U32 msgid, char *p, size_t l, querydata *fq);
+		querydata *senddatalow(S &, U32 msgid, char *p, size_t l,
+				int *r, querydata *fq);
+		bool has_session(connector_session *s) {
+			failover_chain *c = chain();
+			while (c) {
+				if (c->m_s == s) { return true; }
+				c = c->m_next;
+			}
+			return false;
+		}
 		int writable() const {
 			const failover_chain *c = chain();
 			if (!c) { return NBR_ESEND; }
@@ -135,6 +160,9 @@ public:
 	};
 
 };
+
+template <class S, class K, template <class C> class CP>
+RWLOCK connector_impl<S,K,CP>::connector::m_lock = NULL;
 
 template <class S, class K, template <class C> class CP>
 connector_impl<S,K,CP>::connector::connector(connector *c) : 
@@ -164,22 +192,32 @@ public:
 	typedef factory_impl<connector_session> super;
 	typedef connector session_type;
 protected:
+	grid_servant_factory_impl<S,K,CP>	*m_gsf;
 	array<failover_chain>			m_failover_chain_factory;
 	map<connector,K>				m_failover_chain_group;
 	connector						*m_failure_connector;
 	RWLOCK							m_lock;
+	U32								m_last_respond_msgid;
 public:
-	connector_factory_impl() : 
-		m_failover_chain_factory(), m_failover_chain_group() {}
+	connector_factory_impl() : m_gsf(NULL),
+		m_failover_chain_factory(), m_failover_chain_group(),
+		m_failure_connector(NULL), m_lock(NULL),
+		m_last_respond_msgid(0) {}
 	~connector_factory_impl() {}
+	grid_servant_factory_impl<S,K,CP>	*gsf() { return m_gsf; }
+	const grid_servant_factory_impl<S,K,CP>	*gsf() const { return m_gsf; }
+	void set_gsf(grid_servant_factory_impl<S,K,CP>	*gsf) { m_gsf = gsf; }
 	int init(const config &cfg) {
+		if (!(connector::m_lock = nbr_rwlock_create())) {
+			return NBR_EPTHREAD;
+		}
 		if (!(m_lock = nbr_rwlock_create())) {
 			return NBR_EPTHREAD;
 		}
-		if (!m_failover_chain_factory.init(100000 * 2, opt_expandable)) {
+		if (!m_failover_chain_factory.init(100000 * 2, -1, opt_expandable)) {
 			return NBR_EMALLOC;
 		}
-		if (!m_failover_chain_group.init(100000, 100000, opt_expandable)) {
+		if (!m_failover_chain_group.init(100000, 100000, -1, opt_expandable)) {
 			return NBR_EMALLOC;
 		}
 		return super::init(cfg);
@@ -187,6 +225,9 @@ public:
 	void fin() {
 		m_failover_chain_factory.fin();
 		m_failover_chain_group.fin();
+		if (connector::m_lock) {
+			nbr_rwlock_destroy(connector::m_lock);
+		}
 		if (m_lock) {
 			nbr_rwlock_destroy(m_lock);
 		}
@@ -194,8 +235,11 @@ public:
 	}
 	void poll(UTIME ut) {
 		connector *c = m_failure_connector, *pc;
+		U32 last_msgid = m_last_respond_msgid;
 		while ((pc = c)) {
-			c->try_resend();
+			c = c->m_next_ct;
+			pc->check_chain_validity();
+			pc->remove_processed_packet(last_msgid);
 		}
 		super::poll(ut);
 	}
@@ -213,16 +257,18 @@ public:
 		connector *ct;
 		failover_chain *c;
 		lock lk(m_lock, true);
-		if (!(c = m_failover_chain_factory.create())) {
-			return NULL;
-		}
-		if (!(s = super::pool().create(a))) {
-			return NULL;
-		}
-		c->m_s = s;
 		if (!(ct = m_failover_chain_group.create(k))) {
 			return NULL;
 		}
+		ct->m_gsf = gsf();
+		if (!(s = super::pool().create(a))) {
+			return NULL;
+		}
+		if (ct->has_session(s)) { return ct; }
+		if (!(c = m_failover_chain_factory.create())) {
+			return NULL;
+		}
+		c->m_s = s;
 		s->insert(c);
 		((failover_chain *)ct)->insert(c);
 		if (!s->valid()) {
@@ -257,10 +303,9 @@ public:
 		return NBR_OK;
 	}
 	querydata *senddata(connector &via, S &sender,
-			U32 msgid, char *p, size_t l, querydata *fq) {
-		int r;
+			U32 msgid, char *p, size_t l, int *r, querydata *fq) {
 		querydata *q;
-		if (!(q = via.sendlow(msgid, p, l, &r, fq))) {
+		if ((q = via.sendlow(msgid, p, l, r, fq))) {
 			/* send success. register to sent list */
 			q->s = &sender;
 			q->sk = sender.sk();
@@ -270,7 +315,7 @@ public:
 			return q;
 		}
 		/* if failed, it should be added to failure list */
-		ASSERT(r < 0);
+		ASSERT(*r < 0);
 		return NULL;
 	}
 	querydata *insert_query(U32 msgid) {
@@ -280,6 +325,12 @@ public:
 		return (querydata *)super::find_query(msgid);
 	}
 	void remove_query(U32 msgid) {
+		remove_query_low(msgid);
+		if (factory::compare_msgid(msgid, m_last_respond_msgid) > 0) {
+			m_last_respond_msgid = msgid;
+		}
+	}
+	void remove_query_low(U32 msgid) {
 		querydata *q = find_query(msgid);
 		if (q) {
 			if (q->m_p) { free(q->m_p); }
@@ -288,6 +339,7 @@ public:
 		}
 	}
 	void insert_failure_connector(connector *c) {
+		TRACE("connector %p fail\n", c);
 		if (is_failure_connector(c)) { return; }
 		ASSERT(c->m_next_ct == NULL && m_failure_connector->m_prev_ct == NULL);
 		c->m_next_ct = m_failure_connector;
@@ -296,6 +348,7 @@ public:
 		m_failure_connector = c;
 	}
 	void unlink_failure_connector(connector *c) {
+		TRACE("connector %p recover from failure\n", c);
 		if (c->m_next_ct) { c->m_next_ct->m_prev_ct = c->m_prev_ct; }
 		if (c->m_prev_ct) { c->m_prev_ct->m_next_ct = c->m_next_ct; }
 		c->m_next_ct = NULL;
@@ -329,15 +382,16 @@ connector_impl<S,K,CP>::connector::~connector()
 template <class S, class K, template <class C> class CP>
 typename connector_impl<S,K,CP>::connector::querydata *
 connector_impl<S,K,CP>::connector::senddatalow(
-		S &s, U32 msgid, char *p, size_t l, querydata *fq)
+		S &s, U32 msgid, char *p, size_t l, int *r, querydata *fq)
 {
-	return cf()->senddata(*this, s, msgid, p, l, fq);
+	return cf()->senddata(*this, s, msgid, p, l, r, fq);
 }
 
 template <class S, class K, template <class C> class CP>
-void connector_impl<S,K,CP>::connector::try_resend()
+int connector_impl<S,K,CP>::connector::try_resend()
 {
 	querydata *fq;
+	int r = NBR_OK;
 	if (writable() > 0 && (fq = fail_list())) {
 		querydata *pfq;
 		while ((pfq = fq)) {
@@ -345,15 +399,32 @@ void connector_impl<S,K,CP>::connector::try_resend()
 			/* TODO: make it thread safe */
 			fail_unlink(pfq);
 			if (pfq->m_is_query) {
-				senddatalow(*(pfq->sender()), pfq->m_sent_msgid, pfq->m_p, pfq->m_l, pfq);
+				senddatalow(
+					*(pfq->sender()),
+					pfq->m_sent_msgid, pfq->m_p, pfq->m_l, &r, pfq);
 			}
 			else {
-				int r;
 				sendlow(pfq->m_sent_msgid, pfq->m_p, pfq->m_l, &r, pfq);
 			}
+			if (r < 0) { break; }
 		}
 		if (!fail_list()) {
 			cf()->unlink_failure_connector(this);
+		}
+	}
+	return r;
+}
+
+template <class S, class K, template <class C> class CP>
+void connector_impl<S,K,CP>::connector::
+	remove_processed_packet(U32 last_processed)
+{
+	querydata *q = m_sent.m_top, *pq;
+	while((pq = q)) {
+		q = q->m_next_q;
+		if (q->m_is_query) { continue; }
+		if (factory::compare_msgid(last_processed, q->m_sent_msgid) > 0) {
+			cf()->remove_query_low(q->m_sent_msgid);
 		}
 	}
 }
@@ -365,8 +436,8 @@ connector_impl<S,K,CP>::connector::sendlow(
 {
 	failover_chain *c = chain();
 	if (!fq) {
-		try_resend();
-		/* if connection is recovered, send  */
+		/* if connection is recovered, send unprocessed packet */
+		int r = try_resend();
 		if (msgid == 0) { msgid = cf()->msgid(); }
 		querydata *q = cf()->insert_query(msgid);
 		if (!q) { goto error; }
@@ -376,9 +447,13 @@ connector_impl<S,K,CP>::connector::sendlow(
 		if (!(q->m_p = (char *)malloc(l))) { goto error; }
 		memcpy(q->m_p, p, l);
 		fq = q;
+		if (r < 0) { goto senderror; }
 	}
 	if (!c) { goto senderror; }
 	if (c->m_s->send(p, l) < 0) { goto senderror; }
+#if defined(_DEBUG)
+	f()->log(kernel::INFO, "connector: send %u byte[%u]\n", l, *p);
+#endif
 	*r = l;
 	/* TODO: make it thread safe (but slow...) */
 	sent_insert(fq);
@@ -406,18 +481,23 @@ protected:
 public:
 		grid_servant_factory_impl() : super(), m_connector_factory() {}
 		~grid_servant_factory_impl() {}
+		connector_factory_impl<S,K,CP> &cf() { return m_connector_factory; }
 		connector *from_key(const K &k) {
 			return m_connector_factory.from_key(k); }
 		int init(const config &cfg) {
 			if (super::init(cfg) < 0) {
 				return NBR_EINVAL;
 			}
+			m_connector_factory.set_gsf(this);
 			/* use same configuration, but client context */
-			U32 flg = cfg.m_flag;
-			((config &)cfg).m_flag &= (~(config::cfg_flag_server));
-			int r = m_connector_factory.init(cfg);
-			((config &)cfg).m_flag = flg;
-			return r;
+			config *dcfg = cfg.dup();
+			if (!dcfg) {
+				return NBR_EMALLOC;
+			}
+			dcfg->m_flag &= (~(config::cfg_flag_server));
+			dcfg->m_query_bufsz = sizeof(
+					typename connector_impl<S,K,CP>::connector::querydata);
+			return m_connector_factory.init(*dcfg);
 		}
 		void fin() {
 			m_connector_factory.fin();

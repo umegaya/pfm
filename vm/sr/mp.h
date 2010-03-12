@@ -93,24 +93,26 @@ public:
 	inline void pop(U8 &u) { u = (U8)m_p[m_c++]; }
 	inline void push(S8 s) { m_p[m_c++] = (char)s; }
 	inline void pop(S8 &s) { s = (S8)m_p[m_c++]; }
-	inline void push(U16 u) { SET_16(m_p + m_c, u); m_c += sizeof(u); }
-	inline void pop(U16 &u) { u = GET_16(m_p + m_c); m_c += sizeof(U16); }
-	inline void push(S16 s) { SET_16(m_p + m_c, s); m_c += sizeof(s); }
-	inline void pop(S16 &s) { s = GET_16(m_p + m_c); m_c += sizeof(S16); }
-	inline void push(U32 u) { SET_32(m_p + m_c, u); m_c += sizeof(u); }
-	inline void pop(U32 &u) { u = GET_32(m_p + m_c); m_c += sizeof(U32); }
-	inline void push(S32 s) { SET_32(m_p + m_c, s); m_c += sizeof(s); }
-	inline void pop(S32 &s) { s = GET_32(m_p + m_c); m_c += sizeof(S32); }
-	inline void push(U64 u) { SET_64(m_p + m_c, u); m_c += sizeof(u); }
-	inline void pop(U64 &u) { u = GET_64(m_p + m_c); m_c += sizeof(U64); }
-	inline void push(S64 s) { SET_64(m_p + m_c, s); m_c += sizeof(s); }
-	inline void pop(S64 &s) { s = GET_64(m_p + m_c); m_c += sizeof(S64); }
+	inline void push(U16 u) { SET_16(m_p + m_c, htons(u)); m_c += sizeof(u); }
+	inline void pop(U16 &u) { u = ntohs(GET_16(m_p + m_c)); m_c += sizeof(U16); }
+	inline void push(S16 s) { SET_16(m_p + m_c, htons(s)); m_c += sizeof(s); }
+	inline void pop(S16 &s) { s = ntohs(GET_16(m_p + m_c)); m_c += sizeof(S16); }
+	inline void push(U32 u) { SET_32(m_p + m_c, htonl(u)); m_c += sizeof(u); }
+	inline void pop(U32 &u) { u = ntohl(GET_32(m_p + m_c)); m_c += sizeof(U32); }
+	inline void push(S32 s) { SET_32(m_p + m_c, htonl(s)); m_c += sizeof(s); }
+	inline void pop(S32 &s) { s = ntohl(GET_32(m_p + m_c)); m_c += sizeof(S32); }
+	inline void push(U64 u) { SET_64(m_p + m_c, htonll(u)); m_c += sizeof(u); }
+	inline void pop(U64 &u) { u = ntohll(GET_64(m_p + m_c)); m_c += sizeof(U64); }
+	inline void push(S64 s) { SET_64(m_p + m_c, htonll(s)); m_c += sizeof(s); }
+	inline void pop(S64 &s) { s = ntohll(GET_64(m_p + m_c)); m_c += sizeof(S64); }
 #if defined(CHECK_LENGTH)
 #undef CHECK_LENGTH
 #endif
 #define CHECK_LENGTH(len)	if ((m_c + len) >= m_s) { 	\
 	TRACE("length error %s(%u)\n", __FILE__, __LINE__);	\
+	ASSERT(false);										\
 	return NBR_ESHORT; }
+	inline int curpos() const { return m_c; }
 	inline int rewind(U32 sz) {
 		if (m_c < sz) { return m_c; }
 		m_c -= sz;
@@ -290,20 +292,20 @@ public:
 	}
 	inline int push_raw_len(size_t l) {
 		if (l <= 0xF) {
-                        CHECK_LENGTH(1);
-                        push(FIXRAW_MASK | (U8)l);
+			CHECK_LENGTH(1);
+			push(((U8)(FIXRAW_MASK | (U8)l)));
 		}
-                else if (l <= 0xFFFF) {
-                        CHECK_LENGTH(3);
+		else if (l <= 0xFFFF) {
+			CHECK_LENGTH(3);
 			push(RAW16);
-                        push(((U16)l));
+			push(((U16)l));
 		}
 		else {
-                        CHECK_LENGTH(5);
-                        push(RAW32);
+			CHECK_LENGTH(5);
+			push(RAW32);
 			push(((U32)l));
-                }
-                return m_c;
+		}
+		return m_c;
 	}
 	inline int push_raw_onlydata(const char *p, size_t l) {
 		CHECK_LENGTH(l);
@@ -316,6 +318,9 @@ public:
 		if (r < 0) { return r; }
 		return push_raw_onlydata(p, l);
 	}
+	inline int push_string(const char *str, size_t l) {
+		return push_raw(str, l + 1);	/* last '\0' also */
+	}
 	inline int pop_raw_len(size_t &l) {
 		U8 v; pop(v);
 		if ((v & FIXRAW_MASK) == FIXRAW_MASK) {
@@ -325,17 +330,17 @@ public:
 			CHECK_LENGTH(2);
 			U16 s; pop(s);
 			l = (size_t)s;
-                }
-                else if (v == RAW32) {
-                        CHECK_LENGTH(4);
+		}
+		else if (v == RAW32) {
+			CHECK_LENGTH(4);
 			U32 u; pop(u);
 			l = (size_t)u;
-                }
+		}
 		else {
 			ASSERT(false); return NBR_EFORMAT;
 		}
-                return m_c;
-        }
+		return m_c;
+	}
 	inline int pop_raw(char *p, size_t l) {
 		memcpy(p, &(m_p[m_c]), l);
 		m_c += l;
@@ -344,7 +349,7 @@ public:
 	inline int push_array_len(size_t l) {
 		if (l <= 0xF) {
 			CHECK_LENGTH(1);
-			push(FIXARRAY_MASK | (U8)l);
+			push(((U8)(FIXARRAY_MASK | (U8)l)));
 		}
 		else if (l <= 0xFFFF) {
 			CHECK_LENGTH(3);
@@ -369,20 +374,20 @@ public:
 	inline int pop_array_len(size_t &l) {
 		CHECK_LENGTH(1);
 		U8 v; pop(v);
-                if ((v & FIXARRAY_MASK) == FIXARRAY_MASK) {
-                        l = (v & 0xF);
-                }
-                else if (v == ARRAY16) {
+		if ((v & FIXARRAY_MASK) == FIXARRAY_MASK) {
+			l = (v & 0xF);
+		}
+		else if (v == ARRAY16) {
 			CHECK_LENGTH(2);
-                        U16 s; pop(s);
-                        l = (size_t)s;
-                }
-                else if (v == ARRAY32) {
+			U16 s; pop(s);
+			l = (size_t)s;
+		}
+		else if (v == ARRAY32) {
 			CHECK_LENGTH(4);
-                        U32 i; pop(i);
-                        l = (size_t)i;
-                }
-                else { ASSERT(false); return NBR_EFORMAT; }
+			U32 i; pop(i);
+			l = (size_t)i;
+		}
+		else { ASSERT(false); return NBR_EFORMAT; }
 		return m_c;
 	}
 	inline int pop_array(data *a, size_t l) {
@@ -394,7 +399,7 @@ public:
 	inline int push_map_len(size_t l) {
 		if (l <= 0xF) {
 			CHECK_LENGTH(1);
-			push(FIXMAP_MASK | (U8)l);
+			push(((U8)(FIXMAP_MASK | (U8)l)));
 		}
 		else if (l <= 0xFFFF) {
 			CHECK_LENGTH(3);
@@ -413,28 +418,28 @@ public:
 		int r = push_map_len(l);
 		if (r < 0) { return r; }
 		for (size_t s = 0; s < l; s++) {
-			if ((*this << a[2 * s    ])) { return NBR_ESHORT; }
-                        if ((*this << a[2 * s + 1]) < 0) { return NBR_ESHORT; }
-                }
+		if ((*this << a[2 * s    ])) { return NBR_ESHORT; }
+			if ((*this << a[2 * s + 1]) < 0) { return NBR_ESHORT; }
+		}
 		return m_c;
 	}
 	inline int pop_map_len(size_t &l) {
 		CHECK_LENGTH(1);
 		U8 v; pop(v);
-                if ((v & FIXMAP_MASK) == FIXMAP_MASK) {
-                        l = (v & 0xF);
-                }
-                else if (v == ARRAY16) {
+		if ((v & FIXMAP_MASK) == FIXMAP_MASK) {
+			l = (v & 0xF);
+		}
+		else if (v == ARRAY16) {
 			CHECK_LENGTH(2);
-                        U16 s; pop(s);
-                        l = (size_t)s;
-                }
-                else if (v == ARRAY32) {
+			U16 s; pop(s);
+			l = (size_t)s;
+		}
+		else if (v == ARRAY32) {
 			CHECK_LENGTH(4);
-                        U32 i; pop(i);
-                        l = (size_t)i;
-                }
-                else { ASSERT(false); return NBR_EFORMAT; }
+			U32 i; pop(i);
+			l = (size_t)i;
+		}
+		else { ASSERT(false); return NBR_EFORMAT; }
 		return m_c;
 	}
 	/* size of a is l * 2 (key + value) */
@@ -443,7 +448,7 @@ public:
 			if ((*this >> a[2 * s    ])) { return NBR_ESHORT; }
 			if ((*this >> a[2 * s + 1]) < 0) { return NBR_ESHORT; }
 		}
-                return m_c;
+		return m_c;
 	}
 #undef CHECK_LENGTH
 };
@@ -463,13 +468,24 @@ public:
 	size_t len() { return __mp::m_c; }
 	void pack_start(char *p, size_t l) { __mp::start(p, l); }
 	void unpack_start(const char *p, size_t l) { 
-		memcpy(m_upk.buffer(), p, l);
-		m_upk.buffer_consumed(l);
+		data d;
+		while(unpack(d) > 0);	/* read all unread data */
+		m_upk.reset_zone();
+		if (l > m_upk.buffer_capacity()) {
+			l = m_upk.buffer_capacity();
+		}
+		if (l > 0) {
+			memcpy(m_upk.buffer(), p, l);
+			m_upk.buffer_consumed(l);
+		}
 	}
 	int unpack(data &data) { 
 		try {
-			if (m_upk.execute()) {
+			int r = m_upk.execute();
+//			TRACE("msgpack:unpacker:result:%d\n", r);
+			if (r > 0) {
 				data = m_upk.data();
+				m_upk.reset();
 				return 1;
 			}
 			else {

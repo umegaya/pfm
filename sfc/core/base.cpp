@@ -87,7 +87,7 @@ int factory::init(const config &cfg,
 							UTIME (*poll)(SOCK))
 {
 	m_cfg = &cfg;
-	if (cfg.m_max_query > 0 && cfg.m_query_bufsz > 0) {
+	if (cfg.m_max_query > 0) {
 		if (!m_ql.init(cfg.m_max_query, cfg.m_max_query, cfg.m_query_bufsz,
 				opt_threadsafe | opt_expandable)) {
 			log(ERROR, "factory: cannot init query buff (%d,%d)\n",
@@ -150,7 +150,7 @@ int binprotocol::recvping(class session &s, char *p, int l)
 	POP_64(ut);
 	if (s.cfg().client()) {
 		s.update_latency((U32)(nbr_clock() - ut));
-#if defined(_DEBUG)
+#if defined(_DEBUG) & 0
 		s.log(kernel::INFO, "recvping: lacency=%u(%llu,%llu)\n", s.latency(),
 				nbr_clock(), ut);
 #endif

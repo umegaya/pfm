@@ -65,8 +65,8 @@ bool factory_impl<S,P>::checkping(class session &s, UTIME ut)
 {
 	if (!cfg().client()) { return true; }
 	UTIME intv = (ut - s.last_ping());
-	log(kernel::INFO, "intv=%llu,ut=%llu,cfg=%llu\n",
-			intv, ut, cfg().m_ping_intv * 1000 * 1000);
+//	log(kernel::INFO, "intv=%llu,ut=%llu,cfg=%llu\n",
+//			intv, ut, cfg().m_ping_intv);
 	if (intv > cfg().m_ping_intv) {
 		int r;
 		if ((r = S::sendping(s, ut)) < 0) {
@@ -86,7 +86,8 @@ void factory_impl<S,P>::poll(UTIME ut)
 	for (;p != pool().end();) {
 		tmp = p;
 		p = pool().next(p);
-		if (!tmp->valid()) {
+		/* activated and detach from sock io thread */
+		if (tmp->activated() && tmp->closed()) {
 			if (cfg().client()) {
 				/* no-recconection or poll failure */
 				if (tmp->poll(ut, false) < 0 || tmp->cfg().m_ld_wait <= 0) {
@@ -233,10 +234,10 @@ char *factory_impl<S,P>::senddata(S &via, class session &sender,
 
 }
 
-
 template <class S, class P>
 char *factory_impl<S,P>::insert_query(U32 msgid)
 {
+	log(INFO, "insert query %u %p\n", msgid, this);
 	query *q = querymap().create(msgid);
 	return q ? q->data : NULL;
 }
@@ -244,6 +245,7 @@ char *factory_impl<S,P>::insert_query(U32 msgid)
 template <class S, class P>
 char *factory_impl<S,P>::find_query(U32 msgid)
 {
+	log(INFO, "find query %u %p\n", msgid, this);
 	query *q = querymap().find(msgid);
 	return q ? q->data : NULL;
 }
@@ -251,5 +253,6 @@ char *factory_impl<S,P>::find_query(U32 msgid)
 template <class S, class P>
 void factory_impl<S,P>::remove_query(U32 msgid)
 {
+	log(INFO, "remove query %u %p\n", msgid, this);
 	querymap().erase(msgid);
 }

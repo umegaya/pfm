@@ -68,7 +68,7 @@ public:
 	static const UUID &new_id();
 	static const UUID &invalid_id() { return UUID_INVALID; }
 	static inline bool valid(UUID &uuid) {
-		return uuid.id1 == 0 && uuid.id2 == 0; }
+		return uuid.id1 != 0 || uuid.id2 != 0; }
 };
 }	//sfc::idgen
 
@@ -88,20 +88,30 @@ public:
 		vmcmd_rpc,		/* c->s, c->c, s->s */
 		vmcmd_new_object,	/* s->m, m->s */
 		vmcmd_login,	/* c->s->m */
-		vmcmd_load,		/* s->m->s->m->s */
 		vmcode_rpc,		/* s->c, c->c, s->s */
 		vmcode_new_object,	/* s->m, m->s */
 		vmcode_login,	/* m->s->c */
-		vmcode_load,	/*  */
 	};
 	typedef enum {
-		rpct_rpc,
-		rpct_getter,
-		rpct_setter,
+		rpct_invalid,
+
+		rpct_method,	/* r = object.func(self,a1,a2,...) */
+		rpct_global,	/* r = global_func(a1,a2,...) */
+		rpct_getter,	/* object[k] */
+		rpct_setter,	/* object[k] = v */
+
+		rpct_error = 255,/* error happen on remote */
 	} rpctype;
+	enum {	/* flag for controling fiber behavior */
+		rpcopt_flag_not_set = 0x0,
+		rpcopt_flag_invoked = 0x01,/* means invoked by other rpc. so
+								 if fiber is finished, should reply to caller */
+		rpcopt_flag_notification = 0x02,/* no need to receive response */
+	};
 	static const int vnode_replicate_num = 30;
 	static const int vmd_account_maxlen = 64;
 	static const int vmd_procid_maxlen = 32;
+	static const int vmd_max_replicate_host = 32;
 	typedef char login_id[vmd_account_maxlen];
 	typedef char proc_id[vmd_procid_maxlen];
 };
@@ -119,7 +129,7 @@ public: /* ctor/dtor/(g|s)etter */
 	S &_this() { return m_this; }
 	const S &_this() const { return m_this; }
 	static bool is_valid_id(UUID &uuid) { return IDG::valid(uuid); }
-	static UUID &new_id() { return IDG::new_id(); }
+	static const UUID &new_id() { return IDG::new_id(); }
 	static const UUID &invalid_id() { return IDG::invalid_id(); }
 public:	/* receiver */
 #if defined(__PE)
@@ -164,6 +174,7 @@ public:
 		CP(C *c) : vmprotocol_impl<C,IDG,S>(c) {} 
 		CP() : vmprotocol_impl<C,IDG,S>(NULL) {}
 	};
+	typedef connector_factory_impl<S,UUID,CP> connector_factory;
 	typedef typename connector_impl<S,UUID,CP>::connector conn;
 	typedef typename connector_impl<S,UUID,CP>::failover_chain chain;
 public:
@@ -172,18 +183,25 @@ public:
 	class object_impl : public kernel {
 	protected:
 		UUID	m_uuid;		/* unique ID for each object */
+		U32		m_flag;		/* object flag */
 		conn	*m_conn;	/* if != NULL, connection to this object
 					otherwise this object is local */
 	public:
-		object_impl() : m_uuid(), m_conn(NULL) {}
+		enum {
+			object_flag_local = 0x00000001,
+		};
+	public:
+		object_impl() : m_uuid(), m_flag(0), m_conn(NULL) {}
 		~object_impl() {}
-		void set_uuid(UUID &uuid) { m_uuid = uuid; }
+		void set_uuid(const UUID &uuid) { m_uuid = uuid; }
 		const UUID &uuid() const { return m_uuid; }
 		conn *connection() { return m_conn; }
 		const conn *connection() const { return m_conn; }
 		void set_connection(conn *c) { m_conn = c; }
-		bool local() const { return connection() == NULL; }
-		bool remote() const { return connection() != NULL; }
+		void set_flag(U32 f, bool on) {
+			if (on) { m_flag |= f; } else { m_flag &= ~(f); } }
+		bool local() const { return m_flag & object_flag_local; }
+		bool remote() const { return !local(); }
 	};
 	typedef object_impl<IDG> object;
 protected:
@@ -193,21 +211,15 @@ public:
 	~object_factory_impl() {}
 	static int init(int max_object);
 	static void fin();
-	static object *create(conn *c) {
-		UUID id = IDG::new_id();
+	static object *create(const UUID &id, bool local) {
 		object *p = m_om.create(id);
 		if (p) {
 			p->set_uuid(id);
-			p->set_connection(c);
+			p->set_flag(object::object_flag_local, local);
 		}
 		return p;
 	}
-	static object *create(const UUID &id, conn *c) {
-		object *p = m_om.create(id);
-		if (p) { p->set_connection(c); }
-		return p;
-	}
-	static object *find(UUID &id) { return m_om.find(id); }
+	static object *find(const UUID &id) { return m_om.find(id); }
 	static void destroy(object *o) { m_om.erase(o->uuid()); }
 	static UUID new_id() { return IDG::new_id(); }
 };
@@ -235,6 +247,7 @@ public:
 	static int init_vm(int max_object, int max_rpc, int max_rpc_ongoing);
 	static void fin_vm();
 	static object_factory &of() { return m_of; }
+	static bool load(const char *srcfile) { return script::load(srcfile); }
 public:
 	SR &sr() { return m_sr; }
 	const SR & sr() const { return m_sr; }
@@ -287,11 +300,13 @@ public:
 			long m_data;
 		};
 	public:
-		typename script::VM &vm() { return m_vm; }
+		VM &vm() { return m_vm; }
 		S *sender() { return (S *)node::querydata::s; }
 	};
 	vmnode(S *s) : session(), vmmodule(s) {}
 	static const UUID &backend_key() { return protocol::invalid_id(); }
+	const UUID &verify_uuid(const UUID &uuid) const { return uuid; }
+	querydata *senddata(S &s, U32 msgid, char *p, int l);
 	int on_recv(char *p, int l) { return protocol::on_recv(p, l); }
 	int recv_cmd_rpc(U32 msgid, UUID &uuid, proc_id &pid,
 			char *p, int l, rpctype rc);

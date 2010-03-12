@@ -117,8 +117,8 @@ typedef U64					UTIME;
 typedef struct  node_s 
 {
 	char iden[32]; /* node name or some thing identifies the node */    
-	U32 replicas; /* number of replica virtual nodes */    
-	U32 flag;
+	U16 replicas; /* number of replica virtual nodes */
+	U16 flag;
 }					CHNODE;
 typedef struct	nbr_sock_t
 {

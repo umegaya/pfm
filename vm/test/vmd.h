@@ -43,12 +43,18 @@ public:
 				char *kvs, char *kopt,
 				int max_object, int rpc_entry, int rpc_ongoing);
 		virtual int set(const char *k, const char *v);
+		virtual config *dup() const {
+			vmdconfig *cfg = new vmdconfig;
+			*cfg = *this;
+			return cfg;
+		}
 	};
 	class vmdmstr : public vmnode<vmdmstr> {
 	public:
 		typedef vmnode<vmdmstr> super;
 		typedef super::mstr_base_factory factory;
 		typedef super::protocol protocol;
+		typedef super::proc_id proc_id;
 		typedef super::script script;
 		typedef super::UUID UUID;
 	protected:
@@ -65,23 +71,34 @@ public:
 	protected:
 		static CONHASH m_ch;
 		static map<account_info, protocol::login_id> m_lm;
-		static int add_conhash(const char *addr);
-		static int del_conhash(const char *addr);
 		static const CHNODE *lookup_conhash(UUID &uuid);
+		CHNODE m_node;
+		int add_conhash(const char *addr);
+		int del_conhash(const char *addr);
 	public:
 		vmdmstr() : super(this) {}
 		~vmdmstr() {}
-		querydata *senddata(session &s, U32 msgid, char *p, int l);
+		static int init_login_map(int max_user);
+		static int init_conhash(int max_node, int max_replica);
 		void setaddr() {
 			super::setaddr();
-			if (add_conhash(addr()) < 0) { close(); }
+			if (add_conhash(addr()) < 0) { ASSERT(false); close(); }
 		}
-		int load_or_create_object(U32 msgid, UUID &uuid, loadpurpose lp);
+		void fin() {
+			del_conhash(addr());
+			super::fin();
+		}
+		int load_or_create_object(U32 msgid, const char *acc,
+				UUID &uuid, loadpurpose lp);
 	public:/* receiver */
 		int recv_cmd_new_object(U32 msgid, const char *acc, UUID &uuid);
 		int recv_code_new_object(querydata &q, int r, const char *acc,
 				UUID &uuid, char *p, size_t l);
 		int recv_cmd_login(U32 msgid, const char *acc, char *adata, size_t len);
+		int recv_cmd_rpc(U32 msgid, UUID &uuid, proc_id &pid,
+				char *p, int l, rpctype rc) { return 0; }
+		int recv_code_rpc(querydata &q, char *p, size_t l, rpctype rc)
+				{return 0;}
 	};
 	class vmdsvnt : public vmnode<vmdsvnt> {
 	public:
@@ -95,11 +112,13 @@ public:
 	public:
 		vmdsvnt() : super(this), m_session_uuid() {}
 		~vmdsvnt() {}
-		querydata *senddata(session &s, U32 msgid, char *p, int l);
+		script::CF &cf() { return sf(*this)->cf(); }
 		factory::connector *backend_connect(address &a) {
-			return sf(*this)->backend_connect(a); }
+			return cf().backend_connect(a); }
 		factory::connector *backend_conn() {
-			return sf(*this)->backend_conn(); }
+			return cf().backend_conn(); }
+		const UUID &verify_uuid(const UUID &uuid) {
+			return GET_32(&(m_session_uuid)) ? m_session_uuid : uuid; }
 	public:/* vmdsvnt */
 		int recv_cmd_new_object(U32 msgid, const char *acc, UUID &uuid);
 		int recv_code_new_object(querydata &q, int r, const char *acc,
@@ -117,12 +136,11 @@ public:
 	public:
 		vmdclnt() : super(this) {}
 		~vmdclnt() {}
-		querydata *senddata(session &s, U32 msgid, char *p, int l);
+		script::CF &cf() { return *sf(*this); }
 		factory::connector *backend_connect(address &a) {
-			return sf(*this)->backend_connect(a); }
+			return cf().backend_connect(a); }
 		factory::connector *backend_conn() {
-			return sf(*this)->backend_conn(); }
-		int on_open(const config &cfg);
+			return cf().backend_conn(); }
 	public:/* vmdclnt */
 		int recv_code_login(querydata &q, int r, UUID &uuid, char *p, size_t l);
 	};

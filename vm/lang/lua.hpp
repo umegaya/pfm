@@ -21,6 +21,10 @@
 
 extern "C" {
 #include <lua.h>
+#include <lauxlib.h>
+#include <lualib.h>
+/* lua coco */
+extern lua_State *lua_newcthread(lua_State *L, int cstacksize);
 }
 
 namespace sfc {
@@ -49,9 +53,11 @@ public:
 	static inline const char	*to_s(mp::data &d);
 	static inline const char	*to_p(mp::data &d);
 	static inline int		to_rawlen(mp::data &d);
+	static inline int 		to_alen(mp::data &d);
 	static inline int		to_maplen(mp::data &d);
 	static inline mp::data		&key(mp::data &d, int i);
 	static inline mp::data		&val(mp::data &d, int i);
+	static inline mp::data		&elem(mp::data &d, int i);
 	static inline int		type(mp::data &d);
 };
 /* lua */
@@ -65,11 +71,15 @@ public:	/* typedefs */
 	typedef typename OF::conn conn;
 	typedef typename OF::session_type S;
 	typedef typename OF::UUID UUID;
+	typedef typename OF::connector_factory CF;
 	typedef vmprotocol::rpctype rpctype;
 	typedef lua_State *VM;
+
+	/* macro prepair pack */
 #define PREPAIR_PACK(conn)  			\
 	char __buf[max_rpc_packlen];		\
 	conn->sr().start(__buf, sizeof(__buf));
+
 	class rpc {
 	protected:
 		UUID m_uuid;
@@ -88,7 +98,7 @@ public:	/* typedefs */
 	protected:
 		VM m_ip;
 		S *m_s;
-		U32 m_msgid;
+		U32 m_msgid, m_opt;
 	public:
 		/* NOTE : m_ip never destroyed after once created,  
 		memory region which is used for allocating fiber object is
@@ -99,24 +109,47 @@ public:	/* typedefs */
 		operator VM () { return m_ip; }
 		U32 rmsgid() const { return m_msgid; }
 		S *connection() { return m_s; }
-		void set_owner(VM vm, S *s, U32 msgid) {
+		void set_owner(VM vm, VM th, S *s, U32 msgid) {
 			m_msgid = msgid;
 			m_s = s;
+			char k[256];
+			snprintf(k, sizeof(k), "fb%08x", (U32)th);
 			lua_pushlightuserdata(vm, this);
-			lua_setfield(vm, LUA_ENVIRONINDEX, "_fiber_");
+			lua_setfield(vm, LUA_REGISTRYINDEX, k);
 		}
-		bool init_from_vm(lua_State *vm, S *s, U32 msgid) {
-			if (!m_ip) { m_ip = lua_newthread(vm); }
-			if (m_ip) { set_owner(m_ip, s, msgid); }
+		static fiber *get_owner(VM vm, VM th) {
+			char k[256];
+			snprintf(k, sizeof(k), "fb%08x", (U32)th);
+			lua_getfield(vm, LUA_REGISTRYINDEX, k);
+			fiber *fb = lua_islightuserdata(vm, -1) ?
+				(fiber *)lua_touserdata(vm, -1) : NULL;
+			lua_pop(vm, 1);
+			return fb;
+		}
+		bool init_from_vm(lua_State *vm, S *s, U32 msgid, U32 opt) {
+			if (!m_ip) { m_ip = lua_newcthread(vm, 1/* use min size */); }
+			if (m_ip) { set_owner(vm, m_ip, s, msgid); }
+			m_opt = opt;
 			return m_ip != NULL;
 		}
+		bool need_reply() const { return m_opt&vmprotocol::rpcopt_flag_invoked; }
+		bool no_yield() const { return m_opt&vmprotocol::rpcopt_flag_notification; }
 	};
-	struct write_chunk {
+	struct write_func_chunk {
 		SR *sr;
 		int n_write;
 	};
+	struct read_func_chunk {
+		data *d;
+		int ret;
+	};
 public: /* constant */        
-	static const U32 max_rpc_packlen = 64 * 1024;   /* max 64kb */        
+	static const U32 max_rpc_packlen = 32 * 1024;   /* max 32kb */
+	enum {
+		lua_rpc_nobiton = 0,
+		lua_rpc_entry = 0x1, 	/* first rpc (start point?) */
+		lua_rpc_reply = 0x2,	/* reply is needed? */
+	};
 protected:	/* static variable */
 	static array<rpc>	m_rpcs;
 	static map<fiber,U32>	m_fibers;
@@ -127,34 +160,41 @@ public:
 	~lua() {}
 	/* external interfaces */
 	static int 	init(int max_rpc_entry, int max_rpc_ongoing);
-	static object 	*object_new(S &s, VM vm, UUID &uuid, SR *sr);
-	static int	pack_object(SR &, const object &);
-	static int	call_proc(S &, U32, object &, proc_id &, char *, size_t, rpctype);
-	static int	resume_proc(S &, VM, char *, size_t, rpctype);
-	static int 	resume_create(S &, VM, UUID &, SR &);
-protected: 	/* meta methods */
+	static object 	*object_new(CF &cf, VM vm, UUID &uuid, SR *sr, bool local);
+	static int	pack_object(SR &, const object &, bool);
+	static int	call_proc(S &, CF &, U32, object &, proc_id &,
+			char *, size_t, rpctype, U32);
+	static int	resume_proc(S &, CF &, VM, char *, size_t, rpctype);
+	static int 	resume_create(S &, CF &, VM, UUID &, SR &);
+	static bool load(const char *srcfile);
+protected: 	/* lua methods */
 	static int	create(VM);
 	static int 	index(VM);
 	static int 	newindex(VM);
 	static int 	call(VM);
 	static int 	gc(VM);
-protected: 	/* helpers */
+	static int	panic(VM);
 	static void	*allocator(void *ud, void *ptr, size_t os, size_t ns);
-	static void 	push_object(VM, object *);
-	static int 	put_object_value(VM vm, const object &o, const char *key, int from);
-	static int 	pack_object_value(VM vm, const object &o, SR &sr);
-	static int 	get_object_value(VM vm, const object &o, const char *key);
-	static int 	unpack_object_value(S &s, VM vm, const object &o, SR &sr);
+protected: 	/* helpers */
+	static void push_object(VM, object *);
 	static rpc 	*rpc_new(VM, object *, const char *);
-	static fiber	*fiber_new(S *, U32);
-	static int	pack_lua_value(SR &, VM, int);
-	static int	unpack_lua_value(S &, SR &, VM);
-	static int 	put_lua_stack(S &, VM, data &);
-	static int 	unpack_object(S &, VM, SR &, object &);
-	static int	dispatch(S &, VM, int, bool);
-	static int	reply_result(S &, VM, int);
+	static fiber	*fiber_new(S *, U32, U32);
+
+	static int 	get_object_value(VM vm, const object &o, const char *key);
+	static int 	set_object_value(VM vm, const object &o, const char *key, int from);
+	static int 	pack_object_value(VM vm, const object &o, SR &sr);
+	static int 	unpack_object_value(CF &cf, VM vm, const object &o, data &sr);
+
+	static int	pack_lua_stack(SR &, VM, int);
+	static bool	unpack_lua_stack(CF &, SR &, VM);
+	static int 	put_to_lua_stack(CF &, VM, data &);
+
+	static int 	unpack_object(CF &, VM, data &, object &);
+
+	static int	dispatch(S &, VM, int, bool, rpctype);
+	static int	reply_result(S &, VM, int, rpctype);
 	static object 	*to_o(VM, int, bool abort = true);
-	static rpc 	*to_r(VM, int, bool abort = true);
+	static rpc 		*to_r(VM, int, bool abort = true);
 	static const char *to_k(VM, int);
 	static const char *chunk_sr_reader(VM, void *, size_t*);
 	static int	chunk_sr_writer(VM, const void *, size_t, void *);

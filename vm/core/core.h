@@ -54,10 +54,14 @@ vmdprotocol_impl<S,IDG,SNDR>::
 template <class S,class IDG,class SNDR>
 int vmprotocol_impl<S,IDG,SNDR>::on_recv(char *p, int l)
 {
+#if defined(_DEBUG)
+	_this().log(INFO, "vmproto: recv %u byte from %s\n", l,
+			(const char *)_this().addr());
+#endif
 	U8 cmd, rt; U32 msgid;
 	char account[vmprotocol::vmd_account_maxlen];
 	int r, len;
-	typename S::querydata *q;
+	typename S::querydata *q = NULL;
 	typename S::factory *sf = (typename S::factory *)_this().f();
 	proc_id pid;
 	UUID uuid;
@@ -69,30 +73,29 @@ int vmprotocol_impl<S,IDG,SNDR>::on_recv(char *p, int l)
 		POP_8(rt);
 		len = sizeof(UUID);
 		POP_8A(&(uuid), len);
-		len = sizeof(proc_id);
-		POP_8A(pid, len);
+		POP_STR(pid, sizeof(pid));
 		/* execute fiber */
-		recv_cmd_rpc(msgid, uuid, pid, POP_BUF(), POP_REMAIN(), (rpctype)rt);
+		_this().recv_cmd_rpc(msgid, uuid, pid, POP_BUF(), POP_REMAIN(), (rpctype)rt);
 		break;
 	case vmprotocol::vmcmd_new_object:      /* s->m, m->s */
 		POP_STR(account, sizeof(account));
 		len = sizeof(UUID);
 		POP_8A(&(uuid), len);
-		recv_cmd_new_object(msgid, account, uuid);
+		_this().recv_cmd_new_object(msgid, account, uuid);
 		break;
 	case vmprotocol::vmcmd_login:
 		POP_STR(account, sizeof(account));
-		recv_cmd_login(msgid, account, POP_BUF(), POP_REMAIN());
+		_this().recv_cmd_login(msgid, account, POP_BUF(), POP_REMAIN());
 		break;
 	case vmprotocol::vmcode_rpc:            /* s->c, c->c, s->s */
 		POP_8(rt);
 		q = (typename S::querydata *)sf->find_query(msgid);
-		if (!q || !nbr_sock_is_same(q->sk, q->s->sk())) { goto error; }
-		recv_code_rpc(*q, POP_BUF(), POP_REMAIN(), (rpctype)rt);
+		if (!q || !nbr_sock_is_same(q->sk, q->s->sk())) { ASSERT(q); goto error; }
+		_this().recv_code_rpc(*q, POP_BUF(), POP_REMAIN(), (rpctype)rt);
 		break;
 	case vmprotocol::vmcode_new_object:     /* s->m, m->s */
 		q = (typename S::querydata *)sf->find_query(msgid);
-		if (!q || !nbr_sock_is_same(q->sk, q->s->sk())) { goto error; }
+		if (!q || !nbr_sock_is_same(q->sk, q->s->sk())) { ASSERT(q); goto error; }
 		POP_32(r);
 		POP_STR(account, sizeof(account));
 		len = sizeof(UUID);
@@ -106,7 +109,8 @@ int vmprotocol_impl<S,IDG,SNDR>::on_recv(char *p, int l)
 		break;
 	case vmprotocol::vmcode_login:
 		q = (typename S::querydata *)sf->find_query(msgid);
-		if (!q || !nbr_sock_is_same(q->sk, q->sender()->sk())) { goto error; }
+		if (!q || !nbr_sock_is_same(q->sk, q->sender()->sk())) {
+			ASSERT(q); goto error; }
 		POP_32(r);
 		len = sizeof(UUID);
 		POP_8A(&(uuid), len);
@@ -134,7 +138,7 @@ int vmprotocol_impl<S,IDG,SNDR>::send_rpc(
 	PUSH_8(rt);
 	PUSH_8A((U8 *)&uuid, sizeof(UUID));
 	PUSH_STR(p);
-	PUSH_8A(args, alen);
+	PUSH_MEM(args, alen);
 	/* instatiation of vmdmstr, here causes type error. 
 	but actually vmdmstr never uses sendrpc call. so cast is ok
 	(no effect) */
@@ -156,7 +160,7 @@ int vmprotocol_impl<S,IDG,SNDR>::reply_rpc(
 	PUSH_8(vmprotocol::vmcode_rpc);
 	PUSH_32(rmsgid);
 	PUSH_8(rt);
-	PUSH_8A(args, alen);
+	PUSH_MEM(args, alen);
 	return _this().send(buf, PUSH_LEN());
 }
 
@@ -174,6 +178,7 @@ int vmprotocol_impl<S,IDG,SNDR>::send_new_object(SNDR &s,
 	U32 msgid = _this().f()->msgid();
 	PUSH_32(msgid);
 	PUSH_STR(acc);
+	ASSERT(*acc);
 	PUSH_8A((char *)&uuid, sizeof(UUID));
 	/* same as send_rpc's cast, it causes no effect */
 	Q *q = (Q *)_this().senddata(s, msgid, buf, PUSH_LEN());
@@ -198,7 +203,7 @@ int vmprotocol_impl<S,IDG,SNDR>::reply_new_object(SNDR &s, U32 msgid, int r,
 	PUSH_32(r);
 	PUSH_STR(acc);
 	PUSH_8A(&uuid, sizeof(UUID));
-	PUSH_8A(p, l);
+	PUSH_MEM(p, l);
 	return _this().send(buf, PUSH_LEN());
 }
 
@@ -213,7 +218,7 @@ int vmprotocol_impl<S,IDG,SNDR>::send_login(SNDR &s, U32 rmsgid,
 	U32 msgid = _this().f()->msgid();
 	PUSH_32(msgid);
 	PUSH_STR(acc);
-	PUSH_8A(authdata, len);
+	PUSH_MEM(authdata, len);
 	typename S::querydata *q = _this().senddata(s, msgid, buf, PUSH_LEN());
 	if (q) {
 		q->msgid = rmsgid;
@@ -235,7 +240,7 @@ int vmprotocol_impl<S,IDG,SNDR>::reply_login(SNDR &s, U32 msgid,
 	PUSH_32(msgid);
 	PUSH_32(r);
 	PUSH_8A(&uuid, sizeof(UUID));
-	PUSH_8A(p, l);
+	PUSH_MEM(p, l);
 	return _this().send(buf, PUSH_LEN());
 }
 
@@ -274,20 +279,40 @@ template <class S>
 int vmnode<S>::recv_cmd_rpc(U32 msgid, UUID &uuid, proc_id &pid, 
 		char *p, int l, rpctype rt)
 {
-	object *o = object_factory::find(uuid);
+	const UUID &vuuid = protocol::_this().verify_uuid(uuid);
+	object *o = object_factory::find(vuuid);
 	if (!o) {
 		char buf[256];
-		log(ERROR, "object not found (%s)\n", uuid.to_s(buf, sizeof(buf)));
+		log(ERROR, "object not found (%s)\n", vuuid.to_s(buf, sizeof(buf)));
 	}
 	/* execute fiber */
-	return script::call_proc(*this, msgid, *o, pid, p, l, rt);
+	return script::call_proc(protocol::_this(), protocol::_this().cf(),
+			msgid, *o, pid, p, (size_t)l, rt, protocol::rpcopt_flag_invoked);
 }
 
 template <class S>
 int vmnode<S>::recv_code_rpc(querydata &q, char *p, size_t l, rpctype rt)
 {
 	/* resume fiber */
-	return script::resume_proc(*(q.sender()), q.vm(), p, l, rt);
+	return script::resume_proc(*(q.sender()), protocol::_this().cf(),
+			q.vm(), p, l, rt);
 }
 
-
+template <class S> typename vmnode<S>::querydata *
+vmnode<S>::senddata(S &s, U32 msgid, char *p, int l)
+{
+	querydata *q = (querydata *)sf(*((S *)this))->insert_query(msgid);
+	if (!q) {
+		log(ERROR, "vmnode:senddata(%u) fail\n", msgid);
+		ASSERT(false);
+		return NULL;
+	}
+	if (send(p, l) >= 0) {
+		q->sk = s.sk();
+		q->s = &s;
+		return q;
+	}
+	log(ERROR, "vmnode:send fail\n");
+	sf(*((S *)this))->remove_query(msgid);
+	return NULL;
+}

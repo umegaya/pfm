@@ -471,6 +471,11 @@ public:
 	virtual int	set(const char *k, const char *v);
 	virtual void *proto_p() const { return NULL; }
 	virtual void set(const config &cfg){ *this = cfg; }
+	virtual config *dup() const {
+		config *cfg = new config;
+		if (cfg) { *cfg = *this; }
+		return cfg;
+	}
 public:
 	int	load(const char *line);
 	void fin() { delete this; }
@@ -575,6 +580,20 @@ public:
 	inline U16 compact_msgid() {
 		if (m_msgid_seed >= MSGID_COMPACT_LIMIT) { m_msgid_seed = 0; }
 		return ++m_msgid_seed;
+	}
+	/* 1: msgid1 > msgid2, -1: msgid1 < msgid2, 0: equal */
+	static inline U32 next_msgid(U32 msgid) {
+		return ((msgid++) % MSGID_LIMIT);
+	}
+	static inline int compare_msgid(U32 msgid1, U32 msgid2) {
+		if (msgid1 < msgid2) {
+			/* if diff of msgid2 and msgid1, then msgid must be turn around */
+			return ((msgid2 - msgid1) < (MSGID_LIMIT / 2)) ? -1 : 1;
+		}
+		else if (msgid1 > msgid2){
+			return ((msgid1 - msgid2) <= (MSGID_LIMIT / 2)) ? 1 : -1;
+		}
+		return 0;
 	}
 protected:
 	int init(const config &cfg,
@@ -723,7 +742,12 @@ public: /* attributes */
 	UTIME last_access() const		{ return m_last_access; }
 	UTIME last_ping() const			{ return m_last_ping; }
 	U32  latency() const			{ return m_latency; }
-	bool valid() const				{ return m_state != ss_invalid && m_state != ss_closed; }
+	/* sock status check. (not activated -> valid <-> closed)
+	 * newly session => activated
+	 * accepted or connect => valid
+	 * connection closed => closed */
+	bool activated() const			{ return m_state != ss_invalid; }
+	bool valid() const				{ return activated() && m_state != ss_closed; }
 	bool closed() const				{ return m_state == ss_closed; }
 	void setstate(ssstate s)		{ m_state = s; }
 	int state() const				{ return (int)m_state; }

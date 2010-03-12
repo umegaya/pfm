@@ -80,38 +80,31 @@ map<vmd::vmdmstr::account_info,vmd::vmdmstr::protocol::login_id>
 	vmd::vmdmstr::m_lm;
 
 /* methods */
-vmd::vmdmstr::querydata *
-vmd::vmdmstr::senddata(session &s, U32 msgid, char *p, int l)
+int vmd::vmdmstr::init_conhash(int max_node, int max_replica)
 {
-	querydata *q = (querydata *)sf(*this)->insert_query(msgid);
-	if (!q) {
-		log(ERROR, "vmdmstr:senddata(%u) fail\n", msgid);
-		ASSERT(false);
-		return NULL;
+	if (!(m_ch = nbr_conhash_init(NULL, max_node, max_replica))) {
+		return NBR_EMALLOC;
 	}
-	if (send(p, l) >= 0) {
-		q->sk = s.sk();
-		q->s = &s;
-		return q;
-	}
-	log(ERROR, "vmdmstr:send fail\n");
-	sf(*this)->remove_query(msgid);
-	return NULL;
+	return NBR_OK;
 }
 
+int vmd::vmdmstr::init_login_map(int max_user)
+{
+	if (!m_lm.init(max_user, max_user, opt_expandable | opt_threadsafe)) {
+		return NBR_EMALLOC;
+	}
+	return NBR_OK;
+}
 
 int vmd::vmdmstr::add_conhash(const char *addr)
 {
-	CHNODE n;
-	nbr_conhash_set_node(&n, addr, vnode_replicate_num);
-	return nbr_conhash_add_node(m_ch, &n);
+	nbr_conhash_set_node(&m_node, addr, vnode_replicate_num);
+	return nbr_conhash_add_node(m_ch, &m_node);
 }
 
 int vmd::vmdmstr::del_conhash(const char *addr)
 {
-	CHNODE n;
-	nbr_conhash_set_node(&n, addr, vnode_replicate_num);
-	return nbr_conhash_del_node(m_ch, &n);
+	return nbr_conhash_del_node(m_ch, &m_node);
 }
 
 const CHNODE *
@@ -120,12 +113,13 @@ vmd::vmdmstr::lookup_conhash(UUID &uuid)
 	return nbr_conhash_lookup(m_ch, (char *)&uuid, sizeof(UUID));
 }
 
-int vmd::vmdmstr::load_or_create_object(U32 msgid, UUID &uuid, loadpurpose lp)
+int vmd::vmdmstr::load_or_create_object(U32 msgid,
+		const char *acc, UUID &uuid, loadpurpose lp)
 {
 	bool retry_f = false;
 	const CHNODE *n;
 retry:
-	if (!(n = nbr_conhash_lookup(m_ch, (char *)&uuid, sizeof(UUID)))) {
+	if (!(n = lookup_conhash(uuid))) {
 		return NBR_ENOTFOUND;
 	}
 	vmdmstr *s = sf(*this)->pool().find(n->iden);
@@ -139,7 +133,7 @@ retry:
 		return NBR_EINVAL;
 	}
 	querydata *q;
-	if (s->send_new_object(*this, "", msgid, uuid, &q) >= 0) {
+	if (s->send_new_object(*this, acc, msgid, uuid, &q) >= 0) {
 		/* success. store purpose data */
 		q->m_data = lp;
 		return NBR_OK;
@@ -149,7 +143,7 @@ retry:
 
 int vmd::vmdmstr::recv_cmd_new_object(U32 msgid, const char *acc, UUID &uuid)
 {
-	int r = load_or_create_object(msgid, uuid, load_purpose_create);
+	int r = load_or_create_object(msgid, acc, uuid, load_purpose_create);
 	if (r < 0) {
 		return reply_new_object(*this, msgid, r, acc, uuid, "", 0);
 	}
@@ -160,21 +154,27 @@ int
 vmd::vmdmstr::recv_code_new_object(querydata &q, int r, const char *acc,
 		UUID &uuid, char *p, size_t l)
 {
+	char b[256];
+#if defined(_DEBUG)
+	log(INFO, "code_new_object: %d %s %s dlen=%u\n",
+			r, acc, uuid.to_s(b, sizeof(b)), l);
+#endif
 	switch(q.m_data) {
 	case load_purpose_create:
 		return q.sender()->reply_new_object(*this, q.msgid, r, acc, uuid, p, l);
 	case load_purpose_login:
 		if (r >= 0) {
 			account_info *pa = m_lm.find(acc);
-			ASSERT(pa->m_login == 0);
+			ASSERT(pa && pa->m_login == 0);
 			/* TODO : m_login is atomic int, so no need to use atomic instruction?
-			 * or need to set volatile? */
-			if (pa->m_login) {
+			 * or only need to set volatile? */
+			if (!pa || pa->m_login) {
 				q.sender()->reply_login(*this, q.msgid, NBR_EALREADY, uuid, "", 0);
 				break;
 			}
 			pa->m_login = 1;	/* login now */
 			pa->m_uuid = uuid;
+			log(INFO, "login>A:%s,UUID:%s\n", acc, uuid.to_s(b, sizeof(b)));
 		}
 		return q.sender()->reply_login(*this, q.msgid, r, uuid, p, l);
 	default:
@@ -188,8 +188,8 @@ int
 vmd::vmdmstr::recv_cmd_login(U32 msgid,
 		const char *acc, char *authdata, size_t len)
 {
-	/* maybe do something before do this step
-	 * authentication with authdata&len */
+	/* TODO: do something before do this step
+	 * authenticate acc with authdata & len */
 	account_info *pa = m_lm.create(acc);
 	if (pa) {
 		if (pa->m_login) {
@@ -198,9 +198,18 @@ vmd::vmdmstr::recv_cmd_login(U32 msgid,
 		}
 		else {
 			int r;
+			/* if uuid is invalid */
+			if (!protocol::is_valid_id(pa->m_uuid)) {
+				pa->m_uuid = protocol::new_id();
+#if defined(_DEBUG)
+				char b[256];
+				log(INFO, "create new_id : <%s> for <%s>\n",
+						pa->m_uuid.to_s(b, sizeof(b)), acc);
+#endif
+			}
 			/* not login now : load player object */
 			if ((r = load_or_create_object(
-				msgid, pa->m_uuid, load_purpose_login)) < 0) {
+				msgid, acc, pa->m_uuid, load_purpose_login)) < 0) {
 				reply_login(*this, msgid, r, pa->m_uuid, "", 0);
 			}
 		}
@@ -215,40 +224,39 @@ vmd::vmdmstr::recv_cmd_login(U32 msgid,
 /*-------------------------------------------------------------*/
 /* sfc::vmd::vmdservant                                        */
 /*-------------------------------------------------------------*/
-vmd::vmdsvnt::querydata *
-vmd::vmdsvnt::senddata(session &s, U32 msgid, char *p, int l)
-{
-	querydata *q = (querydata *)sf(*this)->insert_query(msgid);
-	if (!q) {
-		log(ERROR, "vmdsvnt:senddata(%u) fail\n", msgid);
-		ASSERT(false);
-		return NULL;
-	}
-	if (send(p, l) >= 0) {
-		q->sk = s.sk();
-		q->s = &s;
-		return q;
-	}        
-	log(ERROR, "vmdsnvt:send fail\n");
-	sf(*this)->remove_query(msgid);
-	return NULL;
-}
-
 int
 vmd::vmdsvnt::recv_cmd_new_object(U32 msgid, const char *acc, UUID &uuid)
 {
-	/* its a real object */
-	object *o = script::object_new(*this, NULL/* use main VM */, uuid, NULL);
-	if (!o) {
-		return reply_new_object(*this, msgid, NBR_EEXPIRE, acc, uuid, NULL, 0);
-	}
+#if defined(_DEBUG)
+	char b[256];
+	log(INFO, "svnt: new object: %u for <%s><%s>\n",
+		msgid, acc, uuid.to_s(b, sizeof(b)));
+#endif
 	char buffer[64 * 1024];
 	sr().pack_start(buffer, sizeof(buffer));
-	int r;
-	if ((r = script::pack_object(sr(), *o)) < 0) {
-		return reply_new_object(*this, msgid, r, acc, uuid, NULL, 0);
+	/* TODO: receive actual address of replicated object and use. */
+	sr().push_array_len(1);
+	sr().push_array_len(1);
+	sr().push_raw(addr().a(), addr().len());
+	TRACE("address : %s\n", (const char *)addr());
+	/* create local object (cause it is real object) */
+	sr().unpack_start(sr().p(), sr().len());
+	object *o = script::object_new(
+			*(script::CF *)f(), NULL/* use main VM */, uuid, &(sr()), true);
+	if (!o) {
+		return reply_new_object(
+				*this, msgid, NBR_EEXPIRE, acc, uuid, NULL, 0);
 	}
-	return reply_new_object(*this, msgid, NBR_OK, acc, uuid, sr().p(), sr().len());
+	/* restart pack */
+	sr().pack_start(buffer, sizeof(buffer));
+	int r;
+	/* pack with object value */
+	if ((r = script::pack_object(sr(), *o, true)) < 0) {
+		return reply_new_object(
+				*this, msgid, r, acc, uuid, NULL, 0);
+	}
+	return reply_new_object(
+			*this, msgid, NBR_OK, acc, uuid, sr().p(), sr().len());
 }
 
 int
@@ -257,7 +265,7 @@ vmd::vmdsvnt::recv_code_new_object(querydata &q, int r, const char *acc,
 {
 	/* lua script resume the point attempt to create pfm object */
 	sr().unpack_start(p, l);
-	script::resume_create(*(q.sender()), q.vm(), uuid, sr());
+	script::resume_create(*(q.sender()), cf(), q.vm(), uuid, sr());
 	return NBR_OK;
 }
 
@@ -266,15 +274,15 @@ vmd::vmdsvnt::recv_cmd_login(U32 msgid,
 		const char *acc, char *authdata, size_t len)
 {
 	/* just forward to master (with log) */
-	log(INFO, "login attempt (%s:%u)\n", acc, len);
-	return send_login(*this, msgid, acc, authdata, len);
+	log(INFO, "login_attempt>A:%s\n", acc);
+	return backend_conn()->send_login(*this, msgid, acc, authdata, len);
 }
 
 int
 vmd::vmdsvnt::recv_code_login(querydata &q, int r, UUID &uuid, char *p, size_t l)
 {
 	char buf[256];
-	log(INFO, "login result (%s:%d)\n", uuid.to_s(buf,sizeof(buf)), r);
+	log(INFO, "login>R:%d,UUID:%s\n", r, uuid.to_s(buf,sizeof(buf)));
 	if (r < 0) {
 		return q.sender()->reply_login(*this, q.msgid, r, uuid, "", 0);
 	}
@@ -283,10 +291,15 @@ vmd::vmdsvnt::recv_code_login(querydata &q, int r, UUID &uuid, char *p, size_t l
 	}
 	else {
 		sr().unpack_start(p, l);
-		object *o = script::object_new(*this, NULL/* use main VM */, uuid, &(sr()));
+		/* when login, create local object */
+		object *o = script::object_new(cf(), NULL/*main VM*/, uuid, &(sr()), true);
 		if (o) {
 			m_session_uuid = uuid;
-			return q.sender()->reply_login(*this, q.msgid, NBR_OK, uuid, p, l);
+			proc_id pid = "init";
+			/* pid, "", 0 means no argument */
+			r = script::call_proc(*this, cf(), q.msgid, *o, pid, "", 0,
+					rpct_global, vmprotocol::rpcopt_flag_not_set);
+			return q.sender()->reply_login(*this, q.msgid, r, uuid, "", 0);
 		}
 		return q.sender()->reply_login(*this, q.msgid, NBR_EEXPIRE, uuid, "", 0);
 	}
@@ -297,42 +310,23 @@ vmd::vmdsvnt::recv_code_login(querydata &q, int r, UUID &uuid, char *p, size_t l
 /* sfc::vmd::vmdclient                                         */
 /*-------------------------------------------------------------*/
 int
-vmd::vmdclnt::on_open(const config &cfg)
-{
-	return send_login(*this, 0, "umegaya", "iyatomi", sizeof("iyatomi"));
-}
-
-vmd::vmdclnt::querydata *
-vmd::vmdclnt::senddata(session &s, U32 msgid, char *p, int l)
-{
-	querydata *q = (querydata *)sf(*this)->insert_query(msgid);
-	if (!q) { 
-		log(ERROR, "vmdclnt:senddata(%u) fail\n", msgid);
-		ASSERT(false); 
-		return NULL;
-	}
-	if (send(p, l) >= 0) {
-		q->sk = s.sk();
-		q->s = &s;
-		return q;
-	}
-	log(ERROR, "vmdclnt:send fail\n");
-	sf(*this)->remove_query(msgid);
-	return NULL;
-}
-
-int
 vmd::vmdclnt::recv_code_login(querydata &q, int r, UUID &uuid, char *p, size_t l)
 {
 	if (r < 0) {
 		log(ERROR, "login fail: %d\n", r);
 		return r;
 	}
-	sr().unpack_start(p, l);
-	object *o = script::object_new(*this, NULL/*use main VM*/, uuid, &(sr()));
+	ASSERT(l == 0);	/* client does not need any additional object data */
+	/* create remote object */
+	object *o = script::object_new(cf(), NULL/*use main VM*/, uuid, NULL, false);
 	if (o) {
+		ASSERT(!o->connection());
+		/* client always use backend connection */
+		o->set_connection(backend_conn());
 		proc_id pid = "main";
-		script::call_proc(*this, q.msgid, *o, pid, p, l, rpct_rpc);
+		/* pid, "", 0 means no argument */
+		script::call_proc(*this, cf(), q.msgid, *o, pid, "", 0,
+				rpct_global, vmprotocol::rpcopt_flag_not_set);
 		return NBR_OK;
 	}
 	ASSERT(false);
@@ -380,12 +374,12 @@ vmd::create_config(config *cl[], int sz)
 			10000, 10000, 10000
 			);
 	cl[1] = new vmdconfig (
-			"mstr",
+			"svnt",
 			"localhost:9000",
 			10,
 			60, opt_expandable,
 			64 * 1024, 64 * 1024,
-			0, 0,
+			1000 * 1000 * 1000, 3 * 1000 * 1000,
 			10000,	sizeof(vmdsvnt::querydata),
 			"TCP", "eth0",
 			1 * 10 * 1000/* 10msec task span */,
@@ -397,13 +391,15 @@ vmd::create_config(config *cl[], int sz)
 			"lua", "", "tc", "",
 			10000, 10000, 10000
 			);
-	cl[2] = new vmdconfig ("mstr",
+	cl[2] = new vmdconfig (
+			"clnt",
 			"",
 			10,
 			60, opt_not_set,
 			64 * 1024, 64 * 1024,
-			0, 0,
-			10000,	sizeof(vmdclnt::querydata),
+			1000 * 1000 * 1000, 3 * 1000 * 1000,
+			10000,
+			sizeof(vmdclnt::factory::connector::querydata),
 			"TCP", "eth0",
 			1 * 10 * 1000/* 10msec task span */,
 			1/* after 1us, again try to connect */,
@@ -422,22 +418,33 @@ vmd::boot(int argc, char *argv[])
 {
 	int r;
 	vmdconfig *vc;
-	vmdmstr::factory *mstr =
-				find_factory<vmdmstr::factory>("mstr");
+	vmdmstr::factory *mstr = find_factory<vmdmstr::factory>("mstr");
 	if (mstr) {
 		if ((vc = find_config<vmdconfig>("mstr"))) {
-			return vmdmstr::init_vm(
-				vc->m_max_object, vc->m_rpc_entry, vc->m_rpc_ongoing);
+			if ((r = vmdmstr::init_vm(
+				vc->m_max_object, vc->m_rpc_entry, vc->m_rpc_ongoing)) < 0) {
+				return r;
+			}
+			if ((r = vmdmstr::init_conhash(1000, 50)) < 0) {
+				return r;
+			}
+			if ((r = vmdmstr::init_login_map(10000)) < 0) {
+				return r;
+			}
 		}
-		return NBR_ENOTFOUND;
+		else {
+			return NBR_ENOTFOUND;
+		}
 	}
-	vmdsvnt::factory *svnt =
-			find_factory<vmdsvnt::factory>("svnt");
+	vmdsvnt::factory *svnt = find_factory<vmdsvnt::factory>("svnt");
 	if (svnt) {
 		if ((vc = find_config<vmdconfig>("svnt"))) {
 			if ((r = vmdsvnt::init_vm(
 				vc->m_max_object, vc->m_rpc_entry, vc->m_rpc_ongoing)) < 0) {
 				return r;
+			}
+			if (!vmdsvnt::load("./scp/svt.lua")) {
+				return NBR_ESYSCALL;
 			}
 			vmdsvnt::factory::connector *c =
 					svnt->backend_connect("localhost:8000");
@@ -445,7 +452,9 @@ vmd::boot(int argc, char *argv[])
 				return NBR_EEXPIRE;
 			}
 		}
-		return NBR_EINVAL;
+		else {
+			return NBR_EINVAL;
+		}
 	}
 	vmdclnt::factory *clnt = find_factory<vmdclnt::factory>("clnt");
 	if (clnt) {
@@ -454,11 +463,17 @@ vmd::boot(int argc, char *argv[])
 				vc->m_max_object, vc->m_rpc_entry, vc->m_rpc_ongoing)) < 0) {
 				return r;
 			}
+			if (!vmdclnt::load("./scp/clt.lua")) {
+				return NBR_ESYSCALL;
+			}
 			vmdclnt::factory::connector *c =
 					clnt->backend_connect("localhost:9000");
 			if (!c) {
 				return NBR_EEXPIRE;
 			}
+			/* send login (you can send immediately :D)*/
+			return c->send_login(*(c->chain()->m_s), 0,
+					"umegaya", "iyatomi", sizeof("iyatomi"));
 		}
 		return NBR_EINVAL;
 	}
