@@ -178,7 +178,6 @@ int vmprotocol_impl<S,IDG,SNDR>::send_new_object(SNDR &s,
 	U32 msgid = _this().f()->msgid();
 	PUSH_32(msgid);
 	PUSH_STR(acc);
-	ASSERT(*acc);
 	PUSH_8A((char *)&uuid, sizeof(UUID));
 	/* same as send_rpc's cast, it causes no effect */
 	Q *q = (Q *)_this().senddata(s, msgid, buf, PUSH_LEN());

@@ -21,12 +21,11 @@
 /* sfc::vm::lang::lua_convtype								   */
 /*-------------------------------------------------------------*/
 /* mp - lua : implemented in lua.cpp */
-inline lua_Integer
+inline lua_Number
 lua_convtype::to_i(mp::data &d)
 {
-	ASSERT(d.type == msgpack::type::POSITIVE_INTEGER ||
-			d.type == msgpack::type::NEGATIVE_INTEGER);
-	return d.via.i64;
+	ASSERT(d.type == msgpack::type::DOUBLE);
+	return d.via.dec;
 }
 
 inline lua_Boolean
@@ -106,6 +105,7 @@ lua_convtype::type(mp::data &d)
 		return LUA_TBOOLEAN;
 	case msgpack::type::POSITIVE_INTEGER:
 	case msgpack::type::NEGATIVE_INTEGER:
+	case msgpack::type::DOUBLE:
 		return LUA_TNUMBER;
 	case msgpack::type::MAP:
 		return LUA_TTABLE;
@@ -113,7 +113,7 @@ lua_convtype::type(mp::data &d)
 		return LUA_TSTRING;
 	case msgpack::type::ARRAY:
 		ASSERT(d.via.array.size > 0);
-		return to_i(elem(d, 0));
+		return elem(d, 0).via.i64;
 	default:
 		ASSERT(false);
 		return LUA_TNIL;
@@ -344,7 +344,7 @@ int lua<SR,OF>::pack_lua_stack(SR &sr, VM lua, int index)
 		sr.pushnil();
 		break;
 	case LUA_TNUMBER:
-		sr << lua_tointeger(lua, index);
+		sr << lua_tonumber(lua, index);
 		break;
 	case LUA_TBOOLEAN:
 		sr << (lua_toboolean(lua, index) ? true : false);

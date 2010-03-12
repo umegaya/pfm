@@ -235,33 +235,53 @@ public:
 	inline int operator << (float f) {
 		CHECK_LENGTH(sizeof(float) + 1);
 		push(FLOAT); 
-		*((float *)&(m_p[m_c])) = f;
-		m_c += sizeof(float);
+		char *p_f = (char *)(&f);
+		if (sizeof(float) == sizeof(U64)) {
+			push(*((U64 *)p_f));
+		}
+		else if (sizeof(float) == sizeof(U32)) {
+			push(*((U32 *)p_f));
+		}
 		return m_c;
 	}
 	inline int operator >> (float &f) {
 		CHECK_LENGTH(sizeof(float) + 1);
 		U8 v; pop(v);
 		if (v == FLOAT) {
-			f = *((float *)&(m_p[m_c]));
-			m_c += sizeof(float);
+			char *p_f = (char *)&f;
+			if (sizeof(float) == sizeof(U64)) {
+				pop(*((U64 *)p_f));
+			}
+			else if (sizeof(float) == sizeof(U32)) {
+				pop(*((U32 *)p_f));
+			}
 			return m_c;
 		}
 		return NBR_EINVAL;
 	}
 	inline int operator << (double f) {
 		CHECK_LENGTH(sizeof(double) + 1);
-		push(FLOAT);
-                *((double *)&(m_p[m_c])) = f;
-		m_c += sizeof(double);
+		push(DOUBLE);
+		char *p_f = (char *)(&f);
+		if (sizeof(double) == sizeof(U64)) {
+			push(*((U64 *)p_f));
+		}
+		else if (sizeof(double) == sizeof(U32)) {
+			push(*((U32 *)p_f));
+		}
 		return m_c;
 	}
 	inline int operator >> (double &f) {
 		CHECK_LENGTH(sizeof(double) + 1);
 		U8 v; pop(v);
 		if (v == DOUBLE) {
-			f = *((double *)&(m_p[m_c]));
-			m_c += sizeof(double);
+			char *p_f = (char *)&f;
+			if (sizeof(double) == sizeof(U64)) {
+				pop(*((U64 *)p_f));
+			}
+			else if (sizeof(double) == sizeof(U32)) {
+				pop(*((U32 *)p_f));
+			}
 			return m_c;
 		}
 		return NBR_EINVAL;

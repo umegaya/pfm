@@ -48,7 +48,7 @@ typedef bool lua_Boolean;
 class lua_convtype {
 public:
 	/* mp - lua : implemented in lua.inc */
-	static inline lua_Integer      	to_i(mp::data &d);
+	static inline lua_Number      	to_i(mp::data &d);
 	static inline lua_Boolean      	to_b(mp::data &d);
 	static inline const char	*to_s(mp::data &d);
 	static inline const char	*to_p(mp::data &d);
