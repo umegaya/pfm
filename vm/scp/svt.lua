@@ -1,4 +1,4 @@
-function init(player)
+function load_player(player)
 function player:chat(msg)
 	print(self.name .. ":" .. msg);
 	return 666
@@ -27,4 +27,15 @@ function player:calc_table_element_sum(tbl)
 	end
 	return sum
 end
+end
+
+function init_object(object,objtype)
+	if not objtype then
+		-- player
+		print("init_object : type = PLAYER")
+		object.typename = "PLAYER"
+		return
+	end
+	print("init_object : type = " .. objtype)
+	object.typename = objtype
 end

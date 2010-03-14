@@ -77,12 +77,15 @@ int vmprotocol_impl<S,IDG,SNDR>::on_recv(char *p, int l)
 		/* execute fiber */
 		_this().recv_cmd_rpc(msgid, uuid, pid, POP_BUF(), POP_REMAIN(), (rpctype)rt);
 		break;
-	case vmprotocol::vmcmd_new_object:      /* s->m, m->s */
+	case vmprotocol::vmcmd_new_object: {     /* s->m, m->s */
 		POP_STR(account, sizeof(account));
 		len = sizeof(UUID);
 		POP_8A(&(uuid), len);
-		_this().recv_cmd_new_object(msgid, account, uuid);
-		break;
+		char addr[l]; int adrl = l;
+		POP_8A(addr, adrl);
+		_this().recv_cmd_new_object(msgid, account, uuid, addr, adrl,
+				POP_BUF(), POP_REMAIN());
+		} break;
 	case vmprotocol::vmcmd_login:
 		POP_STR(account, sizeof(account));
 		_this().recv_cmd_login(msgid, account, POP_BUF(), POP_REMAIN());
@@ -167,7 +170,8 @@ int vmprotocol_impl<S,IDG,SNDR>::reply_rpc(
 template <class S,class IDG,class SNDR>
 template <class Q>
 int vmprotocol_impl<S,IDG,SNDR>::send_new_object(SNDR &s,
-		const char *acc, U32 rmsgid, const UUID &uuid, 
+		const char *acc, U32 rmsgid, const UUID &uuid,
+		char *addr, size_t adrl, char *p, size_t l,
 		Q **pq)
 {
 	size_t sz = 
@@ -179,6 +183,8 @@ int vmprotocol_impl<S,IDG,SNDR>::send_new_object(SNDR &s,
 	PUSH_32(msgid);
 	PUSH_STR(acc);
 	PUSH_8A((char *)&uuid, sizeof(UUID));
+	PUSH_8A(addr, adrl);
+	PUSH_MEM(p, l);
 	/* same as send_rpc's cast, it causes no effect */
 	Q *q = (Q *)_this().senddata(s, msgid, buf, PUSH_LEN());
 	if (q) {

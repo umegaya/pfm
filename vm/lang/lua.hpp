@@ -152,8 +152,8 @@ public: /* constant */
 	};
 protected:	/* static variable */
 	static array<rpc>	m_rpcs;
-	static map<fiber,U32>	m_fibers;
-	static VM 		m_vm;
+	static array<fiber>	m_fibers;
+	static VM 			m_vm;
 	static RWLOCK		m_lock;
 public:
 	lua() {}

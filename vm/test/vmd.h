@@ -49,6 +49,13 @@ public:
 			return cfg;
 		}
 	};
+	/* constant */
+	typedef enum {
+		load_purpose_invalid,
+		load_purpose_login,
+		load_purpose_create,
+	} loadpurpose;
+	/* sessions */
 	class vmdmstr : public vmnode<vmdmstr> {
 	public:
 		typedef vmnode<vmdmstr> super;
@@ -63,11 +70,6 @@ public:
 			U8		m_login, padd[3];
 			account_info() { memset(this, 0, sizeof(*this)); }
 		};
-		typedef enum {
-			load_purpose_invalid,
-			load_purpose_login,
-			load_purpose_create,
-		} loadpurpose;
 	protected:
 		static CONHASH m_ch;
 		static map<account_info, protocol::login_id> m_lm;
@@ -89,9 +91,10 @@ public:
 			super::fin();
 		}
 		int load_or_create_object(U32 msgid, const char *acc,
-				UUID &uuid, loadpurpose lp);
+				UUID &uuid, char *p, size_t l, loadpurpose lp);
 	public:/* receiver */
-		int recv_cmd_new_object(U32 msgid, const char *acc, UUID &uuid);
+		int recv_cmd_new_object(U32 msgid, const char *acc,
+				UUID &uuid, char *addr, size_t adrl, char *p, size_t l);
 		int recv_code_new_object(querydata &q, int r, const char *acc,
 				UUID &uuid, char *p, size_t l);
 		int recv_cmd_login(U32 msgid, const char *acc, char *adata, size_t len);
@@ -120,7 +123,8 @@ public:
 		const UUID &verify_uuid(const UUID &uuid) {
 			return GET_32(&(m_session_uuid)) ? m_session_uuid : uuid; }
 	public:/* vmdsvnt */
-		int recv_cmd_new_object(U32 msgid, const char *acc, UUID &uuid);
+		int recv_cmd_new_object(U32 msgid, const char *acc, UUID &uuid,
+				char *addr, size_t adrl, char *p, size_t l);
 		int recv_code_new_object(querydata &q, int r, const char *acc,
 				UUID &uuid, char *p, size_t l);
 		int recv_cmd_login(U32 msgid, const char *acc, char *adata, size_t alen);

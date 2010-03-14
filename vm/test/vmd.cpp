@@ -114,7 +114,7 @@ vmd::vmdmstr::lookup_conhash(UUID &uuid)
 }
 
 int vmd::vmdmstr::load_or_create_object(U32 msgid,
-		const char *acc, UUID &uuid, loadpurpose lp)
+		const char *acc, UUID &uuid, char *p, size_t l, loadpurpose lp)
 {
 	bool retry_f = false;
 	const CHNODE *n;
@@ -132,8 +132,16 @@ retry:
 		ASSERT(false);
 		return NBR_EINVAL;
 	}
+	/* pack object address (temporary master address) */
+	char buffer[64 * 1024];
+	sr().pack_start(buffer, sizeof(buffer));
+	sr().push_array_len(1);
+	sr().push_array_len(1);
+	sr().push_string(f()->ifaddr().a(), f()->ifaddr().len());
+	/* send object create */
 	querydata *q;
-	if (s->send_new_object(*this, acc, msgid, uuid, &q) >= 0) {
+	if (s->send_new_object(*this, acc, msgid, uuid,
+			sr().p(), sr().len(), p, l, &q) >= 0) {
 		/* success. store purpose data */
 		q->m_data = lp;
 		return NBR_OK;
@@ -141,9 +149,10 @@ retry:
 	return NBR_EEXPIRE;
 }
 
-int vmd::vmdmstr::recv_cmd_new_object(U32 msgid, const char *acc, UUID &uuid)
+int vmd::vmdmstr::recv_cmd_new_object(U32 msgid, const char *acc,
+		UUID &uuid, char *addr, size_t adrl, char *p, size_t l)
 {
-	int r = load_or_create_object(msgid, acc, uuid, load_purpose_create);
+	int r = load_or_create_object(msgid, acc, uuid, p, l, load_purpose_create);
 	if (r < 0) {
 		return reply_new_object(*this, msgid, r, acc, uuid, "", 0);
 	}
@@ -209,7 +218,7 @@ vmd::vmdmstr::recv_cmd_login(U32 msgid,
 			}
 			/* not login now : load player object */
 			if ((r = load_or_create_object(
-				msgid, acc, pa->m_uuid, load_purpose_login)) < 0) {
+				msgid, acc, pa->m_uuid, "", 0, load_purpose_login)) < 0) {
 				reply_login(*this, msgid, r, pa->m_uuid, "", 0);
 			}
 		}
@@ -225,31 +234,34 @@ vmd::vmdmstr::recv_cmd_login(U32 msgid,
 /* sfc::vmd::vmdservant                                        */
 /*-------------------------------------------------------------*/
 int
-vmd::vmdsvnt::recv_cmd_new_object(U32 msgid, const char *acc, UUID &uuid)
+vmd::vmdsvnt::recv_cmd_new_object(U32 msgid, const char *acc,
+		UUID &uuid, char *addr, size_t adrl, char *p, size_t l)
 {
+	int r;
 #if defined(_DEBUG)
 	char b[256];
 	log(INFO, "svnt: new object: %u for <%s><%s>\n",
 		msgid, acc, uuid.to_s(b, sizeof(b)));
 #endif
-	char buffer[64 * 1024];
-	sr().pack_start(buffer, sizeof(buffer));
-	/* TODO: receive actual address of replicated object and use. */
-	sr().push_array_len(1);
-	sr().push_array_len(1);
-	sr().push_raw(addr().a(), addr().len());
-	TRACE("address : %s\n", (const char *)addr());
-	/* create local object (cause it is real object) */
-	sr().unpack_start(sr().p(), sr().len());
+	sr().unpack_start(addr, adrl);
 	object *o = script::object_new(
 			*(script::CF *)f(), NULL/* use main VM */, uuid, &(sr()), true);
 	if (!o) {
 		return reply_new_object(
 				*this, msgid, NBR_EEXPIRE, acc, uuid, NULL, 0);
 	}
+	/* if really newly created, then call initializer with parameter */
+	if (o->create_new()) {
+		proc_id pid = "init_object";
+		if ((r = script::call_proc(*this, cf(), msgid, *o, pid, p, l,
+				rpct_global, vmprotocol::rpcopt_flag_not_set)) < 0) {
+			return reply_new_object(
+					*this, msgid, r, acc, uuid, NULL, 0);
+		}
+	}
 	/* restart pack */
+	char buffer[64 * 1024];
 	sr().pack_start(buffer, sizeof(buffer));
-	int r;
 	/* pack with object value */
 	if ((r = script::pack_object(sr(), *o, true)) < 0) {
 		return reply_new_object(
@@ -295,7 +307,7 @@ vmd::vmdsvnt::recv_code_login(querydata &q, int r, UUID &uuid, char *p, size_t l
 		object *o = script::object_new(cf(), NULL/*main VM*/, uuid, &(sr()), true);
 		if (o) {
 			m_session_uuid = uuid;
-			proc_id pid = "init";
+			proc_id pid = "load_player";
 			/* pid, "", 0 means no argument */
 			r = script::call_proc(*this, cf(), q.msgid, *o, pid, "", 0,
 					rpct_global, vmprotocol::rpcopt_flag_not_set);

@@ -53,7 +53,7 @@ function main(player)
 	assert(retval == 1384)
 
 --	real test: pfm.new
---	player.item = pfm.new("item")
+--	player.item = pfm.new("ITEM")
 --	assert(not player.item.kind == "ITEM")
 	
 end

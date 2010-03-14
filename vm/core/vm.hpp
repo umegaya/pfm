@@ -143,7 +143,8 @@ public:	/* receiver */
 		char *p, int l, rpctype rc) {__PE(); }
 	template <class Q> int recv_code_rpc(Q &q, char *p, size_t l, rpctype rc)
 		{__PE(); }
-	int recv_cmd_new_object(U32 msgid, const char *acc, UUID &uuid) {__PE();}
+	int recv_cmd_new_object(U32 msgid, const char *acc,
+		UUID &uuid, char *addr, size_t adrl, char *p, size_t l) {__PE();}
 	template <class Q> int recv_code_new_object(Q &q, int r, const char *acc, 
 		UUID &uuid, char *p, size_t l) {__PE();}
 	int recv_cmd_login(U32 msgid, const char *acc, char *p, size_t l) {__PE();}
@@ -154,7 +155,8 @@ public: /* sender */
 			char *a, size_t al, rpctype rt, Q **pq);
 	int reply_rpc(SNDR &s, U32 msgid, char *p, size_t l, rpctype rt);
 	template <class Q> int send_new_object(SNDR &s, const char *acc, 
-		U32 rmsgid, const UUID &uuid, Q **pq);
+		U32 rmsgid, const UUID &uuid,
+		char *addr, size_t adrl, char *p, size_t l, Q **pq);
 	int reply_new_object(SNDR &s, U32 msgid, int r,
 			const char *acc, UUID &uuid, char *p, size_t l);
 	int send_login(SNDR &s, U32 msgid, const char *acc, char *p, size_t l);
@@ -202,6 +204,8 @@ public:
 			if (on) { m_flag |= f; } else { m_flag &= ~(f); } }
 		bool local() const { return m_flag & object_flag_local; }
 		bool remote() const { return !local(); }
+		/* now no save, so every time newly create */
+		bool create_new() const { return true; }
 	};
 	typedef object_impl<IDG> object;
 protected:

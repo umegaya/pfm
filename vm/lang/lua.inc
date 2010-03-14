@@ -127,7 +127,7 @@ lua_convtype::type(mp::data &d)
 template <class SR, class OF> 
 array<typename lua<SR,OF>::rpc> 	lua<SR,OF>::m_rpcs;
 template <class SR, class OF> 
-map<typename lua<SR,OF>::fiber,U32> 	lua<SR,OF>::m_fibers;
+array<typename lua<SR,OF>::fiber> 	lua<SR,OF>::m_fibers;
 template <class SR, class OF> 
 lua_State				*lua<SR,OF>::m_vm = NULL;
 template <class SR, class OF>
@@ -139,8 +139,7 @@ int lua<SR,OF>::init(int max_rpc_entry, int max_rpc_ongoing)
 	if (!m_rpcs.init(max_rpc_entry, -1, opt_threadsafe | opt_expandable)) {
 		return NBR_EMALLOC;
 	}
-	if (!m_fibers.init(max_rpc_ongoing, max_rpc_ongoing / 10, -1, 
-			opt_threadsafe | opt_expandable)) {
+	if (!m_fibers.init(max_rpc_ongoing, -1, opt_threadsafe | opt_expandable)) {
 		return NBR_EMALLOC;
 	}
 	if (!(m_vm = lua_newstate(allocator, NULL))) {
@@ -301,15 +300,14 @@ lua<SR,OF>::rpc_new(VM lua, object *o, const char *name)
 template <class SR, class OF>
 typename lua<SR,OF>::fiber *lua<SR,OF>::fiber_new(S *c, U32 msgid, U32 opt)
 {
-	ASSERT(m_fibers.find(msgid) == NULL);
-	fiber *fb = m_fibers.create(msgid);
+	fiber *fb = m_fibers.create();
 	if (!fb) { ASSERT(false); return NULL; }
 	lock lk(m_lock, true);
 	if (fb->init_from_vm(m_vm, c, msgid, opt)) {
 		return fb;
 	}
 	else {
-		m_fibers.erase(msgid);
+		m_fibers.destroy(fb);
 		return NULL;
 	}
 }
@@ -567,7 +565,7 @@ template <class SR, class OF>
 int 	lua<SR,OF>::dispatch(S &c, VM vm, int n_args, bool from_resume, rpctype rt)
 {
 	int top = lua_gettop(vm);
-	int stksz = (from_resume ? (top - n_args) : (top - n_args));
+	int stksz = (from_resume ? (top - n_args + 1) : (top - n_args));
 	TRACE("stksz = %u, top,nargs=%u,%u(f=%s)\n", stksz, top, n_args, 
 			from_resume ? "resume" : "first");
 	int r = lua_resume(vm, n_args);
@@ -583,14 +581,14 @@ int 	lua<SR,OF>::dispatch(S &c, VM vm, int n_args, bool from_resume, rpctype rt)
 				/* send only remote error message to caller */
 				reply_result(c, vm, lua_gettop(vm) - 1, vmprotocol::rpct_error);
 			}
-			m_fibers.erase(fb->rmsgid());
+			m_fibers.destroy(fb);
 			return NBR_ESYSCALL;
 		}
 		else {
 			/* sucessfully finished */
 			r = fb->need_reply() ? reply_result(c, vm, stksz, rt) : NBR_OK;
 			/* whatever result is, free fiber for this function call */
-			m_fibers.erase(fb->rmsgid());
+			m_fibers.destroy(fb);
 		}
 		return r;
 	}
@@ -738,7 +736,7 @@ int lua<SR,OF>::call_proc(S &c, CF &cf, U32 rmsgid, object &o, proc_id &p,
 		}
 		r = reply_result(c, *fb, 1, rt);	/* return value only (except function)
 							value, proc_id, uuid (when function)*/
-		m_fibers.erase(rmsgid);
+		m_fibers.destroy(fb);
 		return r;
 	case vmprotocol::rpct_setter:
 		TRACE("setter called\n");
@@ -752,7 +750,7 @@ int lua<SR,OF>::call_proc(S &c, CF &cf, U32 rmsgid, object &o, proc_id &p,
 		set_object_value(*fb, o, to_s(d), lua_gettop(*fb)); /* put to object table. 
 											but above object left on stack */
 		r = reply_result(c, *fb, 1, rt);/* object returns */
-		m_fibers.erase(rmsgid);
+		m_fibers.destroy(fb);
 		return r;
 	case vmprotocol::rpct_method:
 		push_object(*fb, &o);	/* push object */
@@ -821,12 +819,12 @@ int lua<SR,OF>::create(VM lua)
 		lua_pushstring(lua, "invalid fiber : connection invalid");
 		lua_error(lua);
 	}
-	typename conn::querydata *q;
-	if (c->backend_conn()->send_new_object(*c, "", 0, OF::new_id(), &q) < 0) {
-		lua_pushstring(lua, "send object creation fail");
-		lua_error(lua);
-	}
-	q->m_vm = lua;
+//	typename conn::querydata *q;
+//	if (c->backend_conn()->send_new_object(*c, "", 0, OF::new_id(), &q) < 0) {
+//		lua_pushstring(lua, "send object creation fail");
+//		lua_error(lua);
+//	}
+//	q->m_vm = lua;
 	return lua_yield(lua, 1);
 }
 
@@ -867,7 +865,6 @@ int lua<SR,OF>::index(VM lua)
 		}
 		/* call rpc object:_getter_(k)
 		function object._getter_(k) return self[k] end */
-//		proc_id id = "";
 		typename conn::querydata *q;
 		if (c->send_rpc(*sender, o->uuid(), (proc_id &)*k, sr.p(), sr.len(),
 			vmprotocol::rpct_getter, &q) < 0) {
