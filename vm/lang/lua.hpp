@@ -143,6 +143,19 @@ public:	/* typedefs */
 		bool need_reply() const { return m_opt&vmprotocol::rpcopt_flag_invoked; }
 		bool no_yield() const { return m_opt&vmprotocol::rpcopt_flag_notification; }
 	};
+	class type_id {
+	protected:
+		vmprotocol::proc_id m_type;
+		volatile U32 m_has_table;
+	public:
+		type_id() : m_has_table(0) { set_type(""); }
+		void set_type(const char *p) {
+			strncpy(m_type, p, sizeof(vmprotocol::proc_id));
+		}
+		bool has_table() const { return m_has_table != 0; }
+		void set_has_table() { m_has_table = 1; }
+		operator const char *() { return (const char *)m_type; }
+	};
 	struct write_func_chunk {
 		SR *sr;
 		int n_write;
@@ -160,6 +173,7 @@ public: /* constant */
 		lua_rpc_reply = 0x2,	/* reply is needed? */
 	};
 protected:	/* static variable */
+	static map<type_id, char*> m_types;
 	static array<rpc>	m_rpcs;
 	static array<fiber>	m_fibers;
 	static VM 			m_vm;
@@ -183,6 +197,8 @@ protected: 	/* lua methods */
 	static int 	call(VM);
 	static int 	gc(VM);
 	static int	panic(VM);
+	static int 	set_object_type(VM);
+	static int 	get_object_type(VM);
 	static void	*allocator(void *ud, void *ptr, size_t os, size_t ns);
 protected: 	/* helpers */
 	static void push_object(VM, object *);
@@ -193,12 +209,16 @@ protected: 	/* helpers */
 	static int 	set_object_value(VM vm, const object &o, const char *key, int from);
 	static int 	pack_object_value(VM vm, const object &o, SR &sr);
 	static int 	unpack_object_value(CF &cf, VM vm, const object &o, data &sr);
+	static int 	get_object_method(VM vm, const object &o, const char *key);
+	static int 	set_object_method(VM vm, const object &o, const char *key, int from);
 
 	static int	pack_lua_stack(SR &, VM, int);
 	static bool	unpack_lua_stack(CF &, SR &, VM);
 	static int 	put_to_lua_stack(CF &, VM, data &);
 
 	static int 	unpack_object(CF &, VM, data &, object &);
+
+	static const char *add_type(const char *typestr);
 
 	static int	dispatch(S &, VM, int, bool, rpctype);
 	static int	reply_result(S &, VM, int, rpctype);

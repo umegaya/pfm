@@ -55,7 +55,7 @@ function main(player)
 
 --	real test: pfm.new
 	player.item = player:new_item(100)
-	assert(player.item.typename == "ITEM")
+	assert(pfm.get_type(player.item) == "ITEM")
 	assert(player.item.attack_point == 1000)
 end
 

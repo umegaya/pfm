@@ -212,22 +212,26 @@ public:
 		U32		m_flag;		/* object flag */
 		conn	*m_conn;	/* if != NULL, connection to this object
 					otherwise this object is local */
+		const char *m_type;	/* object type */
 	public:
 		enum {
 			object_flag_local = 0x00000001,
 		};
 	public:
-		object_impl() : m_uuid(), m_flag(0), m_conn(NULL) {}
+		object_impl() : m_uuid(), m_flag(0), m_conn(NULL),
+			m_type("_generic_") {}
 		~object_impl() {}
 		void set_uuid(const UUID &uuid) { m_uuid = uuid; }
 		const UUID &uuid() const { return m_uuid; }
 		conn *connection() { return m_conn; }
 		const conn *connection() const { return m_conn; }
 		void set_connection(conn *c) { m_conn = c; }
+		void set_type(const char *type) { m_type = type; }
 		void set_flag(U32 f, bool on) {
 			if (on) { m_flag |= f; } else { m_flag &= ~(f); } }
 		bool local() const { return m_flag & object_flag_local; }
 		bool remote() const { return !local(); }
+		const char *type() const { return m_type; }
 		/* now no save, so every time newly create */
 		bool create_new() const { return true; }
 	};

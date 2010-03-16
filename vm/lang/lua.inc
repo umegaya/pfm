@@ -129,6 +129,8 @@ array<typename lua<SR,OF>::rpc> 	lua<SR,OF>::m_rpcs;
 template <class SR, class OF> 
 array<typename lua<SR,OF>::fiber> 	lua<SR,OF>::m_fibers;
 template <class SR, class OF> 
+map<typename lua<SR,OF>::type_id, char *> 	lua<SR,OF>::m_types;
+template <class SR, class OF> 
 lua_State				*lua<SR,OF>::m_vm = NULL;
 template <class SR, class OF>
 RWLOCK					lua<SR,OF>::m_lock = NULL;
@@ -140,6 +142,9 @@ int lua<SR,OF>::init(int max_rpc_entry, int max_rpc_ongoing)
 		return NBR_EMALLOC;
 	}
 	if (!m_fibers.init(max_rpc_ongoing, -1, opt_threadsafe | opt_expandable)) {
+		return NBR_EMALLOC;
+	}
+	if (!m_types.init(256, 256, -1, opt_threadsafe | opt_expandable)) {
 		return NBR_EMALLOC;
 	}
 	if (!(m_vm = lua_newstate(allocator, NULL))) {
@@ -157,11 +162,17 @@ int lua<SR,OF>::init(int max_rpc_entry, int max_rpc_ongoing)
 	lua_atpanic(m_vm, panic);
 	/* create global table object (that represent library) */
 	lua_newtable(m_vm);
+	lua_setfield(m_vm, LUA_REGISTRYINDEX, "_generic_");
+	lua_newtable(m_vm);
 	lua_setglobal(m_vm, "pfm");
 	/* add API */
 	lua_getglobal(m_vm, "pfm");
 	lua_pushcfunction(m_vm, create);
 	lua_setfield(m_vm, -2, "new");
+	lua_pushcfunction(m_vm, set_object_type);
+	lua_setfield(m_vm, -2, "set_type");
+	lua_pushcfunction(m_vm, get_object_type);
+	lua_setfield(m_vm, -2, "get_type");
 	return NBR_OK;
 }
 
@@ -222,14 +233,48 @@ void	*lua<SR,OF>::allocator(void *ud, void *ptr, size_t os, size_t ns)
 }
 
 template <class SR, class OF>
+int 	lua<SR,OF>::get_object_method(VM vm, const object &o, const char *key)
+{
+	/* push stack to registry[uuid][key] */
+	/* search object value table */
+	lua_getfield(vm, LUA_REGISTRYINDEX, o.type());
+	ASSERT(lua_istable(vm, -1));
+	lua_getfield(vm, -1, key);
+	ASSERT(lua_isnil(vm, -1) || lua_isfunction(vm, -1) ||
+			lua_iscfunction(vm, -1) || lua_isuserdata(vm, -1));
+	lua_remove(vm, -2); /* remove method table */
+	/* finally stack size +1 */
+	return 0;
+}
+
+template <class SR, class OF>
+int 	lua<SR,OF>::set_object_method(
+			VM vm, const object &o, const char *key, int index_from)
+{
+	ASSERT(index_from > 0);	/* should use lua_gettop or something */
+	lock lk(m_lock, true);
+	lua_getfield(vm, LUA_REGISTRYINDEX, o.type());
+	lua_pushvalue(vm, index_from);
+	lua_setfield(vm, -2, key);
+	lua_pop(vm, 1);	/* remove method table from stack */
+	/* finally stack size not changes */
+	return 0;
+}
+
+template <class SR, class OF>
 int 	lua<SR,OF>::get_object_value(VM vm, const object &o, const char *key)
 {
 	char buf[256];
 	/* push stack to registry[uuid][key] */
-	ASSERT(isalnum(*key));
+	/* search object value table */
+	lock lk(m_lock, false);		
 	lua_getfield(vm, LUA_REGISTRYINDEX, o.uuid().to_s(buf, sizeof(buf)));
 	ASSERT(lua_istable(vm, -1));
 	lua_getfield(vm, -1, key);
+	if (lua_isnil(vm, -1)) {	/* not exist? */
+		lua_pop(vm, 1);
+		get_object_method(vm, o, key);
+	}
 	lua_remove(vm, -2);	/* remove object table */
 	return 0;
 }
@@ -238,10 +283,10 @@ template <class SR, class OF>
 int 	lua<SR,OF>::set_object_value(
 			VM vm, const object &o, const char *key, int index_from)
 {
-	ASSERT(index > 0);	/* should use lua_gettop or something */
+	ASSERT(index_from > 0);	/* should use lua_gettop or something */
 	char buf[256];
 	/* do registery[uuid][key] = value */
-	ASSERT(isalnum(*key));	ASSERT(index_from != 0);
+	lock lk(m_lock, true);
 	lua_getfield(vm, LUA_REGISTRYINDEX, o.uuid().to_s(buf, sizeof(buf)));
 	lua_pushvalue(vm, index_from);
 	lua_setfield(vm, -2, key);
@@ -630,7 +675,7 @@ int lua<SR,OF>::pack_object(SR &sr, const object &o, bool with_val)
 	/* object data = ARRAY( ARRAY(host list), [MAP(object data) (optional)] ) */
 	int r, n_list = 0;
 	const conn *ct = o.connection();
-	sr.push_array_len(with_val ? 2 : 1);	
+	sr.push_array_len(with_val ? 3 : 2);	
 	/* gather replicate address information */
 	const address *list[1 + vmprotocol::vmd_max_replicate_host];
 	if (ct->gsf()) {
@@ -643,12 +688,16 @@ int lua<SR,OF>::pack_object(SR &sr, const object &o, bool with_val)
 		list[n_list++] = &(c->m_s->addr());
 		c = c->m_next;
 	}
+	/* TODO : not use strlen */
+	TRACE("object type = <%s>\n", o.type());
+	ASSERT(strlen(o.type()) > 0);
 	sr.push_array_len(n_list);
 	for (int i = 0; i < n_list; i++) {
 		if ((r = sr.push_string((const char *)*(list[i]), list[i]->len())) < 0) {
 			return r;
 		}
 	}
+	sr.push_string(o.type(), strlen(o.type()));
 	if (with_val) {
 		lock lk(m_lock, true);
 		return pack_object_value(m_vm, o, sr);
@@ -660,7 +709,6 @@ template <class SR, class OF>
 int lua<SR,OF>::unpack_object(CF &cf, VM vm, data &d, object &o)
 {
 	typename OF::conn *c = NULL;
-	lock lk(m_lock, true);
 	if (to_alen(d) <= 0) { 
 		ASSERT(false); 
 		return NBR_EFORMAT; 
@@ -674,7 +722,14 @@ int lua<SR,OF>::unpack_object(CF &cf, VM vm, data &d, object &o)
 	}
 	o.set_connection(c);
 	if (to_alen(d) > 1) {
-		return unpack_object_value(cf, m_vm, o, elem(d, 1));
+		const char *t = add_type(to_s(elem(d, 1)));
+		if (!t) { return NBR_EEXPIRE; }
+		ASSERT(*t);
+		o.set_type(t);
+		TRACE("object type : <%s>\n", o.type());
+		if (to_alen(d) > 2) {
+			return unpack_object_value(cf, m_vm, o, elem(d, 2));
+		}
 	}
 	return NBR_OK;
 }
@@ -725,9 +780,9 @@ int	lua<SR,OF>::resume_proc(S &c, CF &cf, VM vm, char *args, size_t alen, rpctyp
 				lua_pushnil(vm);	/* return nil */
 			}
 			else {	/* set rpc object to object data table. */
-				/* duplicate rpc object for set_object_value */
+				/* duplicate rpc object for set_object_method */
 				lua_pushvalue(vm, -1);	
-				set_object_value(vm, *o, to_s(proc_id), lua_gettop(vm));/* set */
+				set_object_method(vm, *o, to_s(proc_id), lua_gettop(vm));/* set */
 				/* here, duplicated rpc object is remove from stack but original 
 				 * rpc object still remain. so can return rpc object to caller. */
 			}
@@ -819,6 +874,55 @@ int lua<SR,OF>::call_proc(S &c, CF &cf, U32 rmsgid, object &o, proc_id &p,
 		}
 	}
 	return dispatch(c, *fb, n_args, false, rt);
+}
+
+template <class SR, class OF>
+int lua<SR,OF>::set_object_type(VM lua)
+{
+	object *o = to_o(lua, 1);
+	if (!o || !lua_isstring(lua, 2)) {
+		lua_pushstring(lua, "illegal argument");
+		lua_error(lua);
+	}
+	const char *ts = add_type(lua_tostring(lua, 2));
+	if (!ts) {
+		lua_pushstring(lua, "add type fail");
+		lua_error(lua);
+	}
+	o->set_type(ts);
+	return 0;
+}
+	
+template <class SR, class OF>
+const char *lua<SR,OF>::add_type(const char *typestr)
+{
+	type_id *t = m_types.find(typestr);
+	if (t) { return (const char *)*t; }
+	else if (!(t = m_types.create(typestr))) {
+		ASSERT(false);
+		return NULL;
+	}
+	t->set_type(typestr);
+	if (!t->has_table()) {
+		lock lk(m_lock, true);
+		lua_newtable(m_vm);
+		lua_setfield(m_vm, LUA_REGISTRYINDEX, typestr);
+		TRACE("create new method table <%s>\n", typestr);
+		t->set_has_table();
+	}
+	return (const char *)t;
+}
+
+template <class SR, class OF>
+int lua<SR,OF>::get_object_type(VM lua)
+{
+	object *o = to_o(lua, 1);
+	if (!o) {
+		lua_pushstring(lua, "illegal argument");
+		lua_error(lua);
+	}
+	lua_pushstring(lua, o->type());
+	return 1;
 }
 
 template <class SR, class OF>
@@ -943,10 +1047,12 @@ int lua<SR,OF>::newindex(VM lua)
 	char b[256];
 	TRACE("newindex : o[%s][%s] = v\n", o->uuid().to_s(b, sizeof(b)), k);
 #endif
+	/* object[k] = variable */
 	if (o->local()) {
 		set_object_value(lua, *o, k, 3);
 		return 0;
-	}/* object[k] = function */
+	}
+	/* object[k] = function */
 	else if (lua_isfunction(lua, 3)) {
 		/* create rpc object on lua stack */
 		rpc *r;
@@ -955,10 +1061,9 @@ int lua<SR,OF>::newindex(VM lua)
 			lua_error(lua);
 		}
 		/* object[k] = rpc */
-		set_object_value(lua, *o, k, 4/* rpc obj */);
+		set_object_method(lua, *o, k, 4/* rpc obj */);
 		return 0;	/* no return value */
 	}
-	/* object[k] = variable */
 	else {
 		object *v = to_o(lua, 3, false);
 		/* not pfm object and o is remote */

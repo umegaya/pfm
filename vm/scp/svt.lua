@@ -38,9 +38,9 @@ function init_object(object,objtype)
 	if not objtype then
 		-- player
 		print("init_object : type = PLAYER")
-		object.typename = "PLAYER"
+		pfm.set_type(object, "PLAYER");
 		return
 	end
 	print("init_object : type = " .. objtype)
-	object.typename = objtype
+	pfm.set_type(object, objtype);
 end
