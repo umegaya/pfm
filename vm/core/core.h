@@ -30,7 +30,7 @@ map<typename object_factory_impl<S,IDG,KVS>::world,
 	typename object_factory_impl<S,IDG,KVS>::world_id>
 object_factory_impl<S,IDG,KVS>::m_wl;
 
-
+/* object_factory_impl */
 template <class S, class IDG, class KVS>
 int object_factory_impl<S,IDG,KVS>::init(int max_object, int max_world)
 {
@@ -57,6 +57,7 @@ void object_factory_impl<S,IDG,KVS>::fin()
 	KVS::fin();
 }
 
+/* world_impl */
 template <class S, class IDG, class KVS>
 template <class C>
 int object_factory_impl<S,IDG,KVS>::world_impl<C>::init(
@@ -66,6 +67,37 @@ int object_factory_impl<S,IDG,KVS>::world_impl<C>::init(
 		return NBR_EMALLOC;
 	}
 	return NBR_OK;
+}
+
+template <class S, class IDG, class KVS>
+template <class C>
+typename object_factory_impl<S,IDG,KVS>::conn *
+object_factory_impl<S,IDG,KVS>::world_impl<C>::
+	connect_assigned_node(connector_factory &cf, const UUID &uuid)
+{
+	conn *c = NULL;
+	bool retry_f = false;
+	const CHNODE *n[vmprotocol::vmd_object_multiplexity];
+	int n_node;
+retry:
+	if ((n_node = lookup_node(uuid, n,
+		vmprotocol::vmd_object_multiplexity)) < 0) {
+		ASSERT(false);
+		return NULL;
+	}
+	for (int i = 0 ; i < n_node; i++) {
+		if (!(c = cf.connect(uuid, n[i]->iden))) {
+			del_node(*(n[i]));
+			if (!retry_f) {
+				retry_f = true;
+				goto retry;
+			}
+			ASSERT(false);
+			return NULL;
+		}
+		TRACE("object replicate addr <%s>\n", n[i]->iden);
+	}
+	return c;
 }
 
 
@@ -105,10 +137,7 @@ int vmprotocol_impl<S,IDG,SNDR>::on_recv(char *p, int l)
 	case vmprotocol::vmcmd_new_object: {     /* s->m, m->s */
 		len = sizeof(UUID);
 		POP_8A(&(uuid), len);
-		char addr[l]; int adrl = l;
-		POP_8A(addr, adrl);
-		_this().recv_cmd_new_object(msgid, uuid, addr, adrl,
-				POP_BUF(), POP_REMAIN());
+		_this().recv_cmd_new_object(msgid, uuid, POP_BUF(), POP_REMAIN());
 		} break;
 	case vmprotocol::vmcmd_login:
 		POP_STR(wid, sizeof(wid));
@@ -219,7 +248,7 @@ int vmprotocol_impl<S,IDG,SNDR>::reply_rpc(
 template <class S,class IDG,class SNDR>
 template <class Q>
 int vmprotocol_impl<S,IDG,SNDR>::send_new_object(SNDR &s, U32 rmsgid,
-		const UUID &uuid, char *addr, size_t adrl, char *p, size_t pl, Q **pq)
+		const UUID &uuid, char *p, size_t pl, Q **pq)
 {
 	size_t sz = 
 		2 * (1 + pl + vmprotocol::vmd_account_maxlen +
@@ -230,7 +259,6 @@ int vmprotocol_impl<S,IDG,SNDR>::send_new_object(SNDR &s, U32 rmsgid,
 	U32 msgid = _this().f()->msgid();
 	PUSH_32(msgid);
 	PUSH_8A((char *)&uuid, sizeof(UUID));
-	PUSH_8A(addr, adrl);
 	PUSH_MEM(p, pl);
 	/* same as send_rpc's cast, it causes no effect */
 	Q *q = (Q *)_this().senddata(s, msgid, buf, PUSH_LEN());

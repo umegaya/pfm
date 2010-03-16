@@ -55,8 +55,9 @@ function main(player)
 
 --	real test: pfm.new
 	player.item = player:new_item(100)
-	assert(pfm.get_type(player.item) == "ITEM")
-	assert(player.item.attack_point == 1000)
+	assert(pfm.type_of(player.item) == "ITEM")
+--	print("player.item.atk = " .. player.item.attack_point)
+	assert(player:get_item_data("attack_point") == 1000)
 end
 
 function remote_error(from, msg)

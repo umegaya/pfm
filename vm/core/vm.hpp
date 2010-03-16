@@ -122,6 +122,7 @@ public:
 	static const int vmd_max_replicate_host = 32;
 	static const int vmd_max_worldname = 32;
 	static const int vmd_max_node_ctrl_cmd = 256;
+	static const int vmd_object_multiplexity = 3;
 	typedef char login_id[vmd_account_maxlen];
 	typedef char proc_id[vmd_procid_maxlen];
 	typedef char world_id[vmd_max_worldname];
@@ -154,8 +155,7 @@ public:	/* receiver */
 			char *p, int l, rpctype rc) {__PE(); }
 	template <class Q> int recv_code_rpc(Q &q, char *p, size_t l, rpctype rc)
 			{__PE(); }
-	int recv_cmd_new_object(U32 msgid, UUID &uuid,
-			char *addr, size_t adrl, char *p, size_t l) {__PE();}
+	int recv_cmd_new_object(U32 msgid, UUID &uuid, char *p, size_t l) {__PE();}
 	template <class Q> int recv_code_new_object(Q &q, int r,
 			UUID &uuid, char *p, size_t l) {__PE();}
 	int recv_cmd_login(U32 msgid, const world_id &wid, const char *acc,
@@ -173,7 +173,7 @@ public: /* sender */
 			char *a, size_t al, rpctype rt, Q **pq);
 	int reply_rpc(SNDR &s, U32 msgid, char *p, size_t l, rpctype rt);
 	template <class Q> int send_new_object(SNDR &s, U32 rmsgid, const UUID &uuid,
-			char *addr, size_t adrl, char *p, size_t l, Q **pq);
+			char *p, size_t l, Q **pq);
 	int reply_new_object(SNDR &s, U32 msgid, int r, UUID &uuid, char *p, size_t l);
 	int send_login(SNDR &s, U32 msgid, const world_id &wid,
 			const char *acc, char *p, size_t l);
@@ -211,8 +211,7 @@ public:
 	protected:
 		UUID	m_uuid;		/* unique ID for each object */
 		U32		m_flag;		/* object flag */
-		conn	*m_conn;	/* if != NULL, connection to this object
-					otherwise this object is local */
+		conn	*m_conn;	/* remote : rpc replication / local : replication */
 		const char *m_type;	/* object type */
 	public:
 		enum {
@@ -248,13 +247,16 @@ public:
 		~world_impl() { fin(); }
 		int init(int max_node, int max_replica);
 		void fin() { nbr_conhash_fin(m_ch); }
-		const CHNODE *lookup_node(UUID &uuid) {
-			return nbr_conhash_lookup(m_ch, (const char *)&uuid, sizeof(uuid));
+		int lookup_node(const UUID &uuid, const CHNODE *n[], int n_max) {
+			*n = nbr_conhash_lookup(m_ch, (const char *)&uuid, sizeof(uuid));
+			return (*n) ? 1 : NBR_ENOTFOUND;
 		}
 		int add_node(const C &s) { return add_node(*s.chnode()); }
-		int add_node(const CHNODE &n) { return nbr_conhash_add_node(m_ch, (CHNODE *)&n); }
+		int add_node(const CHNODE &n) {
+			return nbr_conhash_add_node(m_ch, (CHNODE *)&n); }
 		int del_node(const C &s) { return del_node(*s.chnode()); }
-		int del_node(const CHNODE &n) { return nbr_conhash_del_node(m_ch, (CHNODE *)&n); }
+		int del_node(const CHNODE &n) {
+			return nbr_conhash_del_node(m_ch, (CHNODE *)&n); }
 		static void set_node(C &s, const char *addr) {
 			nbr_conhash_set_node(s.chnode(), addr, vmprotocol::vnode_replicate_num);
 		}
@@ -264,6 +266,7 @@ public:
 				it->del_node(s);
 			}
 		}
+		conn *connect_assigned_node(connector_factory &cf, const UUID &uuid);
 	};
 	typedef world_impl<S> world;
 protected:

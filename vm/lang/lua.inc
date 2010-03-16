@@ -170,9 +170,9 @@ int lua<SR,OF>::init(int max_rpc_entry, int max_rpc_ongoing)
 	lua_pushcfunction(m_vm, create);
 	lua_setfield(m_vm, -2, "new");
 	lua_pushcfunction(m_vm, set_object_type);
-	lua_setfield(m_vm, -2, "set_type");
+	lua_setfield(m_vm, -2, "bless");
 	lua_pushcfunction(m_vm, get_object_type);
-	lua_setfield(m_vm, -2, "get_type");
+	lua_setfield(m_vm, -2, "type_of");
 	return NBR_OK;
 }
 
@@ -673,30 +673,7 @@ template <class SR, class OF>
 int lua<SR,OF>::pack_object(SR &sr, const object &o, bool with_val)
 {
 	/* object data = ARRAY( ARRAY(host list), [MAP(object data) (optional)] ) */
-	int r, n_list = 0;
-	const conn *ct = o.connection();
-	sr.push_array_len(with_val ? 3 : 2);	
-	/* gather replicate address information */
-	const address *list[1 + vmprotocol::vmd_max_replicate_host];
-	if (ct->gsf()) {
-		list[n_list++] = &(ct->gsf()->ifaddr());
-		TRACE("gsf addr = %s\n", (const char *)list[n_list - 1]);
-	}
-	const typename OF::chain *c;
-	c = o.connection()->chain();
-	while (c) {
-		list[n_list++] = &(c->m_s->addr());
-		c = c->m_next;
-	}
-	/* TODO : not use strlen */
-	TRACE("object type = <%s>\n", o.type());
-	ASSERT(strlen(o.type()) > 0);
-	sr.push_array_len(n_list);
-	for (int i = 0; i < n_list; i++) {
-		if ((r = sr.push_string((const char *)*(list[i]), list[i]->len())) < 0) {
-			return r;
-		}
-	}
+	sr.push_array_len(with_val ? 2 : 1);	
 	sr.push_string(o.type(), strlen(o.type()));
 	if (with_val) {
 		lock lk(m_lock, true);
@@ -708,28 +685,26 @@ int lua<SR,OF>::pack_object(SR &sr, const object &o, bool with_val)
 template <class SR, class OF>
 int lua<SR,OF>::unpack_object(CF &cf, VM vm, data &d, object &o)
 {
-	typename OF::conn *c = NULL;
 	if (to_alen(d) <= 0) { 
 		ASSERT(false); 
 		return NBR_EFORMAT; 
 	}
-	typename SR::data &al = elem(d, 0);
-	for (int i = 0; i < to_alen(al); i++) {
-		TRACE("object replicate address <%s>\n", to_s(elem(al,i)));
-		if (!(c = cf.connect(o.uuid(), to_s(elem(al,i))))) {
-			return NBR_EINVAL;
-		}
-	}
+	/* connect to assigned node */
+	world_id wid = "test_MMO";
+	world *w = OF::find_world(wid);
+	ASSERT(w);
+	typename OF::conn *c = w->connect_assigned_node(cf, o.uuid());
+	if (!c) { return NBR_ENOTFOUND; }
 	o.set_connection(c);
+	/* add object type */
+	const char *t = add_type(to_s(elem(d, 0)));
+	if (!t) { return NBR_EEXPIRE; }
+	ASSERT(*t);
+	o.set_type(t);
+	TRACE("object type : <%s>\n", o.type());
+	/* unpack object data */
 	if (to_alen(d) > 1) {
-		const char *t = add_type(to_s(elem(d, 1)));
-		if (!t) { return NBR_EEXPIRE; }
-		ASSERT(*t);
-		o.set_type(t);
-		TRACE("object type : <%s>\n", o.type());
-		if (to_alen(d) > 2) {
-			return unpack_object_value(cf, m_vm, o, elem(d, 2));
-		}
+		return unpack_object_value(cf, m_vm, o, elem(d, 1));
 	}
 	return NBR_OK;
 }
@@ -820,7 +795,8 @@ int lua<SR,OF>::call_proc(S &c, CF &cf, U32 rmsgid, object &o, proc_id &p,
 			lua_pushstring(*fb, "remote unpack error");
 			return reply_result(c, *fb, 1, vmprotocol::rpct_error);
 		}
-		TRACE("field name = %s\n", to_s(d));
+		char b[256];
+		TRACE("field name = %s.%s\n", o.uuid().to_s(b, sizeof(b)), to_s(d));
 		get_object_value(*fb, o, to_s(d));
 		if (lua_type(*fb, -1) == LUA_TFUNCTION) {
 			lua_pushstring(*fb, p);
@@ -1022,7 +998,7 @@ int lua<SR,OF>::index(VM lua)
 		}
 		/* call rpc object:_getter_(k)
 		function object._getter_(k) return self[k] end */
-		ASSERT(strcmp(k, "item") != 0);
+		ASSERT(strcmp(k, "attack_point") != 0);
 		typename conn::querydata *q;
 		if (c->send_rpc(*sender, o->uuid(), (proc_id &)*k, sr.p(), sr.len(),
 			vmprotocol::rpct_getter, &q) < 0) {

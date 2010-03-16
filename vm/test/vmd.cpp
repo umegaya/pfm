@@ -36,19 +36,6 @@ int vmd::vmdmstr::init_login_map(int max_user)
 	return NBR_OK;
 }
 
-int vmd::vmdmstr::recv_cmd_new_object(U32 msgid,
-		UUID &uuid, char *addr, size_t adrl, char *p, size_t l)
-{
-	ASSERT(false);
-}
-
-int
-vmd::vmdmstr::recv_code_new_object(querydata &q, int r,
-		UUID &uuid, char *p, size_t l)
-{
-	ASSERT(false);
-}
-
 int vmd::vmdmstr::recv_cmd_node_ctrl(U32 msgid, const char *cmd,
 		const world_id &wid, const address &a)
 {
@@ -107,8 +94,7 @@ vmd::vmdmstr::recv_cmd_login(U32 msgid, const world_id &wid,
 /* sfc::vmd::vmdservant                                        */
 /*-------------------------------------------------------------*/
 int
-vmd::vmdsvnt::recv_cmd_new_object(U32 msgid,
-		UUID &uuid, char *addr, size_t adrl, char *p, size_t l)
+vmd::vmdsvnt::recv_cmd_new_object(U32 msgid, UUID &uuid, char *p, size_t l)
 {
 	int r;
 #if defined(_DEBUG)
@@ -119,8 +105,7 @@ vmd::vmdsvnt::recv_cmd_new_object(U32 msgid,
 		ASSERT(false);
 		return reply_new_object(*this, msgid, NBR_EINVAL, uuid, NULL, 0);
 	}
-	sr().unpack_start(addr, adrl);
-	object *o = script::object_new(cf(), NULL/*main VM*/, uuid, &(sr()), true);
+	object *o = script::object_new(cf(), NULL/*main VM*/, uuid, NULL, true);
 	if (!o) {
 		return reply_new_object(*this, msgid, NBR_EEXPIRE, uuid, NULL, 0);
 	}
@@ -139,49 +124,22 @@ vmd::vmdsvnt::recv_cmd_new_object(U32 msgid,
 	if ((r = script::pack_object(sr(), *o, true)) < 0) {
 		return reply_new_object(*this, msgid, r, uuid, NULL, 0);
 	}
+	/* TODO: send this object information to replicate host. */
 	return reply_new_object(*this, msgid, NBR_OK, uuid, sr().p(), sr().len());
 }
 
 int vmd::vmdsvnt::load_or_create_object(U32 msgid,
 		UUID &uuid, char *p, size_t l, loadpurpose lp, querydata **pq)
 {
-	bool retry_f = false;
-	const CHNODE *n;
 	world *w = object_factory::find_world(m_wid);
-	if (!w) {
+	connector *c;
+	if (!w || !(c = w->connect_assigned_node(cf(), uuid))) {
 		ASSERT(false);
 		return NBR_ENOTFOUND;
 	}
-retry:
-	static const int multiplexity = 3;
-	if (!(n = w->lookup_node(uuid))) {
-		ASSERT(false);
-		return NBR_ENOTFOUND;
-	}
-	TRACE("n->iden = %s\n", n->iden);
-	/* get connector for this object */
-	connector *c = cf().connect(uuid, n->iden);
-	if (!c) {
-		w->del_node(*n);
-		if (!retry_f) {
-			retry_f = true;
-			goto retry;
-		}
-		ASSERT(false);
-		return NBR_EINVAL;
-	}
-	/* pack object address except master
-	 * TODO: now no replication, so just send master address. */
-	char buffer[sizeof(*n) * multiplexity * 2];
-	sr().pack_start(buffer, sizeof(*n) * multiplexity * 2);
-	sr().push_array_len(1);
-	sr().push_array_len(1);
-	/* TODO: should not use strlen. */
-	sr().push_string(n->iden, strlen(n->iden));
 	/* send object create */
 	querydata *q;
-	if (c->send_new_object(*this, msgid, uuid,
-			sr().p(), sr().len(), p, l, &q) >= 0) {
+	if (c->send_new_object(*this, msgid, uuid, p, l, &q) >= 0) {
 		/* success. store purpose data */
 		q->m_data = lp;
 		if (pq) { *pq = q; }
@@ -217,7 +175,7 @@ vmd::vmdsvnt::recv_code_new_object(
 			/* pid, "", 0 means no argument */
 			r = script::call_proc(*this, cf(), q.msgid, *o, pid, "", 0,
 					rpct_global, vmprotocol::rpcopt_flag_not_set);
-			return q.sender()->reply_login(*this, q.msgid, r,m_wid, uuid, "", 0);
+			return q.sender()->reply_login(*this, q.msgid, r, m_wid, uuid, p, l);
 		}
 		return q.sender()->reply_login(*this, q.msgid, NBR_EEXPIRE, 
 			m_wid, uuid, "", 0);
@@ -308,13 +266,19 @@ vmd::vmdclnt::recv_code_login(querydata &q, int r, const world_id &wid,
 		log(ERROR, "login fail: %d\n", r);
 		return r;
 	}
-	ASSERT(l == 0);	/* client does not need any additional object data */
+	object_factory::world *w;
+	if (!(w = create_world(wid))) {
+		ASSERT(false);
+		return NBR_EEXPIRE;
+	}
+	/* add node */
+	w->set_node(*this, addr());
+	w->add_node(*this);
 	/* create remote object */
-	object *o = script::object_new(cf(), NULL/*use main VM*/, uuid, NULL, false);
+	sr().unpack_start(p, l);
+	object *o = script::object_new(cf(), NULL/*use main VM*/, uuid, &(sr()), false);
 	if (o) {
-		ASSERT(!o->connection());
-		/* client always use backend connection */
-		o->set_connection(backend_conn());
+//		o->set_connection(c);
 		proc_id pid = "main";
 		/* pid, "", 0 means no argument */
 		script::call_proc(*this, cf(), q.msgid, *o, pid, "", 0,
@@ -438,7 +402,7 @@ vmd::boot(int argc, char *argv[])
 			if (!vmdsvnt::load("./scp/svt.lua")) {
 				return NBR_ESYSCALL;
 			}
-			vmdsvnt::connector *c = svnt->backend_connect("localhost:8000");
+			vmdsvnt::connector *c = svnt->backend_connect("127.0.0.1:8000");
 			if (!c) {
 				return NBR_EEXPIRE;
 			}
@@ -462,7 +426,7 @@ vmd::boot(int argc, char *argv[])
 			if (!vmdclnt::load("./scp/clt.lua")) {
 				return NBR_ESYSCALL;
 			}
-			vmdclnt::connector *c = clnt->backend_connect("localhost:9000");
+			vmdclnt::connector *c = clnt->backend_connect("127.0.0.1:9000");
 			if (!c) {
 				return NBR_EEXPIRE;
 			}

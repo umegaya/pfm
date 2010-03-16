@@ -67,6 +67,8 @@ public:	/* typedefs */
 	static const U32 max_symbol_len = 32;
 	typedef char proc_id[max_symbol_len];
 	typedef typename OF::object object;
+	typedef typename OF::world world;
+	typedef typename OF::world_id world_id;
 	typedef typename SR::data data;
 	typedef typename OF::conn conn;
 	typedef typename OF::session_type S;

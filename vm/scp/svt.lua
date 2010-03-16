@@ -30,7 +30,11 @@ end
 function player:new_item(atkbase)
 	item = pfm.new("ITEM");
 	item.attack_point = atkbase * 10
+	print("item.atk = " .. item.attack_point)
 	return item
+end
+function player:get_item_data(prop)
+	return item[prop]
 end
 end
 
@@ -38,9 +42,9 @@ function init_object(object,objtype)
 	if not objtype then
 		-- player
 		print("init_object : type = PLAYER")
-		pfm.set_type(object, "PLAYER");
+		pfm.bless(object, "PLAYER");
 		return
 	end
 	print("init_object : type = " .. objtype)
-	pfm.set_type(object, objtype);
+	pfm.bless(object, objtype);
 end
