@@ -311,6 +311,7 @@ NBR_INLINE int
 sockmgr_expand_maxfd(int max_nfd)
 {
 	int cur_nfd;
+#if !defined(_VALGRIND)
 	if ((cur_nfd = nbr_osdep_rlimit_get(NBR_LIMIT_TYPE_FDNUM)) < max_nfd) {
 		if (nbr_osdep_rlimit_set(NBR_LIMIT_TYPE_FDNUM, max_nfd) < 0) {
 			SOCK_ERROUT(ERROR,RLIMIT,"fd_max: cannot change: %d->%d (%d)",
@@ -320,6 +321,7 @@ sockmgr_expand_maxfd(int max_nfd)
 		g_sock.total_fds = max_nfd;
 		return max_nfd;
 	}
+#endif
 	return cur_nfd;
 }
 

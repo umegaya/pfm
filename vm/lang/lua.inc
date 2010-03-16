@@ -148,6 +148,7 @@ int lua<SR,OF>::init(int max_rpc_entry, int max_rpc_ongoing)
 	if (!(m_lock = nbr_rwlock_create())) {
 		return NBR_EPTHREAD;
 	}
+	TRACE("lua: VM = %p\n", m_vm);
 	lua_settop(m_vm, 0);
 	/* load built in library */
 	lua_pushcfunction(m_vm, luaopen_base);
@@ -185,13 +186,38 @@ int	lua<SR,OF>::panic(VM vm)
 template <class SR, class OF>
 void	*lua<SR,OF>::allocator(void *ud, void *ptr, size_t os, size_t ns)
 {
+#if defined(_DEBUG)
+	if (ns > (32 * 1024) || os > (32 * 1024)) {
+		TRACE("ptr=%p,os=%u,ns=%u\n", ptr, os, ns);
+	}
+#endif
 	if (ns == 0) {
+#if defined(_DEBUG)
+		if (os > (32 * 1024)) {
+			static char correct[32 * 1024];
+			memset(correct, 'a', 32 * 1024);
+			ASSERT(memcmp(((char *)ptr) + os, correct, 32 * 1024) == 0);
+		}
+#endif
 		free(ptr);  /* ANSI define free for NULL ptr never causes any change */
 		return NULL;
 	}
 	else {
 		/* ANSI defines realloc(NULL,ns) == malloc(ns) */
+#if defined(_DEBUG)
+		void *p;
+		if (ns > (32 * 1024) && os == 0) {
+			size_t nns = ns + (32 * 1024);
+			p = realloc(ptr, nns);
+			memset(((char *)p) + ns, 'a', 32 * 1024);
+		}
+		else {
+			p = realloc(ptr, ns);
+		}
+		return p;
+#else
 		return realloc(ptr, ns);
+#endif
 	}
 }
 
@@ -212,6 +238,7 @@ template <class SR, class OF>
 int 	lua<SR,OF>::set_object_value(
 			VM vm, const object &o, const char *key, int index_from)
 {
+	ASSERT(index > 0);	/* should use lua_gettop or something */
 	char buf[256];
 	/* do registery[uuid][key] = value */
 	ASSERT(isalnum(*key));	ASSERT(index_from != 0);
@@ -549,16 +576,19 @@ template <class SR, class OF>
 int	lua<SR,OF>::reply_result(S &c, VM vm, int n_basestksz, rpctype rt)
 {
 	ASSERT(n_basestksz >= 0);
-	PREPAIR_PACK((&c));
+	PREPARE_PACK((&c), max_rpc_packlen);
 	SR &sr = c.sr();
 	int top = lua_gettop(vm);
 	for (int i = n_basestksz, r; i <= top; i++) {
 		if ((r = pack_lua_stack(sr, vm, i)) < 0) {
+			FINISH_PACK((&c));
 			return r;
 		}
 	}
 	fiber *f = vm_owner(vm);
-	return c.reply_rpc(c, f->rmsgid(), sr.p(), sr.len(), rt);
+	int r = c.reply_rpc(c, f->rmsgid(), sr.p(), sr.len(), rt);
+	FINISH_PACK((&c));
+	return r;
 }
 
 template <class SR, class OF>
@@ -566,8 +596,8 @@ int 	lua<SR,OF>::dispatch(S &c, VM vm, int n_args, bool from_resume, rpctype rt)
 {
 	int top = lua_gettop(vm);
 	int stksz = (from_resume ? (top - n_args + 1) : (top - n_args));
-	TRACE("stksz = %u, top,nargs=%u,%u(f=%s)\n", stksz, top, n_args, 
-			from_resume ? "resume" : "first");
+	TRACE("%p: stksz = %u, top,nargs=%u,%u(f=%s)\n", (void *)(((U32)vm) - 40), 
+			stksz, top, n_args, from_resume ? "resume" : "first");
 	int r = lua_resume(vm, n_args);
 	if (r == LUA_YIELD) {
 		return NBR_OK /* successfully suspended */;
@@ -692,7 +722,14 @@ int	lua<SR,OF>::resume_proc(S &c, CF &cf, VM vm, char *args, size_t alen, rpctyp
 			}
 			object *o = OF::find(*((UUID *)to_p(uuid)));
 			if (!o || !rpc_new(vm, o, to_s(proc_id))) {
-				lua_pushnil(vm);
+				lua_pushnil(vm);	/* return nil */
+			}
+			else {	/* set rpc object to object data table. */
+				/* duplicate rpc object for set_object_value */
+				lua_pushvalue(vm, -1);	
+				set_object_value(vm, *o, to_s(proc_id), lua_gettop(vm));/* set */
+				/* here, duplicated rpc object is remove from stack but original 
+				 * rpc object still remain. so can return rpc object to caller. */
 			}
 		}
 		return dispatch(c, vm, 1, true, rt);
@@ -819,12 +856,26 @@ int lua<SR,OF>::create(VM lua)
 		lua_pushstring(lua, "invalid fiber : connection invalid");
 		lua_error(lua);
 	}
-//	typename conn::querydata *q;
-//	if (c->backend_conn()->send_new_object(*c, "", 0, OF::new_id(), &q) < 0) {
-//		lua_pushstring(lua, "send object creation fail");
-//		lua_error(lua);
-//	}
-//	q->m_vm = lua;
+	PREPARE_PACK(c, max_rpc_packlen);
+	SR &sr = c->sr();
+	int top = lua_gettop(lua), r;
+	for (int i = 1; i <= top; i++) {
+		if ((r = pack_lua_stack(sr, lua, i)) < 0) {
+			FINISH_PACK(c);
+			lua_pushfstring(lua, "pack lua value fail (%d,%d)", i, r);
+			lua_error(lua);
+		}
+	}
+	typename S::querydata *q;
+	UUID uuid = OF::new_id();
+	if (c->load_or_create_object(0, uuid, 
+		sr.p(), sr.len(), vmprotocol::load_purpose_create, &q) < 0) {
+		FINISH_PACK(c);
+		lua_pushstring(lua, "send object creation fail");
+		lua_error(lua);
+	}
+	q->m_vm = lua;
+	FINISH_PACK(c);
 	return lua_yield(lua, 1);
 }
 
@@ -842,6 +893,7 @@ int lua<SR,OF>::index(VM lua)
 		return 1;
 	}
 	else {
+		ASSERT(lua_type(lua, 3) == -1);
 		get_object_value(lua, *o, k);
 		USERDATA *ud = (USERDATA *)lua_touserdata(lua, 3);
 		if (ud && (ud->type == OT_PFM || ud->type == OT_RPC)) {
@@ -856,23 +908,27 @@ int lua<SR,OF>::index(VM lua)
 			lua_error(lua);
 		}
 		/* cannot use packer of c: another thread may use it */
-		PREPAIR_PACK(sender);
+		PREPARE_PACK(sender, max_rpc_packlen);
 		SR &sr = sender->sr();
 		/* pack k into sr() */
 		if (pack_lua_stack(sender->sr(), lua, 2) < 0) {
+			FINISH_PACK(sender);
 			lua_pushstring(lua, "fail to pack lua value");
 			lua_error(lua);
 		}
 		/* call rpc object:_getter_(k)
 		function object._getter_(k) return self[k] end */
+		ASSERT(strcmp(k, "item") != 0);
 		typename conn::querydata *q;
 		if (c->send_rpc(*sender, o->uuid(), (proc_id &)*k, sr.p(), sr.len(),
 			vmprotocol::rpct_getter, &q) < 0) {
+			FINISH_PACK(sender);
 			ASSERT(false);
 			lua_pushstring(lua, "fail to rpc");
 			lua_error(lua);
 		}
 		q->m_vm = lua;
+		FINISH_PACK(sender);
 		return lua_yield(lua, 1);
 	}
 	return 0;
@@ -899,7 +955,7 @@ int lua<SR,OF>::newindex(VM lua)
 			lua_error(lua);
 		}
 		/* object[k] = rpc */
-		set_object_value(lua, *o, k, -1);
+		set_object_value(lua, *o, k, 4/* rpc obj */);
 		return 0;	/* no return value */
 	}
 	/* object[k] = variable */
@@ -917,10 +973,11 @@ int lua<SR,OF>::newindex(VM lua)
 				lua_error(lua);
 			}
 			/* cannot use packer of c: another thread may use it */
-			PREPAIR_PACK(sender);
+			PREPARE_PACK(sender, max_rpc_packlen);
 			SR &sr = sender->sr();
 			/* pack k and v into sr */
 			if (pack_lua_stack(sr, lua, 2) < 0 || pack_lua_stack(sr, lua, 3) < 0) {
+				FINISH_PACK(sender);
 				lua_pushstring(lua, "fail to pack lua value");
 				lua_error(lua);
 			}
@@ -929,16 +986,19 @@ int lua<SR,OF>::newindex(VM lua)
 			if (c->send_rpc(*sender, o->uuid(), id, sr.p(), sr.len(),
 				vmprotocol::rpct_setter, &q) < 0) {
 				ASSERT(false);
+				FINISH_PACK(sender);
 				lua_pushstring(lua, "fail to rpc");
 				lua_error(lua);
 			}
 			q->m_vm = lua;
+			FINISH_PACK(sender);
 			return lua_yield(lua, 1);
 		}
 		else {
+			TRACE("k=%s is pfm obj %s\n", k, v->uuid().to_s(b,sizeof(b)));
 			/* pfm object set to remote object. */
 			/* object[k] = pfmobj */
-			set_object_value(lua, *o, k, -1);
+			set_object_value(lua, *o, k, 3);
 		}
 		return 0;	/* no return variable */
 	}
@@ -978,12 +1038,13 @@ int lua<SR, OF>::call(VM lua)
 			lua_error(lua);
 		}
 		/* cannot use packer of c: another thread may use it */
-		PREPAIR_PACK(sender);
+		PREPARE_PACK(sender, max_rpc_packlen);
 		SR &sr = sender->sr();
 		/* index 2 is this object. so skip 2 */
 		for(int i = 3, res; i <= n_arg; i++) {
 			lua_pushvalue(lua, i);
 			if ((res = pack_lua_stack(sr, lua, lua_gettop(lua))) < 0) {
+				FINISH_PACK(sender);
 				lua_pushfstring(lua, "pack lua value fail (%d)", res);
 				lua_error(lua);
 			}
@@ -992,11 +1053,13 @@ int lua<SR, OF>::call(VM lua)
 		typename conn::querydata *q;
 		if (c->send_rpc(*sender, o->uuid(), r->proc(), sr.p(), sr.len(),
 				vmprotocol::rpct_method, &q) < 0) {
+			FINISH_PACK(sender);
 			ASSERT(false);
 			lua_pushstring(lua, "fail to rpc");
 			lua_error(lua);
 		}
 		q->m_vm = lua;
+		FINISH_PACK(sender);
 		return lua_yield(lua, 1);
 	}
 }

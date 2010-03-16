@@ -206,7 +206,7 @@ public:
 	~connector_factory_impl() {}
 	grid_servant_factory_impl<S,K,CP>	*gsf() { return m_gsf; }
 	const grid_servant_factory_impl<S,K,CP>	*gsf() const { return m_gsf; }
-	void set_gsf(grid_servant_factory_impl<S,K,CP>	*gsf) { m_gsf = gsf; }
+	void set_gsf(grid_servant_factory_impl<S,K,CP> *gsf) { m_gsf = gsf; }
 	int init(const config &cfg) {
 		if (!(connector::m_lock = nbr_rwlock_create())) {
 			return NBR_EPTHREAD;
@@ -219,6 +219,11 @@ public:
 		}
 		if (!m_failover_chain_group.init(100000, 100000, -1, opt_expandable)) {
 			return NBR_EMALLOC;
+		}
+		/* TODO: better way? it is too personal */
+		S::set_cf(this);
+		if (&(S::cf()) != this) {
+			return NBR_EINVAL;
 		}
 		return super::init(cfg);
 	}
@@ -481,7 +486,6 @@ protected:
 public:
 		grid_servant_factory_impl() : super(), m_connector_factory() {}
 		~grid_servant_factory_impl() {}
-		connector_factory_impl<S,K,CP> &cf() { return m_connector_factory; }
 		connector *from_key(const K &k) {
 			return m_connector_factory.from_key(k); }
 		int init(const config &cfg) {

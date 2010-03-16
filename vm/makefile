@@ -31,6 +31,11 @@ LIBS = -L. -L./lib -L$(NBRDIR) -L$(SFCDIR) -lpvm -lsfc -lnbr
 INCS = -I. -Icore -Ilib -Itest -I$(NBRCOREDIR) -I$(SFCCOREDIR) -I$(SFCLIBDIR)
 DEPS = dep
 OBJS = obj
+ifeq ($(DEBUG), 1)
+LUA = lua
+else
+LUA = lua
+endif
 
 
 #-----------------------------------------------------------------------
@@ -51,7 +56,7 @@ TESTDIR = test
 TESTSRCS = $(shell find $(TESTDIR) -regex .*\\.cpp$$ -printf %f\\n)
 TESTOBJS = $(TESTSRCS:%.cpp=$(OBJS)/$(TESTDIR)/%.o)
 TESTDEPS = $(TESTSRCS:%.cpp=$(DEPS)/$(TESTDIR)/%.d)
-TESTREQLIBS = z bz2 rt m ssl crypto lua msgpack
+TESTREQLIBS = z bz2 rt m ssl crypto $(LUA) msgpack
 TESTLIBS = $(foreach lib,$(TESTREQLIBS),$(shell echo "-l$(lib)"))
 UNITTEST = ut
 RUNTEST = any

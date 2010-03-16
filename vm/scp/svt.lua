@@ -27,6 +27,11 @@ function player:calc_table_element_sum(tbl)
 	end
 	return sum
 end
+function player:new_item(atkbase)
+	item = pfm.new("ITEM");
+	item.attack_point = atkbase * 10
+	return item
+end
 end
 
 function init_object(object,objtype)

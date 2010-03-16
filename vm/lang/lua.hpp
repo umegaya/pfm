@@ -76,9 +76,17 @@ public:	/* typedefs */
 	typedef lua_State *VM;
 
 	/* macro prepair pack */
-#define PREPAIR_PACK(conn)  			\
-	char __buf[max_rpc_packlen];		\
-	conn->sr().start(__buf, sizeof(__buf));
+#define PREPARE_PACK(conn, len)  				\
+	size_t __len = len;							\
+	char __buf[pack_use_heap_threshold], 		\
+	*__p = (len > pack_use_heap_threshold ? 	\
+		(char *)allocator(NULL, NULL, 0, __len):\
+		__buf);									\
+	conn->sr().start(__p, __len);
+#define FINISH_PACK(conn)					\
+	if (__len > pack_use_heap_threshold) {	\
+		allocator(NULL, __p, __len, 0);		\
+	}
 
 	class rpc {
 	protected:
@@ -144,7 +152,8 @@ public:	/* typedefs */
 		int ret;
 	};
 public: /* constant */        
-	static const U32 max_rpc_packlen = 32 * 1024;   /* max 32kb */
+	static const U32 max_rpc_packlen = 4 * 1024;   /* max 4kb */
+	static const U32 pack_use_heap_threshold = 4 * 1024;
 	enum {
 		lua_rpc_nobiton = 0,
 		lua_rpc_entry = 0x1, 	/* first rpc (start point?) */

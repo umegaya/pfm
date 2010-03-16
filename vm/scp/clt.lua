@@ -17,6 +17,7 @@ function main(player)
 
 --	real test: single value roundtrip
 	assert(10011 == player:echo(10011))
+	assert(3.14159265358979 == player:echo(3.14159265358979))
 	assert(0x1234123412341234 == player:echo(0x1234123412341234))
 	assert(nil == player:echo(nil))
 	assert(true == player:echo(true))
@@ -53,9 +54,9 @@ function main(player)
 	assert(retval == 1384)
 
 --	real test: pfm.new
---	player.item = pfm.new("ITEM")
---	assert(not player.item.kind == "ITEM")
-	
+	player.item = player:new_item(100)
+	assert(player.item.typename == "ITEM")
+	assert(player.item.attack_point == 1000)
 end
 
 function remote_error(from, msg)

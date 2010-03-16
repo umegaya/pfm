@@ -71,6 +71,7 @@ nbr_rand_init()
 void
 nbr_rand_fin()
 {
+	cleanup_rand();
 }
 
 U32

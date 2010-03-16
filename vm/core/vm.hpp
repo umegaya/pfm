@@ -88,9 +88,12 @@ public:
 		vmcmd_rpc,		/* c->s, c->c, s->s */
 		vmcmd_new_object,	/* s->m, m->s */
 		vmcmd_login,	/* c->s->m */
+		vmcmd_node_ctrl,	/* s->m */
 		vmcode_rpc,		/* s->c, c->c, s->s */
 		vmcode_new_object,	/* s->m, m->s */
 		vmcode_login,	/* m->s->c */
+		vmcode_node_ctrl,	/* m->s */
+		vmnotify_node_change,	/* m->s */
 	};
 	typedef enum {
 		rpct_invalid,
@@ -102,6 +105,11 @@ public:
 
 		rpct_error = 255,/* error happen on remote */
 	} rpctype;
+	typedef enum {
+		load_purpose_invalid,
+		load_purpose_login,
+		load_purpose_create,
+	} loadpurpose;
 	enum {	/* flag for controling fiber behavior */
 		rpcopt_flag_not_set = 0x0,
 		rpcopt_flag_invoked = 0x01,/* means invoked by other rpc. so
@@ -112,8 +120,11 @@ public:
 	static const int vmd_account_maxlen = 64;
 	static const int vmd_procid_maxlen = 32;
 	static const int vmd_max_replicate_host = 32;
+	static const int vmd_max_worldname = 32;
+	static const int vmd_max_node_ctrl_cmd = 256;
 	typedef char login_id[vmd_account_maxlen];
 	typedef char proc_id[vmd_procid_maxlen];
+	typedef char world_id[vmd_max_worldname];
 };
 typedef vmprotocol::rpctype rpctype;
 
@@ -140,27 +151,40 @@ public:	/* receiver */
 	ASSERT(false); }
 	int on_recv(char *p, int l);
 	int recv_cmd_rpc(U32 msgid, UUID &uuid, proc_id &pid,
-		char *p, int l, rpctype rc) {__PE(); }
+			char *p, int l, rpctype rc) {__PE(); }
 	template <class Q> int recv_code_rpc(Q &q, char *p, size_t l, rpctype rc)
-		{__PE(); }
-	int recv_cmd_new_object(U32 msgid, const char *acc,
-		UUID &uuid, char *addr, size_t adrl, char *p, size_t l) {__PE();}
-	template <class Q> int recv_code_new_object(Q &q, int r, const char *acc, 
-		UUID &uuid, char *p, size_t l) {__PE();}
-	int recv_cmd_login(U32 msgid, const char *acc, char *p, size_t l) {__PE();}
-	template <class Q> int recv_code_login(Q &q, int r, UUID &uuid, char *p, int l)
-		{__PE();}
+			{__PE(); }
+	int recv_cmd_new_object(U32 msgid, UUID &uuid,
+			char *addr, size_t adrl, char *p, size_t l) {__PE();}
+	template <class Q> int recv_code_new_object(Q &q, int r,
+			UUID &uuid, char *p, size_t l) {__PE();}
+	int recv_cmd_login(U32 msgid, const world_id &wid, const char *acc,
+			char *p, size_t l) {__PE();}
+	template <class Q> int recv_code_login(Q &q, int r, const world_id &wid, 
+			UUID &uuid, char *p, int l) {__PE();}
+	int recv_cmd_node_ctrl(int r, const char *cmd,
+			const world_id &wid, const address &a) {__PE();}
+	template <class Q> int recv_code_node_ctrl(Q &q, int r, const char *cmd,
+			const world_id &wid, const address &a) {__PE();}
+	int recv_notify_node_change(const char *cmd,
+			const world_id &wid, const address &a) {__PE();}
 public: /* sender */
 	template <class Q> int send_rpc(SNDR &s, const UUID &uuid, const proc_id &p, 
 			char *a, size_t al, rpctype rt, Q **pq);
 	int reply_rpc(SNDR &s, U32 msgid, char *p, size_t l, rpctype rt);
-	template <class Q> int send_new_object(SNDR &s, const char *acc, 
-		U32 rmsgid, const UUID &uuid,
-		char *addr, size_t adrl, char *p, size_t l, Q **pq);
-	int reply_new_object(SNDR &s, U32 msgid, int r,
-			const char *acc, UUID &uuid, char *p, size_t l);
-	int send_login(SNDR &s, U32 msgid, const char *acc, char *p, size_t l);
-	int reply_login(SNDR &s, U32 msgid, int r, const UUID &uuid, char *p, size_t l);
+	template <class Q> int send_new_object(SNDR &s, U32 rmsgid, const UUID &uuid,
+			char *addr, size_t adrl, char *p, size_t l, Q **pq);
+	int reply_new_object(SNDR &s, U32 msgid, int r, UUID &uuid, char *p, size_t l);
+	int send_login(SNDR &s, U32 msgid, const world_id &wid,
+			const char *acc, char *p, size_t l);
+	int reply_login(SNDR &s, U32 msgid, int r, const world_id &wid,
+			const UUID &uuid, char *p, size_t l);
+	int send_node_ctrl(SNDR &s, U32 msgid, const char *cmd,
+			const world_id &wid, const address &a);
+	int reply_node_ctrl(SNDR &s, U32 msgid, int r, const char *cmd,
+			const world_id &wid, const address &a);
+	int notify_node_change(SNDR &s, const char *cmd,
+			const world_id &wid, const address &a);
 };
 
 /*-------------------------------------------------------------*/
@@ -242,9 +266,11 @@ public:
 	typedef vmprotocol_impl<S,IDG> protocol;
 	typedef OF<S,IDG,KVS> object_factory;
 	typedef typename object_factory::object object;
+	typedef typename object_factory::connector_factory connector_factory;
 	typedef typename protocol::UUID UUID;
 protected:
 	static object_factory m_of;
+	static connector_factory *m_cf;
 	SR m_sr;
 public:
 	vm_impl(S *s) : protocol(s) {}
@@ -255,13 +281,44 @@ public:
 public:
 	SR &sr() { return m_sr; }
 	const SR & sr() const { return m_sr; }
+	static connector_factory &cf() { return *m_cf; }
+	static void set_cf(connector_factory *cf) { m_cf = cf; }
+};
+
+
+/*-------------------------------------------------------------*/
+/* sfc::vm::vmdconfig									       */
+/*-------------------------------------------------------------*/
+class vmdconfig : public config {
+public:
+	char m_lang[16];
+	char m_langopt[256];
+	char m_kvs[16];
+	char m_kvsopt[256];
+	U32	m_max_object, m_rpc_entry, m_rpc_ongoing;
+	U32 m_max_node, m_max_replica;
+public:
+	vmdconfig() : config(), m_max_object(1000 * 1000),
+		m_rpc_entry(1000 * 1000), m_rpc_ongoing(1000 * 1000),
+		m_max_node(10000), m_max_replica(vmprotocol::vnode_replicate_num) {}
+	vmdconfig(BASE_CONFIG_PLIST,
+			char *lang, char *lopt,
+			char *kvs, char *kopt,
+			int max_object, int rpc_entry, int rpc_ongoing,
+			int max_node, int max_replica);
+	virtual int set(const char *k, const char *v);
+	virtual config *dup() const {
+		vmdconfig *cfg = new vmdconfig;
+		*cfg = *this;
+		return cfg;
+	}
 };
 } //sfc::vm
 } //sfc
 
 
 /*-------------------------------------------------------------*/
-/* sfc::vm::lang                                               */
+/* sfc::vm::lang (add here for new script language support     */
 /*-------------------------------------------------------------*/
 #include "lua.hpp"
 
@@ -279,13 +336,17 @@ class vmnode : public session,
 	public vm_impl<S,lua,tc,mp,mac_idgen,object_factory_impl> {
 public:
 	typedef vm_impl<S,lua,tc,mp,mac_idgen,object_factory_impl> vmmodule;
+	typedef session super;
 	typedef typename vmmodule::object_factory object_factory;
 	typedef typename vmmodule::object object;
 	typedef typename vmmodule::protocol protocol;
 	typedef typename vmmodule::UUID UUID;
 	typedef typename vmmodule::script script;
+	typedef typename vmmodule::world_id world_id;
+	typedef typename vmmodule::loadpurpose loadpurpose;
 	typedef typename script::VM VM;
 	typedef typename script::proc_id proc_id;
+	typedef typename object_factory::conn connector;
 	typedef grid_servant_factory_impl<S,UUID,object_factory::template CP> 
 		svnt_base_factory;
 	typedef connector_factory_impl<S,UUID,object_factory::template CP>
@@ -293,21 +354,60 @@ public:
 	typedef factory_impl<S>
 		mstr_base_factory;
 public:
-	class dummy_backend : public protocol {
-		dummy_backend(S *s) : protocol(s) {}
+	class world {
+	protected:
+		CONHASH m_ch;
+		UUID m_world_object;
+	public:
+		world() : m_ch(NULL), m_world_object() {}
+		~world() { fin(); }
+		int init(int max_node, int max_replica);
+		void fin() { nbr_conhash_fin(m_ch); }
+		const CHNODE *lookup_node(UUID &uuid) {
+			return nbr_conhash_lookup(m_ch, (const char *)&uuid, sizeof(uuid));
+		}
+		int add_node(const S &s) { return add_node(*s.chnode()); }
+		int add_node(const CHNODE &n) { return nbr_conhash_add_node(m_ch, (CHNODE *)&n); }
+		int del_node(const S &s) { return del_node(*s.chnode()); }
+		int del_node(const CHNODE &n) { return nbr_conhash_del_node(m_ch, (CHNODE *)&n); }
+		static void set_node(S &s, const char *addr) {
+			nbr_conhash_set_node(s.chnode(), addr, vmprotocol::vnode_replicate_num);
+		}
 	};
-	dummy_backend *backend_conn() { ASSERT(false); return (dummy_backend *)NULL; }
+	static int init_world(int max_world);
+	world *create_world(const world_id &wid);
+protected:
+	static map<world, world_id> m_wl;	/* world list */
+	CHNODE m_node;	/* node information */
+public:
+	connector *backend_connect(address &a) {
+		return vmmodule::cf().backend_connect(a); }
+	connector *backend_conn() { return vmmodule::cf().backend_conn(); }
 	class querydata : public node::querydata {
 	public:
+		U8 m_data, padd[3];
 		union {
 			VM m_vm;
-			long m_data;
 		};
 	public:
 		VM &vm() { return m_vm; }
 		S *sender() { return (S *)node::querydata::s; }
 	};
-	vmnode(S *s) : session(), vmmodule(s) {}
+public:
+	vmnode(S *s) : session(), vmmodule(s) { memset(&m_node, 0, sizeof(m_node)); }
+	CHNODE *chnode() { return &m_node; }
+	const CHNODE *chnode() const { return &m_node; }
+	static world *find_world(world_id &wid) { return m_wl.find(wid); }
+	void fin() {
+		if (m_node.replicas > 0) {
+			typename map<world, world_id>::iterator it = m_wl.begin();
+			for (; it != m_wl.end(); it = m_wl.next(it)) {
+				it->del_node(*((S *)this));
+			}
+		}
+		super::fin();
+	}
+public:
 	static const UUID &backend_key() { return protocol::invalid_id(); }
 	const UUID &verify_uuid(const UUID &uuid) const { return uuid; }
 	querydata *senddata(S &s, U32 msgid, char *p, int l);
@@ -315,6 +415,9 @@ public:
 	int recv_cmd_rpc(U32 msgid, UUID &uuid, proc_id &pid,
 			char *p, int l, rpctype rc);
 	int recv_code_rpc(querydata &q, char *p, size_t l, rpctype rc);
+	template <class Q> int load_or_create_object(U32 msgid,
+			UUID &uuid, char *p, size_t l, loadpurpose lp,
+			Q **pq) { ASSERT(false); return 0; }
 };
 template <class S> static inline typename S::factory *sf(S &s) {
 	return (typename S::factory *)s.f();

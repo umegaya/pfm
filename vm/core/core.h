@@ -28,7 +28,7 @@ object_factory_impl<S,IDG,KVS>::m_om;
 template <class S, class IDG, class KVS>
 int object_factory_impl<S,IDG,KVS>::init(int max_object)
 {
-	if (!m_om.init(max_object, max_object, 
+	if (!m_om.init(max_object, max_object, -1,
 		opt_threadsafe | opt_expandable)) {
 		return NBR_EMALLOC;
 	}
@@ -60,10 +60,12 @@ int vmprotocol_impl<S,IDG,SNDR>::on_recv(char *p, int l)
 #endif
 	U8 cmd, rt; U32 msgid;
 	char account[vmprotocol::vmd_account_maxlen];
+	char strcmd[vmprotocol::vmd_max_node_ctrl_cmd];
 	int r, len;
 	typename S::querydata *q = NULL;
 	typename S::factory *sf = (typename S::factory *)_this().f();
-	proc_id pid;
+	proc_id pid; world_id wid;
+	address a;
 	UUID uuid;
 	POP_START(p, l);
 	POP_8(cmd);
@@ -78,17 +80,23 @@ int vmprotocol_impl<S,IDG,SNDR>::on_recv(char *p, int l)
 		_this().recv_cmd_rpc(msgid, uuid, pid, POP_BUF(), POP_REMAIN(), (rpctype)rt);
 		break;
 	case vmprotocol::vmcmd_new_object: {     /* s->m, m->s */
-		POP_STR(account, sizeof(account));
 		len = sizeof(UUID);
 		POP_8A(&(uuid), len);
 		char addr[l]; int adrl = l;
 		POP_8A(addr, adrl);
-		_this().recv_cmd_new_object(msgid, account, uuid, addr, adrl,
+		_this().recv_cmd_new_object(msgid, uuid, addr, adrl,
 				POP_BUF(), POP_REMAIN());
 		} break;
 	case vmprotocol::vmcmd_login:
+		POP_STR(wid, sizeof(wid));
 		POP_STR(account, sizeof(account));
-		_this().recv_cmd_login(msgid, account, POP_BUF(), POP_REMAIN());
+		_this().recv_cmd_login(msgid, wid, account, POP_BUF(), POP_REMAIN());
+		break;
+	case vmprotocol::vmcmd_node_ctrl:		/* s->m */
+		POP_STR(strcmd, sizeof(strcmd));
+		POP_STR(wid, sizeof(wid));
+		POP_ADDR(a);
+		_this().recv_cmd_node_ctrl(msgid, strcmd, wid, a);
 		break;
 	case vmprotocol::vmcode_rpc:            /* s->c, c->c, s->s */
 		POP_8(rt);
@@ -100,24 +108,35 @@ int vmprotocol_impl<S,IDG,SNDR>::on_recv(char *p, int l)
 		q = (typename S::querydata *)sf->find_query(msgid);
 		if (!q || !nbr_sock_is_same(q->sk, q->s->sk())) { ASSERT(q); goto error; }
 		POP_32(r);
-		POP_STR(account, sizeof(account));
 		len = sizeof(UUID);
 		POP_8A(&(uuid), len);
-		if (r < 0) { 
-			q->sender()->recv_code_new_object(*q, r, account, uuid, "", 0); }
-		else {
-			q->sender()->recv_code_new_object(*q, r, account, uuid, 
-				POP_BUF(), POP_REMAIN());
-		}
+		q->sender()->recv_code_new_object(*q, r, uuid, POP_BUF(), POP_REMAIN());
 		break;
 	case vmprotocol::vmcode_login:
 		q = (typename S::querydata *)sf->find_query(msgid);
 		if (!q || !nbr_sock_is_same(q->sk, q->sender()->sk())) {
 			ASSERT(q); goto error; }
 		POP_32(r);
+		POP_STR(wid, sizeof(wid));
 		len = sizeof(UUID);
 		POP_8A(&(uuid), len);
-		q->sender()->recv_code_login(*q, r, uuid, POP_BUF(), POP_REMAIN());
+		q->sender()->recv_code_login(*q, r, wid, uuid, POP_BUF(), POP_REMAIN());
+		break;
+	case vmprotocol::vmcode_node_ctrl:
+		q = (typename S::querydata *)sf->find_query(msgid);
+		if (!q || !nbr_sock_is_same(q->sk, q->sender()->sk())) {
+			ASSERT(q); goto error; }
+		POP_32(r);
+		POP_STR(strcmd, sizeof(strcmd));
+		POP_STR(wid, sizeof(wid));
+		POP_ADDR(a);
+		q->sender()->recv_code_node_ctrl(*q, r, strcmd, wid, a);
+		break;
+	case vmprotocol::vmnotify_node_change:	/* m->s */
+		POP_STR(strcmd, sizeof(strcmd));
+		POP_STR(wid, sizeof(wid));
+		POP_ADDR(a);
+		_this().recv_notify_node_change(strcmd, wid, a);
 		break;
 	}
 error:
@@ -141,6 +160,13 @@ int vmprotocol_impl<S,IDG,SNDR>::send_rpc(
 	PUSH_8(rt);
 	PUSH_8A((U8 *)&uuid, sizeof(UUID));
 	PUSH_STR(p);
+#if defined(_DEBUG)
+	static int rpc_c = 0;
+	if (rt == vmprotocol::rpct_getter && strcmp(p, "echo") == 0) {
+		rpc_c++;
+		ASSERT(rpc_c <= 1);
+	}
+#endif
 	PUSH_MEM(args, alen);
 	/* instatiation of vmdmstr, here causes type error. 
 	but actually vmdmstr never uses sendrpc call. so cast is ok
@@ -169,22 +195,20 @@ int vmprotocol_impl<S,IDG,SNDR>::reply_rpc(
 
 template <class S,class IDG,class SNDR>
 template <class Q>
-int vmprotocol_impl<S,IDG,SNDR>::send_new_object(SNDR &s,
-		const char *acc, U32 rmsgid, const UUID &uuid,
-		char *addr, size_t adrl, char *p, size_t l,
-		Q **pq)
+int vmprotocol_impl<S,IDG,SNDR>::send_new_object(SNDR &s, U32 rmsgid,
+		const UUID &uuid, char *addr, size_t adrl, char *p, size_t pl, Q **pq)
 {
 	size_t sz = 
-		2 * (1 + vmprotocol::vmd_account_maxlen + sizeof(UUID) + sizeof(rmsgid));
+		2 * (1 + pl + vmprotocol::vmd_account_maxlen +
+				sizeof(UUID) + sizeof(rmsgid));
 	char buf[sz];
 	PUSH_START(buf, sz);
 	PUSH_8(vmprotocol::vmcmd_new_object);
 	U32 msgid = _this().f()->msgid();
 	PUSH_32(msgid);
-	PUSH_STR(acc);
 	PUSH_8A((char *)&uuid, sizeof(UUID));
 	PUSH_8A(addr, adrl);
-	PUSH_MEM(p, l);
+	PUSH_MEM(p, pl);
 	/* same as send_rpc's cast, it causes no effect */
 	Q *q = (Q *)_this().senddata(s, msgid, buf, PUSH_LEN());
 	if (q) {
@@ -196,8 +220,8 @@ int vmprotocol_impl<S,IDG,SNDR>::send_new_object(SNDR &s,
 }
 
 template <class S,class IDG,class SNDR>
-int vmprotocol_impl<S,IDG,SNDR>::reply_new_object(SNDR &s, U32 msgid, int r,
-		const char *acc, UUID &uuid, char *p, size_t l)
+int vmprotocol_impl<S,IDG,SNDR>::reply_new_object(SNDR &s, U32 msgid,
+		int r, UUID &uuid, char *p, size_t l)
 {
 	size_t sz =
 		2 * (1 + sizeof(msgid) + sizeof(r) + sizeof(UUID) + l);
@@ -206,7 +230,6 @@ int vmprotocol_impl<S,IDG,SNDR>::reply_new_object(SNDR &s, U32 msgid, int r,
 	PUSH_8(vmprotocol::vmcode_new_object);
 	PUSH_32(msgid);
 	PUSH_32(r);
-	PUSH_STR(acc);
 	PUSH_8A(&uuid, sizeof(UUID));
 	PUSH_MEM(p, l);
 	return _this().send(buf, PUSH_LEN());
@@ -214,7 +237,7 @@ int vmprotocol_impl<S,IDG,SNDR>::reply_new_object(SNDR &s, U32 msgid, int r,
 
 template <class S,class IDG,class SNDR>
 int vmprotocol_impl<S,IDG,SNDR>::send_login(SNDR &s, U32 rmsgid,
-		const char *acc, char *authdata, size_t len)
+		const world_id &wid, const char *acc, char *authdata, size_t len)
 {
 	size_t sz = 2 * (1 + vmprotocol::vmd_account_maxlen + len);
 	char buf[sz];
@@ -222,6 +245,7 @@ int vmprotocol_impl<S,IDG,SNDR>::send_login(SNDR &s, U32 rmsgid,
 	PUSH_8(vmprotocol::vmcmd_login);
 	U32 msgid = _this().f()->msgid();
 	PUSH_32(msgid);
+	PUSH_STR(wid);
 	PUSH_STR(acc);
 	PUSH_MEM(authdata, len);
 	typename S::querydata *q = _this().senddata(s, msgid, buf, PUSH_LEN());
@@ -234,7 +258,7 @@ int vmprotocol_impl<S,IDG,SNDR>::send_login(SNDR &s, U32 rmsgid,
 
 template <class S,class IDG,class SNDR>
 int vmprotocol_impl<S,IDG,SNDR>::reply_login(SNDR &s, U32 msgid,
-		int r, const UUID &uuid, char *p, size_t l)
+		int r, const world_id &wid, const UUID &uuid, char *p, size_t l)
 {
 	size_t sz =
 		2 * (1 + vmprotocol::vmd_account_maxlen + 
@@ -244,15 +268,82 @@ int vmprotocol_impl<S,IDG,SNDR>::reply_login(SNDR &s, U32 msgid,
 	PUSH_8(vmprotocol::vmcode_login);
 	PUSH_32(msgid);
 	PUSH_32(r);
+	PUSH_STR(wid);
 	PUSH_8A(&uuid, sizeof(UUID));
 	PUSH_MEM(p, l);
 	return _this().send(buf, PUSH_LEN());
+}
+
+template <class S,class IDG,class SNDR>
+int vmprotocol_impl<S,IDG,SNDR>::send_node_ctrl(SNDR &s,
+		U32 rmsgid, const char *cmd, const world_id &wid, const address &a)
+{
+	size_t sz =
+		2 * (1 + sizeof(U32) + vmd_max_node_ctrl_cmd +
+				sizeof(world_id) + sizeof(address));
+	char buf[sz];
+	PUSH_START(buf, sz);
+	PUSH_8(vmprotocol::vmcmd_node_ctrl);
+	U32 msgid = _this().f()->msgid();
+	PUSH_32(msgid);
+	PUSH_STR(cmd);
+	PUSH_STR(wid);
+	PUSH_ADDR(a);
+	typename S::querydata *q = _this().senddata(s, msgid, buf, PUSH_LEN());
+	if (q) {
+		q->msgid = rmsgid;
+		return PUSH_LEN();
+	}
+	return NBR_EEXPIRE;
+}
+
+
+template <class S,class IDG,class SNDR>
+int vmprotocol_impl<S,IDG,SNDR>::reply_node_ctrl(SNDR &s, U32 msgid,
+		int r, const char *cmd, const world_id &wid, const address &a)
+{
+	size_t sz =
+		2 * (1 + sizeof(U32) + vmd_max_node_ctrl_cmd +
+				sizeof(world_id) + sizeof(address));
+	char buf[sz];
+	PUSH_START(buf, sz);
+	PUSH_32(msgid);
+	PUSH_32(r);
+	PUSH_STR(cmd);
+	PUSH_STR(wid);
+	PUSH_ADDR(a);
+	return _this().send(buf, PUSH_LEN());
+}
+
+template <class S,class IDG,class SNDR>
+int vmprotocol_impl<S,IDG,SNDR>::notify_node_change(SNDR &s,
+		const char *cmd, const world_id &wid, const address &a)
+{
+	size_t sz =
+		2 * (1 + sizeof(U32) + vmd_max_node_ctrl_cmd +
+				sizeof(world_id) + sizeof(address));
+	char buf[sz];
+	PUSH_START(buf, sz);
+	PUSH_8(vmprotocol::vmnotify_node_change);
+	U32 msgid = 0;
+	PUSH_32(msgid);
+	PUSH_STR(cmd);
+	PUSH_STR(wid);
+	PUSH_ADDR(a);
+	return _this().f()->broadcast(buf, PUSH_LEN());
 }
 
 
 /*-------------------------------------------------------------*/
 /* sfc::vm::vmnode											   */
 /*-------------------------------------------------------------*/
+template <class S,template <class OF,class SR> class L,
+	class KVS,class SR,class IDG,
+	template <class S, class IDG, class KVS> class OF>
+typename vm_impl<S,L,KVS,SR,IDG,OF>::connector_factory *
+	vm_impl<S,L,KVS,SR,IDG,OF>::m_cf = NULL;
+
+
 template <class S,template <class OF,class SR> class L,
 	class KVS,class SR,class IDG,
 	template <class S, class IDG, class KVS> class OF>
@@ -280,6 +371,31 @@ void vm_impl<S,L,KVS,SR,IDG,OF>::fin_vm()
 /*-------------------------------------------------------------*/
 /* sfc::vm::vmnode											   */
 /*-------------------------------------------------------------*/
+/* conhash */
+template <class S>
+	map<typename vmnode<S>::world, typename vmnode<S>::world_id>
+	vmnode<S>::m_wl;	/* world list */
+
+template <class S>
+int vmnode<S>::world::init(int max_node, int max_replica)
+{
+	if (!(m_ch = nbr_conhash_init(NULL, max_node, max_replica))) {
+		return NBR_EMALLOC;
+	}
+	return NBR_OK;
+}
+
+/* vmnode */
+template <class S>
+int vmnode<S>::init_world(int max_world)
+{
+	if (!m_wl.init(max_world, max_world / 3,
+			-1, opt_threadsafe | opt_expandable)) {
+		return NBR_EMALLOC;
+	}
+	return NBR_OK;
+}
+
 template <class S>
 int vmnode<S>::recv_cmd_rpc(U32 msgid, UUID &uuid, proc_id &pid, 
 		char *p, int l, rpctype rt)
@@ -303,6 +419,24 @@ int vmnode<S>::recv_code_rpc(querydata &q, char *p, size_t l, rpctype rt)
 			q.vm(), p, l, rt);
 }
 
+template <class S>
+typename vmnode<S>::world *vmnode<S>::create_world(const world_id &wid)
+{
+	world *w = m_wl.find(wid);
+	if (!w) {
+		if (!(w = m_wl.create(wid))) {
+			ASSERT(false);
+			return NULL;
+		}
+		int r;
+		const vmdconfig &vcfg = (const vmdconfig &)super::cfg();
+		if ((r = w->init(vcfg.m_max_node, vcfg.m_max_replica)) < 0) {
+			return NULL;
+		}
+	}
+	return w;
+}
+
 template <class S> typename vmnode<S>::querydata *
 vmnode<S>::senddata(S &s, U32 msgid, char *p, int l)
 {
@@ -321,3 +455,5 @@ vmnode<S>::senddata(S &s, U32 msgid, char *p, int l)
 	sf(*((S *)this))->remove_query(msgid);
 	return NULL;
 }
+
+

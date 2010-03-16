@@ -13,6 +13,9 @@ CFLAG = -Wall -g -fPIC -D_DEBUG -D_TEST
 else 
 CFLAG = -O4 -fPIC
 endif
+ifeq ($(VALGRIND), 1)
+CFLAG += -D_VALGRIND
+endif
 
 CONFS = configure *.log config.status config.h.in confdefs.h
 COREFILE = core.*
