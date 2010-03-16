@@ -147,7 +147,7 @@ int vmd::vmdsvnt::load_or_create_object(U32 msgid,
 {
 	bool retry_f = false;
 	const CHNODE *n;
-	world *w = super::m_wl.find(m_wid);
+	world *w = object_factory::find_world(m_wid);
 	if (!w) {
 		ASSERT(false);
 		return NBR_ENOTFOUND;
@@ -264,7 +264,8 @@ int
 vmd::vmdsvnt::recv_notify_node_change(const char *cmd,
 		const world_id &wid, const address &a)
 {
-	world *w = IS_ADD(cmd) ? create_world(wid) : m_wl.find(wid);
+	world *w = IS_ADD(cmd) ? create_world(wid) :
+			object_factory::find_world(wid);
 	if (!w) {
 		ASSERT(false);
 		return NBR_EEXPIRE;
@@ -362,7 +363,7 @@ vmd::create_config(config *cl[], int sz)
 			nbr_sock_send_bin16,
 			config::cfg_flag_server,
 			"lua", "", "tc", "",
-			10000, 10000, 10000,
+			10000, 10, 10000, 10000,
 			10000, vmprotocol::vnode_replicate_num
 			);
 	cl[1] = new vmdconfig (
@@ -381,7 +382,7 @@ vmd::create_config(config *cl[], int sz)
 			nbr_sock_send_bin16,
 			config::cfg_flag_server,
 			"lua", "", "tc", "",
-			10000, 10000, 10000,
+			10000, 10, 10000, 10000,
 			10000, vmprotocol::vnode_replicate_num
 			);
 	cl[2] = new vmdconfig (
@@ -401,7 +402,7 @@ vmd::create_config(config *cl[], int sz)
 			nbr_sock_send_bin16,
 			config::cfg_flag_not_set,
 			"lua", "", "tc", "",
-			10000, 10000, 10000,
+			10000, 10, 10000, 10000,
 			10000, vmprotocol::vnode_replicate_num
 			);
 	return 3;
@@ -415,11 +416,8 @@ vmd::boot(int argc, char *argv[])
 	vmdmstr::factory *mstr = find_factory<vmdmstr::factory>("mstr");
 	if (mstr) {
 		if ((vc = find_config<vmdconfig>("mstr"))) {
-			if ((r = vmdmstr::init_vm(
-				vc->m_max_object, vc->m_rpc_entry, vc->m_rpc_ongoing)) < 0) {
-				return r;
-			}
-			if ((r = vmdmstr::init_world(10)) < 0) {
+			if ((r = vmdmstr::init_vm(vc->m_max_object, vc->m_max_world,
+					vc->m_rpc_entry, vc->m_rpc_ongoing)) < 0) {
 				return r;
 			}
 			if ((r = vmdmstr::init_login_map(10000)) < 0) {
@@ -433,11 +431,8 @@ vmd::boot(int argc, char *argv[])
 	vmdsvnt::factory *svnt = find_factory<vmdsvnt::factory>("svnt");
 	if (svnt) {
 		if ((vc = find_config<vmdconfig>("svnt"))) {
-			if ((r = vmdsvnt::init_vm(
-				vc->m_max_object, vc->m_rpc_entry, vc->m_rpc_ongoing)) < 0) {
-				return r;
-			}
-			if ((r = vmdsvnt::init_world(10)) < 0) {
+			if ((r = vmdsvnt::init_vm(vc->m_max_object, vc->m_max_world,
+					vc->m_rpc_entry, vc->m_rpc_ongoing)) < 0) {
 				return r;
 			}
 			if (!vmdsvnt::load("./scp/svt.lua")) {
@@ -460,8 +455,8 @@ vmd::boot(int argc, char *argv[])
 	vmdclnt::factory *clnt = find_factory<vmdclnt::factory>("clnt");
 	if (clnt) {
 		if ((vc = find_config<vmdconfig>("clnt"))) {
-			if ((r = vmdclnt::init_vm(
-				vc->m_max_object, vc->m_rpc_entry, vc->m_rpc_ongoing)) < 0) {
+			if ((r = vmdclnt::init_vm(vc->m_max_object, vc->m_max_world,
+					vc->m_rpc_entry, vc->m_rpc_ongoing)) < 0) {
 				return r;
 			}
 			if (!vmdclnt::load("./scp/clt.lua")) {

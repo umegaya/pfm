@@ -26,9 +26,19 @@ map<typename object_factory_impl<S,IDG,KVS>::object,
 object_factory_impl<S,IDG,KVS>::m_om;
 
 template <class S, class IDG, class KVS>
-int object_factory_impl<S,IDG,KVS>::init(int max_object)
+map<typename object_factory_impl<S,IDG,KVS>::world,
+	typename object_factory_impl<S,IDG,KVS>::world_id>
+object_factory_impl<S,IDG,KVS>::m_wl;
+
+
+template <class S, class IDG, class KVS>
+int object_factory_impl<S,IDG,KVS>::init(int max_object, int max_world)
 {
 	if (!m_om.init(max_object, max_object, -1,
+		opt_threadsafe | opt_expandable)) {
+		return NBR_EMALLOC;
+	}
+	if (!m_wl.init(max_world, max_world / 3, -1,
 		opt_threadsafe | opt_expandable)) {
 		return NBR_EMALLOC;
 	}
@@ -43,8 +53,21 @@ template <class S, class IDG, class KVS>
 void object_factory_impl<S,IDG,KVS>::fin()
 {
 	m_om.fin();
+	m_wl.fin();
 	KVS::fin();
 }
+
+template <class S, class IDG, class KVS>
+template <class C>
+int object_factory_impl<S,IDG,KVS>::world_impl<C>::init(
+		int max_node, int max_replica)
+{
+	if (!(m_ch = nbr_conhash_init(NULL, max_node, max_replica))) {
+		return NBR_EMALLOC;
+	}
+	return NBR_OK;
+}
+
 
 /*-------------------------------------------------------------*/
 /* sfc::vm::vmprotocol_impl
@@ -343,17 +366,16 @@ template <class S,template <class OF,class SR> class L,
 typename vm_impl<S,L,KVS,SR,IDG,OF>::connector_factory *
 	vm_impl<S,L,KVS,SR,IDG,OF>::m_cf = NULL;
 
-
 template <class S,template <class OF,class SR> class L,
 	class KVS,class SR,class IDG,
 	template <class S, class IDG, class KVS> class OF>
 int vm_impl<S,L,KVS,SR,IDG,OF>::init_vm(
-	int max_object, int max_rpc, int max_rpc_ongoing)
+	int max_object, int max_world, int max_rpc, int max_rpc_ongoing)
 {
 	int r;
 	if ((r = script::init(max_rpc, max_rpc_ongoing)) < 0) { return r; }
 	if ((r = IDG::init()) < 0) { return r; }
-	if ((r = object_factory::init(max_object)) < 0) { return r; }
+	if ((r = object_factory::init(max_object, max_world)) < 0) { return r; }
 	return r;
 }
 
@@ -371,31 +393,7 @@ void vm_impl<S,L,KVS,SR,IDG,OF>::fin_vm()
 /*-------------------------------------------------------------*/
 /* sfc::vm::vmnode											   */
 /*-------------------------------------------------------------*/
-/* conhash */
-template <class S>
-	map<typename vmnode<S>::world, typename vmnode<S>::world_id>
-	vmnode<S>::m_wl;	/* world list */
-
-template <class S>
-int vmnode<S>::world::init(int max_node, int max_replica)
-{
-	if (!(m_ch = nbr_conhash_init(NULL, max_node, max_replica))) {
-		return NBR_EMALLOC;
-	}
-	return NBR_OK;
-}
-
 /* vmnode */
-template <class S>
-int vmnode<S>::init_world(int max_world)
-{
-	if (!m_wl.init(max_world, max_world / 3,
-			-1, opt_threadsafe | opt_expandable)) {
-		return NBR_EMALLOC;
-	}
-	return NBR_OK;
-}
-
 template <class S>
 int vmnode<S>::recv_cmd_rpc(U32 msgid, UUID &uuid, proc_id &pid, 
 		char *p, int l, rpctype rt)
@@ -420,11 +418,12 @@ int vmnode<S>::recv_code_rpc(querydata &q, char *p, size_t l, rpctype rt)
 }
 
 template <class S>
-typename vmnode<S>::world *vmnode<S>::create_world(const world_id &wid)
+typename vmnode<S>::world *vmnode<S>::create_world(
+		const world_id &wid) const
 {
-	world *w = m_wl.find(wid);
+	world *w = object_factory::find_world(wid);
 	if (!w) {
-		if (!(w = m_wl.create(wid))) {
+		if (!(w = object_factory::create_world(wid))) {
 			ASSERT(false);
 			return NULL;
 		}

@@ -195,6 +195,7 @@ class object_factory_impl : public kernel {
 public:
 	typedef typename IDG::UUID UUID;
 	typedef S session_type;
+	typedef vmprotocol::world_id world_id;
 	template <class C> class CP : public vmprotocol_impl<C,IDG,S> {
 	public:
 		CP(C *c) : vmprotocol_impl<C,IDG,S>(c) {} 
@@ -236,14 +237,45 @@ public:
 		bool create_new() const { return true; }
 	};
 	typedef object_impl<IDG> object;
+public:
+	template <class C>
+	class world_impl  {
+	protected:
+		CONHASH m_ch;
+		UUID m_world_object;
+	public:
+		world_impl() : m_ch(NULL), m_world_object() {}
+		~world_impl() { fin(); }
+		int init(int max_node, int max_replica);
+		void fin() { nbr_conhash_fin(m_ch); }
+		const CHNODE *lookup_node(UUID &uuid) {
+			return nbr_conhash_lookup(m_ch, (const char *)&uuid, sizeof(uuid));
+		}
+		int add_node(const C &s) { return add_node(*s.chnode()); }
+		int add_node(const CHNODE &n) { return nbr_conhash_add_node(m_ch, (CHNODE *)&n); }
+		int del_node(const C &s) { return del_node(*s.chnode()); }
+		int del_node(const CHNODE &n) { return nbr_conhash_del_node(m_ch, (CHNODE *)&n); }
+		static void set_node(C &s, const char *addr) {
+			nbr_conhash_set_node(s.chnode(), addr, vmprotocol::vnode_replicate_num);
+		}
+		static void remove_node(C &s) {
+			typename map<world, world_id>::iterator it = m_wl.begin();
+			for (; it != m_wl.end(); it = m_wl.next(it)) {
+				it->del_node(s);
+			}
+		}
+	};
+	typedef world_impl<S> world;
 protected:
 	static map<object,UUID> m_om;
+	static map<world, world_id> m_wl;	/* world list */
 public:
 	object_factory_impl() {}
 	~object_factory_impl() {}
-	static int init(int max_object);
+	static int init(int max_object, int max_world);
 	static void fin();
 	static object *create(const UUID &id, bool local) {
+		ASSERT(m_om.find(id) == NULL);
 		object *p = m_om.create(id);
 		if (p) {
 			p->set_uuid(id);
@@ -251,7 +283,9 @@ public:
 		}
 		return p;
 	}
+	static world *create_world(const world_id &wid) { return m_wl.create(wid); }
 	static object *find(const UUID &id) { return m_om.find(id); }
+	static world *find_world(const world_id &wid) { return m_wl.find(wid); }
 	static void destroy(object *o) { m_om.erase(o->uuid()); }
 	static UUID new_id() { return IDG::new_id(); }
 };
@@ -278,13 +312,14 @@ protected:
 	SR m_sr;
 public:
 	vm_impl(S *s) : protocol(s) {}
-	static int init_vm(int max_object, int max_rpc, int max_rpc_ongoing);
+	static int init_vm(int max_object, int max_world,
+			int max_rpc, int max_rpc_ongoing);
 	static void fin_vm();
 	static object_factory &of() { return m_of; }
 	static bool load(const char *srcfile) { return script::load(srcfile); }
 public:
 	SR &sr() { return m_sr; }
-	const SR & sr() const { return m_sr; }
+	const SR &sr() const { return m_sr; }
 	static connector_factory &cf() { return *m_cf; }
 	static void set_cf(connector_factory *cf) { m_cf = cf; }
 };
@@ -299,16 +334,18 @@ public:
 	char m_langopt[256];
 	char m_kvs[16];
 	char m_kvsopt[256];
-	U32	m_max_object, m_rpc_entry, m_rpc_ongoing;
+	U32	m_max_object, m_max_world,
+		m_rpc_entry, m_rpc_ongoing;
 	U32 m_max_node, m_max_replica;
 public:
-	vmdconfig() : config(), m_max_object(1000 * 1000),
+	vmdconfig() : config(), m_max_object(1000 * 1000), m_max_world(10),
 		m_rpc_entry(1000 * 1000), m_rpc_ongoing(1000 * 1000),
 		m_max_node(10000), m_max_replica(vmprotocol::vnode_replicate_num) {}
 	vmdconfig(BASE_CONFIG_PLIST,
 			char *lang, char *lopt,
 			char *kvs, char *kopt,
-			int max_object, int rpc_entry, int rpc_ongoing,
+			int max_object, int max_world,
+			int rpc_entry, int rpc_ongoing,
 			int max_node, int max_replica);
 	virtual int set(const char *k, const char *v);
 	virtual config *dup() const {
@@ -346,42 +383,19 @@ public:
 	typedef typename vmmodule::protocol protocol;
 	typedef typename vmmodule::UUID UUID;
 	typedef typename vmmodule::script script;
-	typedef typename vmmodule::world_id world_id;
 	typedef typename vmmodule::loadpurpose loadpurpose;
 	typedef typename script::VM VM;
 	typedef typename script::proc_id proc_id;
 	typedef typename object_factory::conn connector;
+	typedef typename object_factory::world world;
+	typedef typename object_factory::world_id world_id;
 	typedef grid_servant_factory_impl<S,UUID,object_factory::template CP> 
 		svnt_base_factory;
 	typedef connector_factory_impl<S,UUID,object_factory::template CP>
 		clnt_base_factory;
 	typedef factory_impl<S>
 		mstr_base_factory;
-public:
-	class world {
-	protected:
-		CONHASH m_ch;
-		UUID m_world_object;
-	public:
-		world() : m_ch(NULL), m_world_object() {}
-		~world() { fin(); }
-		int init(int max_node, int max_replica);
-		void fin() { nbr_conhash_fin(m_ch); }
-		const CHNODE *lookup_node(UUID &uuid) {
-			return nbr_conhash_lookup(m_ch, (const char *)&uuid, sizeof(uuid));
-		}
-		int add_node(const S &s) { return add_node(*s.chnode()); }
-		int add_node(const CHNODE &n) { return nbr_conhash_add_node(m_ch, (CHNODE *)&n); }
-		int del_node(const S &s) { return del_node(*s.chnode()); }
-		int del_node(const CHNODE &n) { return nbr_conhash_del_node(m_ch, (CHNODE *)&n); }
-		static void set_node(S &s, const char *addr) {
-			nbr_conhash_set_node(s.chnode(), addr, vmprotocol::vnode_replicate_num);
-		}
-	};
-	static int init_world(int max_world);
-	world *create_world(const world_id &wid);
 protected:
-	static map<world, world_id> m_wl;	/* world list */
 	CHNODE m_node;	/* node information */
 public:
 	connector *backend_connect(address &a) {
@@ -401,20 +415,15 @@ public:
 	vmnode(S *s) : session(), vmmodule(s) { memset(&m_node, 0, sizeof(m_node)); }
 	CHNODE *chnode() { return &m_node; }
 	const CHNODE *chnode() const { return &m_node; }
-	static world *find_world(world_id &wid) { return m_wl.find(wid); }
 	void fin() {
-		if (m_node.replicas > 0) {
-			typename map<world, world_id>::iterator it = m_wl.begin();
-			for (; it != m_wl.end(); it = m_wl.next(it)) {
-				it->del_node(*((S *)this));
-			}
-		}
+		if (m_node.replicas > 0) { world::remove_node(*((S *)this)); }
 		super::fin();
 	}
 public:
 	static const UUID &backend_key() { return protocol::invalid_id(); }
 	const UUID &verify_uuid(const UUID &uuid) const { return uuid; }
 	querydata *senddata(S &s, U32 msgid, char *p, int l);
+	world *create_world(const world_id &wid) const;
 	int on_recv(char *p, int l) { return protocol::on_recv(p, l); }
 	int recv_cmd_rpc(U32 msgid, UUID &uuid, proc_id &pid,
 			char *p, int l, rpctype rc);
