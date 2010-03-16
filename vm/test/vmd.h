@@ -72,7 +72,6 @@ public:
 		typedef super::UUID UUID;
 	protected:
 		UUID m_session_uuid;
-		world_id m_wid;
 	public:
 		vmdsvnt() : super(this), m_session_uuid() {}
 		~vmdsvnt() {}
@@ -82,7 +81,8 @@ public:
 				UUID &uuid, char *p, size_t l, loadpurpose lp,
 				querydata **pq);
 	public:/* vmdsvnt */
-		int recv_cmd_new_object(U32 msgid, UUID &uuid, char *p, size_t l);
+		int recv_cmd_new_object(U32 msgid, const world_id &wid,
+				UUID &uuid, char *p, size_t l);
 		int recv_code_new_object(querydata &q, int r, UUID &uuid, char *p, size_t l);
 		int recv_cmd_login(U32 msgid, const world_id &wid, const char *acc,
 				char *ath, size_t athl);

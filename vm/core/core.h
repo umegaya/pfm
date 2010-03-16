@@ -135,9 +135,10 @@ int vmprotocol_impl<S,IDG,SNDR>::on_recv(char *p, int l)
 		_this().recv_cmd_rpc(msgid, uuid, pid, POP_BUF(), POP_REMAIN(), (rpctype)rt);
 		break;
 	case vmprotocol::vmcmd_new_object: {     /* s->m, m->s */
+		POP_STR(wid, sizeof(wid));
 		len = sizeof(UUID);
 		POP_8A(&(uuid), len);
-		_this().recv_cmd_new_object(msgid, uuid, POP_BUF(), POP_REMAIN());
+		_this().recv_cmd_new_object(msgid, wid, uuid, POP_BUF(), POP_REMAIN());
 		} break;
 	case vmprotocol::vmcmd_login:
 		POP_STR(wid, sizeof(wid));
@@ -248,7 +249,7 @@ int vmprotocol_impl<S,IDG,SNDR>::reply_rpc(
 template <class S,class IDG,class SNDR>
 template <class Q>
 int vmprotocol_impl<S,IDG,SNDR>::send_new_object(SNDR &s, U32 rmsgid,
-		const UUID &uuid, char *p, size_t pl, Q **pq)
+		const world_id &wid, const UUID &uuid, char *p, size_t pl, Q **pq)
 {
 	size_t sz = 
 		2 * (1 + pl + vmprotocol::vmd_account_maxlen +
@@ -258,6 +259,7 @@ int vmprotocol_impl<S,IDG,SNDR>::send_new_object(SNDR &s, U32 rmsgid,
 	PUSH_8(vmprotocol::vmcmd_new_object);
 	U32 msgid = _this().f()->msgid();
 	PUSH_32(msgid);
+	PUSH_STR(wid);
 	PUSH_8A((char *)&uuid, sizeof(UUID));
 	PUSH_MEM(p, pl);
 	/* same as send_rpc's cast, it causes no effect */
@@ -433,7 +435,7 @@ int vmnode<S>::recv_cmd_rpc(U32 msgid, UUID &uuid, proc_id &pid,
 		log(ERROR, "object not found (%s)\n", vuuid.to_s(buf, sizeof(buf)));
 	}
 	/* execute fiber */
-	return script::call_proc(protocol::_this(), protocol::_this().cf(),
+	return script::call_proc(protocol::_this(), protocol::_this().cf(), wid(),
 			msgid, *o, pid, p, (size_t)l, rt, protocol::rpcopt_flag_invoked);
 }
 
@@ -441,7 +443,7 @@ template <class S>
 int vmnode<S>::recv_code_rpc(querydata &q, char *p, size_t l, rpctype rt)
 {
 	/* resume fiber */
-	return script::resume_proc(*(q.sender()), protocol::_this().cf(),
+	return script::resume_proc(*(q.sender()), protocol::_this().cf(), wid(),
 			q.vm(), p, l, rt);
 }
 

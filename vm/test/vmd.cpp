@@ -94,8 +94,11 @@ vmd::vmdmstr::recv_cmd_login(U32 msgid, const world_id &wid,
 /* sfc::vmd::vmdservant                                        */
 /*-------------------------------------------------------------*/
 int
-vmd::vmdsvnt::recv_cmd_new_object(U32 msgid, UUID &uuid, char *p, size_t l)
+vmd::vmdsvnt::recv_cmd_new_object(U32 msgid, const world_id &wid,
+		UUID &uuid, char *p, size_t l)
 {
+	/* this function should be executed connector session.
+	 * so m_session_uuid & m_wid is invalid basically. */
 	int r;
 #if defined(_DEBUG)
 	char b[256];
@@ -105,14 +108,14 @@ vmd::vmdsvnt::recv_cmd_new_object(U32 msgid, UUID &uuid, char *p, size_t l)
 		ASSERT(false);
 		return reply_new_object(*this, msgid, NBR_EINVAL, uuid, NULL, 0);
 	}
-	object *o = script::object_new(cf(), NULL/*main VM*/, uuid, NULL, true);
+	object *o = script::object_new(cf(), wid, NULL/*main VM*/, uuid, NULL, true);
 	if (!o) {
 		return reply_new_object(*this, msgid, NBR_EEXPIRE, uuid, NULL, 0);
 	}
 	/* if really newly created, then call initializer with parameter */
 	if (o->create_new()) {
 		proc_id pid = "init_object";
-		if ((r = script::call_proc(*this, cf(), msgid, *o, pid, p, l,
+		if ((r = script::call_proc(*this, cf(), wid, msgid, *o, pid, p, l,
 				rpct_global, vmprotocol::rpcopt_flag_not_set)) < 0) {
 			return reply_new_object(*this, msgid, r, uuid, NULL, 0);
 		}
@@ -131,7 +134,7 @@ vmd::vmdsvnt::recv_cmd_new_object(U32 msgid, UUID &uuid, char *p, size_t l)
 int vmd::vmdsvnt::load_or_create_object(U32 msgid,
 		UUID &uuid, char *p, size_t l, loadpurpose lp, querydata **pq)
 {
-	world *w = object_factory::find_world(m_wid);
+	world *w = object_factory::find_world(super::wid());
 	connector *c;
 	if (!w || !(c = w->connect_assigned_node(cf(), uuid))) {
 		ASSERT(false);
@@ -139,7 +142,7 @@ int vmd::vmdsvnt::load_or_create_object(U32 msgid,
 	}
 	/* send object create */
 	querydata *q;
-	if (c->send_new_object(*this, msgid, uuid, p, l, &q) >= 0) {
+	if (c->send_new_object(*this, msgid, super::wid(), uuid, p, l, &q) >= 0) {
 		/* success. store purpose data */
 		q->m_data = lp;
 		if (pq) { *pq = q; }
@@ -162,23 +165,26 @@ vmd::vmdsvnt::recv_code_new_object(
 	case load_purpose_create:
 		/* lua script resume the point attempt to create pfm object */
 		sr().unpack_start(p, l);
-		return script::resume_create(*(q.sender()), cf(), q.vm(), uuid, sr());
+		return script::resume_create(*(q.sender()), cf(), super::wid(),
+			q.vm(), uuid, sr());
 	case load_purpose_login:
 		if (r < 0) {
-			return q.sender()->reply_login(*this, q.msgid, r, m_wid, uuid, p, l);
+			return q.sender()->reply_login(*this, q.msgid, r,
+				super::wid(), uuid, p, l);
 		}
 		sr().unpack_start(p, l);
 		/* when login, create local object */
-		if ((o = script::object_new(cf(), NULL/*main VM*/, uuid, &(sr()), true))) {
+		if ((o = script::object_new(cf(), super::wid(),
+				NULL/*main VM*/, uuid, &(sr()), true))) {
 			m_session_uuid = uuid;
 			proc_id pid = "load_player";
 			/* pid, "", 0 means no argument */
-			r = script::call_proc(*this, cf(), q.msgid, *o, pid, "", 0,
-					rpct_global, vmprotocol::rpcopt_flag_not_set);
+			r = script::call_proc(*this, cf(), super::wid(), q.msgid, *o, pid,
+					"", 0, rpct_global, vmprotocol::rpcopt_flag_not_set);
 			return q.sender()->reply_login(*this, q.msgid, r, m_wid, uuid, p, l);
 		}
 		return q.sender()->reply_login(*this, q.msgid, NBR_EEXPIRE, 
-			m_wid, uuid, "", 0);
+			super::wid(), uuid, "", 0);
 	default:
 		log(ERROR, "invalid purpose: %d\n", q.m_data);
 		ASSERT(false);
@@ -192,7 +198,7 @@ vmd::vmdsvnt::recv_cmd_login(U32 msgid, const world_id &wid,
 {
 	/* just forward to master (with log) */
 	log(INFO, "try_login>A:%s,W:%s\n",acc,wid);
-	memcpy(m_wid, wid, sizeof(m_wid));
+	super::set_wid(wid);
 	return backend_conn()->send_login(*this, msgid, wid, acc, ath, athl);
 }
 
@@ -271,17 +277,19 @@ vmd::vmdclnt::recv_code_login(querydata &q, int r, const world_id &wid,
 		ASSERT(false);
 		return NBR_EEXPIRE;
 	}
+	super::set_wid(wid);
 	/* add node */
 	w->set_node(*this, addr());
 	w->add_node(*this);
 	/* create remote object */
 	sr().unpack_start(p, l);
-	object *o = script::object_new(cf(), NULL/*use main VM*/, uuid, &(sr()), false);
+	object *o = script::object_new(cf(), wid, NULL/*use main VM*/,
+			uuid, &(sr()), false);
 	if (o) {
 //		o->set_connection(c);
 		proc_id pid = "main";
 		/* pid, "", 0 means no argument */
-		script::call_proc(*this, cf(), q.msgid, *o, pid, "", 0,
+		script::call_proc(*this, cf(), super::wid(), q.msgid, *o, pid, "", 0,
 				rpct_global, vmprotocol::rpcopt_flag_not_set);
 		return NBR_OK;
 	}

@@ -185,12 +185,14 @@ public:
 	~lua() {}
 	/* external interfaces */
 	static int 	init(int max_rpc_entry, int max_rpc_ongoing);
-	static object 	*object_new(CF &cf, VM vm, UUID &uuid, SR *sr, bool local);
+	static object 	*object_new(CF &cf, const world_id &wid,
+			VM vm, UUID &uuid, SR *sr, bool local);
 	static int	pack_object(SR &, const object &, bool);
-	static int	call_proc(S &, CF &, U32, object &, proc_id &,
-			char *, size_t, rpctype, U32);
-	static int	resume_proc(S &, CF &, VM, char *, size_t, rpctype);
-	static int 	resume_create(S &, CF &, VM, UUID &, SR &);
+	static int	call_proc(S &, CF &, const world_id &,
+			U32, object &, proc_id &, char *, size_t, rpctype, U32);
+	static int	resume_proc(S &, CF &, const world_id &, VM,
+			char *, size_t, rpctype);
+	static int 	resume_create(S &, CF &, const world_id &, VM, UUID &, SR &);
 	static bool load(const char *srcfile);
 protected: 	/* lua methods */
 	static int	create(VM);
@@ -210,15 +212,16 @@ protected: 	/* helpers */
 	static int 	get_object_value(VM vm, const object &o, const char *key);
 	static int 	set_object_value(VM vm, const object &o, const char *key, int from);
 	static int 	pack_object_value(VM vm, const object &o, SR &sr);
-	static int 	unpack_object_value(CF &cf, VM vm, const object &o, data &sr);
+	static int 	unpack_object_value(CF &cf, const world_id &wid,
+					VM vm, const object &o, data &sr);
 	static int 	get_object_method(VM vm, const object &o, const char *key);
 	static int 	set_object_method(VM vm, const object &o, const char *key, int from);
 
 	static int	pack_lua_stack(SR &, VM, int);
-	static bool	unpack_lua_stack(CF &, SR &, VM);
-	static int 	put_to_lua_stack(CF &, VM, data &);
+	static bool	unpack_lua_stack(CF &, const world_id &, SR &, VM);
+	static int 	put_to_lua_stack(CF &, const world_id &, VM, data &);
 
-	static int 	unpack_object(CF &, VM, data &, object &);
+	static int 	unpack_object(CF &, const world_id &, VM, data &, object &);
 
 	static const char *add_type(const char *typestr);
 

@@ -303,18 +303,20 @@ int 	lua<SR,OF>::pack_object_value(VM vm, const object &o, SR &sr)
 }
 
 template <class SR, class OF>
-int 	lua<SR,OF>::unpack_object_value(CF &cf, VM vm, const object &o, data &d)
+int 	lua<SR,OF>::unpack_object_value(CF &cf, const world_id &wid, 
+		VM vm, const object &o, data &d)
 {
 	int r;
 	char buf[256];
-	if ((r = put_to_lua_stack(cf, vm, d)) < 0) { return r; }
+	if ((r = put_to_lua_stack(cf, wid, vm, d)) < 0) { return r; }
 	lua_setfield(vm, LUA_REGISTRYINDEX, o.uuid().to_s(buf, sizeof(buf)));
 	return NBR_OK;
 }
 
 template <class SR, class OF>
 typename lua<SR,OF>::object *
-lua<SR,OF>::object_new(CF &cf, VM vm, UUID &uuid, SR *sr, bool local)
+lua<SR,OF>::object_new(CF &cf, const world_id &wid, VM vm, 
+		UUID &uuid, SR *sr, bool local)
 {
 	object *o = OF::find(uuid);
 	if (o) {
@@ -341,7 +343,7 @@ lua<SR,OF>::object_new(CF &cf, VM vm, UUID &uuid, SR *sr, bool local)
 			o->set_connection(NULL);	/* no unpack data specified */
 			return o;
 		}
-		if (unpack_object(cf, vm, d, *o) < 0) {
+		if (unpack_object(cf, wid, vm, d, *o) < 0) {
 			OF::destroy(o);
 			return NULL;
 		}
@@ -482,17 +484,17 @@ int lua<SR,OF>::pack_lua_stack(SR &sr, VM lua, int index)
 }
 
 template <class SR, class OF>
-bool lua<SR,OF>::unpack_lua_stack(CF &cf, SR &sr, VM lua)
+bool lua<SR,OF>::unpack_lua_stack(CF &cf, const world_id &wid, SR &sr, VM lua)
 {
 	typename SR::data d;
 	if (sr.unpack(d) <= 0) {
 		return false;
 	}
-	put_to_lua_stack(cf, lua, d);
+	put_to_lua_stack(cf, wid, lua, d);
 	return true;
 }
 template <class SR, class OF>
-int lua<SR,OF>::put_to_lua_stack(CF &cf, VM lua, data &d)
+int lua<SR,OF>::put_to_lua_stack(CF &cf, const world_id &wid, VM lua, data &d)
 {
 	switch(type(d)) {
 	case LUA_TNIL:
@@ -510,8 +512,8 @@ int lua<SR,OF>::put_to_lua_stack(CF &cf, VM lua, data &d)
 	case LUA_TTABLE:
 		lua_newtable(lua);
 		for (int i = 0; i < to_maplen(d); i++) {
-			put_to_lua_stack(cf,lua,key(d,i));
-			put_to_lua_stack(cf,lua,val(d,i));
+			put_to_lua_stack(cf,wid,lua,key(d,i));
+			put_to_lua_stack(cf,wid,lua,val(d,i));
 			lua_settable(lua, -3);
 		}
 		break;
@@ -525,9 +527,10 @@ int lua<SR,OF>::put_to_lua_stack(CF &cf, VM lua, data &d)
 			}
 		} break;
 	case LUA_TUSERDATA: {/* = array ( LUA_TUSERDATA, UUID, objectdata ) */
-		object *o = object_new(cf, lua, *((UUID *)to_p(elem(d, 1))), NULL, false);
+		object *o = object_new(cf, wid, lua, 
+				*((UUID *)to_p(elem(d, 1))), NULL, false);
 		if (o) { 
-			if (o->remote() && unpack_object(cf, lua, elem(d, 2), *o) < 0) {
+			if (o->remote() && unpack_object(cf, wid, lua, elem(d, 2), *o) < 0) {
 				return NBR_EFORMAT;
 			}
 			push_object(lua, o); 
@@ -683,14 +686,13 @@ int lua<SR,OF>::pack_object(SR &sr, const object &o, bool with_val)
 }
 
 template <class SR, class OF>
-int lua<SR,OF>::unpack_object(CF &cf, VM vm, data &d, object &o)
+int lua<SR,OF>::unpack_object(CF &cf, const world_id &wid, VM vm, data &d, object &o)
 {
 	if (to_alen(d) <= 0) { 
 		ASSERT(false); 
 		return NBR_EFORMAT; 
 	}
 	/* connect to assigned node */
-	world_id wid = "test_MMO";
 	world *w = OF::find_world(wid);
 	ASSERT(w);
 	typename OF::conn *c = w->connect_assigned_node(cf, o.uuid());
@@ -704,16 +706,17 @@ int lua<SR,OF>::unpack_object(CF &cf, VM vm, data &d, object &o)
 	TRACE("object type : <%s>\n", o.type());
 	/* unpack object data */
 	if (to_alen(d) > 1) {
-		return unpack_object_value(cf, m_vm, o, elem(d, 1));
+		return unpack_object_value(cf, wid, m_vm, o, elem(d, 1));
 	}
 	return NBR_OK;
 }
 
 template <class SR, class OF>
-int lua<SR,OF>::resume_create(S &c, CF &cf, VM vm, UUID &uuid, SR &sr)
+int lua<SR,OF>::resume_create(S &c, CF &cf, const world_id &wid, VM vm, 
+		UUID &uuid, SR &sr)
 {
 	/* create user object (remote) */
-	object *o = object_new(cf, vm, uuid, &sr, false);
+	object *o = object_new(cf, wid, vm, uuid, &sr, false);
 	/* push to stack (with metamethod) */
 	push_object(vm, o);
 	/* yield! 
@@ -722,7 +725,8 @@ int lua<SR,OF>::resume_create(S &c, CF &cf, VM vm, UUID &uuid, SR &sr)
 }
 
 template <class SR, class OF>
-int	lua<SR,OF>::resume_proc(S &c, CF &cf, VM vm, char *args, size_t alen, rpctype rt)
+int	lua<SR,OF>::resume_proc(S &c, CF &cf, const world_id &wid, 
+		VM vm, char *args, size_t alen, rpctype rt)
 {
 	c.sr().unpack_start(args, alen);
 	int n_args = 0;
@@ -732,13 +736,13 @@ int	lua<SR,OF>::resume_proc(S &c, CF &cf, VM vm, char *args, size_t alen, rpctyp
 		/* unpack error string on stack */
 		lua_getfield(vm, LUA_GLOBALSINDEX, "remote_error");
 		lua_pushstring(vm, (const char *)c.addr());
-		unpack_lua_stack(cf, c.sr(), vm);
+		unpack_lua_stack(cf, wid, c.sr(), vm);
 		if (!lua_isnil(vm, -2)) {/* if error function is defined */
 			lua_pcall(vm, 2, 0, 0);
 		}
 		return NBR_OK;
 	case vmprotocol::rpct_getter:
-		if (unpack_lua_stack(cf, c.sr(), vm) < 0) {
+		if (unpack_lua_stack(cf, wid, c.sr(), vm) < 0) {
 			lua_pushnil(vm);
 			return dispatch(c, vm, 1, true, rt);
 		}
@@ -765,7 +769,7 @@ int	lua<SR,OF>::resume_proc(S &c, CF &cf, VM vm, char *args, size_t alen, rpctyp
 		return dispatch(c, vm, 1, true, rt);
 	case vmprotocol::rpct_setter:
 	default:
-		while(unpack_lua_stack(cf, c.sr(), vm)) {
+		while(unpack_lua_stack(cf, wid, c.sr(), vm)) {
 			n_args++;
 			if (n_args > 100) {
 				ASSERT(false);
@@ -777,7 +781,8 @@ int	lua<SR,OF>::resume_proc(S &c, CF &cf, VM vm, char *args, size_t alen, rpctyp
 }
 
 template <class SR, class OF>
-int lua<SR,OF>::call_proc(S &c, CF &cf, U32 rmsgid, object &o, proc_id &p,
+int lua<SR,OF>::call_proc(S &c, CF &cf, const world_id &wid, 
+		U32 rmsgid, object &o, proc_id &p,
 		char *args, size_t alen, rpctype rt, U32 rpcopt)
 {
 	data d;
@@ -814,7 +819,7 @@ int lua<SR,OF>::call_proc(S &c, CF &cf, U32 rmsgid, object &o, proc_id &p,
 			return reply_result(c, *fb, 1, vmprotocol::rpct_error);
 		}
 		TRACE("field name = %s\n", to_s(d));
-		unpack_lua_stack(cf, c.sr(), *fb);	/* object put on stack */
+		unpack_lua_stack(cf, wid, c.sr(), *fb);	/* object put on stack */
 		set_object_value(*fb, o, to_s(d), lua_gettop(*fb)); /* put to object table. 
 											but above object left on stack */
 		r = reply_result(c, *fb, 1, rt);/* object returns */
@@ -840,7 +845,7 @@ int lua<SR,OF>::call_proc(S &c, CF &cf, U32 rmsgid, object &o, proc_id &p,
 		lua_pushfstring(*fb, "remote: invalid rpc type (%d)", rt);
 		return reply_result(c, *fb, 1, vmprotocol::rpct_error);
 	}
-	while(unpack_lua_stack(cf, c.sr(), *fb)) {
+	while(unpack_lua_stack(cf, wid, c.sr(), *fb)) {
 		n_args++;
 		if (n_args > 100) {
 			ASSERT(false);

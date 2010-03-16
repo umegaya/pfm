@@ -155,7 +155,8 @@ public:	/* receiver */
 			char *p, int l, rpctype rc) {__PE(); }
 	template <class Q> int recv_code_rpc(Q &q, char *p, size_t l, rpctype rc)
 			{__PE(); }
-	int recv_cmd_new_object(U32 msgid, UUID &uuid, char *p, size_t l) {__PE();}
+	int recv_cmd_new_object(U32 msgid, const world_id &wid,
+			UUID &uuid, char *p, size_t l) {__PE();}
 	template <class Q> int recv_code_new_object(Q &q, int r,
 			UUID &uuid, char *p, size_t l) {__PE();}
 	int recv_cmd_login(U32 msgid, const world_id &wid, const char *acc,
@@ -172,7 +173,8 @@ public: /* sender */
 	template <class Q> int send_rpc(SNDR &s, const UUID &uuid, const proc_id &p, 
 			char *a, size_t al, rpctype rt, Q **pq);
 	int reply_rpc(SNDR &s, U32 msgid, char *p, size_t l, rpctype rt);
-	template <class Q> int send_new_object(SNDR &s, U32 rmsgid, const UUID &uuid,
+	template <class Q> int send_new_object(SNDR &s, U32 rmsgid,
+			const world_id &wid, const UUID &uuid,
 			char *p, size_t l, Q **pq);
 	int reply_new_object(SNDR &s, U32 msgid, int r, UUID &uuid, char *p, size_t l);
 	int send_login(SNDR &s, U32 msgid, const world_id &wid,
@@ -400,6 +402,7 @@ public:
 		mstr_base_factory;
 protected:
 	CHNODE m_node;	/* node information */
+	world_id m_wid;
 public:
 	connector *backend_connect(address &a) {
 		return vmmodule::cf().backend_connect(a); }
@@ -407,17 +410,20 @@ public:
 	class querydata : public node::querydata {
 	public:
 		U8 m_data, padd[3];
-		union {
-			VM m_vm;
-		};
+		union { VM m_vm; };
 	public:
 		VM &vm() { return m_vm; }
 		S *sender() { return (S *)node::querydata::s; }
 	};
 public:
-	vmnode(S *s) : session(), vmmodule(s) { memset(&m_node, 0, sizeof(m_node)); }
+	vmnode(S *s) : session(), vmmodule(s) {
+		memset(&m_node, 0, sizeof(m_node));
+		memset(&m_wid, 0, sizeof(m_wid));
+	}
 	CHNODE *chnode() { return &m_node; }
 	const CHNODE *chnode() const { return &m_node; }
+	void set_wid(const world_id &wid) { memcpy(m_wid, &wid, sizeof(m_wid)); }
+	const world_id &wid() const { return m_wid; }
 	void fin() {
 		if (m_node.replicas > 0) { world::remove_node(*((S *)this)); }
 		super::fin();
