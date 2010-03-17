@@ -88,12 +88,12 @@ int nbr_conhash_add_node(CONHASH ch, struct node_s *node)
 	struct conhash_s *conhash = (struct conhash_s *)ch;
     if((conhash==NULL) || (node==NULL)) 
     {
-        return -1;
+        return NBR_EINVAL;
     }
     /* check node fisrt */
     if(!(node->flag&NODE_FLAG_INIT) || (node->flag&NODE_FLAG_IN))
     {
-        return -1;
+        return NBR_EALREADY;
     }
     node->flag |= NODE_FLAG_IN;
     /* add replicas of server */
@@ -101,7 +101,7 @@ int nbr_conhash_add_node(CONHASH ch, struct node_s *node)
     __conhash_add_replicas(conhash, node);
     nbr_rwlock_unlock(conhash->lock);
  
-    return 0;
+    return NBR_OK;
 }
 
 NBR_API
@@ -111,12 +111,12 @@ int nbr_conhash_del_node(CONHASH ch, struct node_s *node)
  struct conhash_s *conhash = (struct conhash_s *)ch;
    if((conhash==NULL) || (node==NULL)) 
     {
-        return -1;
+        return NBR_EINVAL;
     }
     /* check node first */
     if(!(node->flag&NODE_FLAG_INIT) || !(node->flag&NODE_FLAG_IN))
     {
-        return -1;
+        return NBR_EALREADY;
     }
     node->flag &= (~NODE_FLAG_IN);
     /* add replicas of server */
@@ -124,7 +124,7 @@ int nbr_conhash_del_node(CONHASH ch, struct node_s *node)
     __conhash_del_replicas(conhash, node);
     nbr_rwlock_unlock(conhash->lock);
 
-    return 0;
+    return NBR_OK;
 }
 
 NBR_API

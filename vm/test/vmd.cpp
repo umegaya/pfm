@@ -42,7 +42,7 @@ int vmd::vmdmstr::recv_cmd_node_ctrl(U32 msgid, const char *cmd,
 	TRACE("node ctrl cmd = %s<%s:%s>\n", cmd, wid, (const char *)a);
 	world *w = super::create_world(wid);
 	if (!w) {
-		return reply_node_ctrl(*this, msgid, NBR_ENOTFOUND, cmd, wid, a);
+		return reply_node_ctrl(*this, msgid, NBR_ENOTFOUND, cmd, wid, a, "", 0);
 	}
 	/* this node actually have node address 'a' */
 	world::set_node(*this, a);
@@ -51,7 +51,25 @@ int vmd::vmdmstr::recv_cmd_node_ctrl(U32 msgid, const char *cmd,
 	if (r >= 0) {
 		protocol::notify_node_change(*this, cmd, wid, a);
 	}
-	return reply_node_ctrl(*this, msgid, r, cmd, wid, a);
+	if (IS_ADD(cmd)) {
+		TRACE("reply node list to servant\n");
+		size_t sz = sf(*this)->pool().size() * (sizeof(address) + sizeof(U32));
+		char buffer[sz];
+		sr().pack_start(buffer, sz);
+		/* pack current node list */
+		factory::iterator i = sf(*this)->pool().begin();
+		for (; i != sf(*this)->pool().end(); i = sf(*this)->pool().next(i)) {
+			if (!i->registered()) { continue; }
+			if (sr().push_string(i->chnode()->iden,
+					strlen(i->chnode()->iden)) < 0) {
+				r = NBR_ESHORT;
+			}
+			TRACE("address = <%s>\n", i->chnode()->iden);
+		}
+	}
+	return (r >= 0) ?
+		reply_node_ctrl(*this, msgid, r, cmd, wid, a, sr().p(), sr().len()) :
+		reply_node_ctrl(*this, msgid, r, cmd, wid, a, "", 0);
 }
 
 int
@@ -242,6 +260,9 @@ vmd::vmdsvnt::recv_notify_node_change(const char *cmd,
 		ASSERT(false);
 		return NBR_EEXPIRE;
 	}
+	if (s->registered()) {
+		return NBR_OK;
+	}
 	world::set_node(*s, (const char *)a);
 	return IS_ADD(cmd) ? w->add_node(*s) : w->del_node(*s);
 }
@@ -249,12 +270,26 @@ vmd::vmdsvnt::recv_notify_node_change(const char *cmd,
 
 int
 vmd::vmdsvnt::recv_code_node_ctrl(querydata &q, int r, const char *cmd,
-			const world_id &wid, const address &a)
+			const world_id &wid, const address &a, char *p, size_t l)
 {
-	if (IS_ADD(cmd) && r < 0) {
-		log(ERROR, "add node fail>W:%s,A:%s\n", wid, (const char *)a);
+	if (!IS_ADD(cmd)) {
+		return NBR_OK;
+	}
+	log(ERROR, "add_node>R:%d,W:%s,A:%s\n", r, wid, (const char *)a);
+	if (r < 0) {
 		close();
 		ASSERT(false);
+		return r;
+	}
+	data d;
+	sr().unpack_start(p, l);
+	while(sr().unpack(d)) {
+		r = recv_notify_node_change(cmd, wid, script::to_s(d));
+		if (r < 0 && r != NBR_EALREADY) {
+			ASSERT(false);
+			return r;
+		}
+		log(INFO, "add node to consistent hash %s:%d\n", script::to_s(d), r);
 	}
 	return NBR_OK;
 }

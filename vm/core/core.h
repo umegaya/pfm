@@ -183,13 +183,18 @@ int vmprotocol_impl<S,IDG,SNDR>::on_recv(char *p, int l)
 		POP_STR(strcmd, sizeof(strcmd));
 		POP_STR(wid, sizeof(wid));
 		POP_ADDR(a);
-		q->sender()->recv_code_node_ctrl(*q, r, strcmd, wid, a);
+		q->sender()->recv_code_node_ctrl(*q, r, strcmd, wid, a,
+				POP_BUF(), POP_REMAIN());
 		break;
 	case vmprotocol::vmnotify_node_change:	/* m->s */
 		POP_STR(strcmd, sizeof(strcmd));
 		POP_STR(wid, sizeof(wid));
 		POP_ADDR(a);
 		_this().recv_notify_node_change(strcmd, wid, a);
+		break;
+	default:
+		_this().log(kernel::ERROR, "invalid command (%d) recved\n", cmd);
+		ASSERT(false);
 		break;
 	}
 error:
@@ -353,18 +358,21 @@ int vmprotocol_impl<S,IDG,SNDR>::send_node_ctrl(SNDR &s,
 
 template <class S,class IDG,class SNDR>
 int vmprotocol_impl<S,IDG,SNDR>::reply_node_ctrl(SNDR &s, U32 msgid,
-		int r, const char *cmd, const world_id &wid, const address &a)
+		int r, const char *cmd, const world_id &wid, const address &a,
+		char *p, size_t pl)
 {
 	size_t sz =
 		2 * (1 + sizeof(U32) + vmd_max_node_ctrl_cmd +
-				sizeof(world_id) + sizeof(address));
+				sizeof(world_id) + sizeof(address) + pl);
 	char buf[sz];
 	PUSH_START(buf, sz);
+	PUSH_8(vmprotocol::vmcode_node_ctrl);
 	PUSH_32(msgid);
 	PUSH_32(r);
 	PUSH_STR(cmd);
 	PUSH_STR(wid);
 	PUSH_ADDR(a);
+	PUSH_MEM(p, pl);
 	return _this().send(buf, PUSH_LEN());
 }
 

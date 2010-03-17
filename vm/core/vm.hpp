@@ -162,11 +162,11 @@ public:	/* receiver */
 	int recv_cmd_login(U32 msgid, const world_id &wid, const char *acc,
 			char *p, size_t l) {__PE();}
 	template <class Q> int recv_code_login(Q &q, int r, const world_id &wid, 
-			UUID &uuid, char *p, int l) {__PE();}
+			UUID &uuid, char *p, size_t l) {__PE();}
 	int recv_cmd_node_ctrl(int r, const char *cmd,
 			const world_id &wid, const address &a) {__PE();}
 	template <class Q> int recv_code_node_ctrl(Q &q, int r, const char *cmd,
-			const world_id &wid, const address &a) {__PE();}
+			const world_id &wid, const address &a, char *p, size_t l) {__PE();}
 	int recv_notify_node_change(const char *cmd,
 			const world_id &wid, const address &a) {__PE();}
 public: /* sender */
@@ -184,7 +184,7 @@ public: /* sender */
 	int send_node_ctrl(SNDR &s, U32 msgid, const char *cmd,
 			const world_id &wid, const address &a);
 	int reply_node_ctrl(SNDR &s, U32 msgid, int r, const char *cmd,
-			const world_id &wid, const address &a);
+			const world_id &wid, const address &a, char *p, size_t l);
 	int notify_node_change(SNDR &s, const char *cmd,
 			const world_id &wid, const address &a);
 };
@@ -311,6 +311,7 @@ public:
 	typedef typename object_factory::object object;
 	typedef typename object_factory::connector_factory connector_factory;
 	typedef typename protocol::UUID UUID;
+	typedef typename SR::data data;
 protected:
 	static object_factory m_of;
 	static connector_factory *m_cf;
@@ -424,8 +425,9 @@ public:
 	const CHNODE *chnode() const { return &m_node; }
 	void set_wid(const world_id &wid) { memcpy(m_wid, &wid, sizeof(m_wid)); }
 	const world_id &wid() const { return m_wid; }
+	bool registered() const { return m_node.replicas > 0; }
 	void fin() {
-		if (m_node.replicas > 0) { world::remove_node(*((S *)this)); }
+		if (registered()) { world::remove_node(*((S *)this)); }
 		super::fin();
 	}
 public:

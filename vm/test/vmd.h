@@ -91,7 +91,7 @@ public:
 		int recv_notify_node_change(const char *cmd,
 				const world_id &wid, const address &a);
 		int recv_code_node_ctrl(querydata &q, int r, const char *cmd,
-					const world_id &wid, const address &a);
+				const world_id &wid, const address &a, char *p, size_t l);
 	};
 	class vmdclnt : public vmnode<vmdclnt> {
 	public:
