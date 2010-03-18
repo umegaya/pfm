@@ -88,11 +88,13 @@ public:
 		vmcmd_rpc,		/* c->s, c->c, s->s */
 		vmcmd_new_object,	/* s->m, m->s */
 		vmcmd_login,	/* c->s->m */
-		vmcmd_node_ctrl,	/* s->m */
+		vmcmd_node_ctrl,	/* m->s */
+		vmcmd_node_register,	/* s->m */
 		vmcode_rpc,		/* s->c, c->c, s->s */
 		vmcode_new_object,	/* s->m, m->s */
 		vmcode_login,	/* m->s->c */
 		vmcode_node_ctrl,	/* m->s */
+		vmcode_node_register,	/* s->m */
 		vmnotify_node_change,	/* m->s */
 	};
 	typedef enum {
@@ -109,6 +111,7 @@ public:
 		load_purpose_invalid,
 		load_purpose_login,
 		load_purpose_create,
+		load_purpose_create_world,
 	} loadpurpose;
 	enum {	/* flag for controling fiber behavior */
 		rpcopt_flag_not_set = 0x0,
@@ -120,7 +123,7 @@ public:
 	static const int vmd_account_maxlen = 64;
 	static const int vmd_procid_maxlen = 32;
 	static const int vmd_max_replicate_host = 32;
-	static const int vmd_max_worldname = 32;
+	static const int vmd_max_worldname = 16;
 	static const int vmd_max_node_ctrl_cmd = 256;
 	static const int vmd_object_multiplexity = 3;
 	typedef char login_id[vmd_account_maxlen];
@@ -164,9 +167,11 @@ public:	/* receiver */
 	template <class Q> int recv_code_login(Q &q, int r, const world_id &wid, 
 			UUID &uuid, char *p, size_t l) {__PE();}
 	int recv_cmd_node_ctrl(int r, const char *cmd,
-			const world_id &wid, const address &a) {__PE();}
+			const world_id &wid, char *p, size_t l) {__PE();}
 	template <class Q> int recv_code_node_ctrl(Q &q, int r, const char *cmd,
-			const world_id &wid, const address &a, char *p, size_t l) {__PE();}
+			const world_id &wid, char *p, size_t l) {__PE();}
+	int recv_cmd_node_register(U32 msgid, const address &a) {__PE();}
+	template <class Q> int recv_code_node_register(Q &q, int r) {__PE();}
 	int recv_notify_node_change(const char *cmd,
 			const world_id &wid, const address &a) {__PE();}
 public: /* sender */
@@ -182,9 +187,11 @@ public: /* sender */
 	int reply_login(SNDR &s, U32 msgid, int r, const world_id &wid,
 			const UUID &uuid, char *p, size_t l);
 	int send_node_ctrl(SNDR &s, U32 msgid, const char *cmd,
-			const world_id &wid, const address &a);
+			const world_id &wid, char *p, size_t l);
 	int reply_node_ctrl(SNDR &s, U32 msgid, int r, const char *cmd,
-			const world_id &wid, const address &a, char *p, size_t l);
+			const world_id &wid, char *p, size_t l);
+	int send_node_register(SNDR &s, U32 msgid, const address &node_addr);
+	int reply_node_register(SNDR &s, U32 msgid, int r);
 	int notify_node_change(SNDR &s, const char *cmd,
 			const world_id &wid, const address &a);
 };
@@ -243,22 +250,26 @@ public:
 	class world_impl  {
 	protected:
 		CONHASH m_ch;
+		world_id m_wid;
 		UUID m_world_object;
+		map<const C*, char*> m_nodes;
 	public:
+		typedef typename map<const C*, char*>::iterator nditer;
 		world_impl() : m_ch(NULL), m_world_object() {}
 		~world_impl() { fin(); }
 		int init(int max_node, int max_replica);
 		void fin() { nbr_conhash_fin(m_ch); }
+		void set_id(const world_id &wid) { memcpy(m_wid, wid, sizeof(m_wid)); }
+		const world_id &id() { return m_wid; }
+		const UUID &world_object_uuid() const { return m_world_object; }
+		void set_world_object_uuid(const UUID &uuid) { m_world_object = uuid; }
 		int lookup_node(const UUID &uuid, const CHNODE *n[], int n_max) {
 			*n = nbr_conhash_lookup(m_ch, (const char *)&uuid, sizeof(uuid));
 			return (*n) ? 1 : NBR_ENOTFOUND;
 		}
-		int add_node(const C &s) { return add_node(*s.chnode()); }
-		int add_node(const CHNODE &n) {
-			return nbr_conhash_add_node(m_ch, (CHNODE *)&n); }
-		int del_node(const C &s) { return del_node(*s.chnode()); }
-		int del_node(const CHNODE &n) {
-			return nbr_conhash_del_node(m_ch, (CHNODE *)&n); }
+		int add_node(const C &s);
+		int del_node(const C &s);
+		map<const C*, char*> &nodes() { return m_nodes; }
 		static void set_node(C &s, const char *addr) {
 			nbr_conhash_set_node(s.chnode(), addr, vmprotocol::vnode_replicate_num);
 		}
@@ -269,6 +280,11 @@ public:
 			}
 		}
 		conn *connect_assigned_node(connector_factory &cf, const UUID &uuid);
+	protected:
+		int add_node(const CHNODE &n) {
+			return nbr_conhash_add_node(m_ch, (CHNODE *)&n); }
+		int del_node(const CHNODE &n) {
+			return nbr_conhash_del_node(m_ch, (CHNODE *)&n); }
 	};
 	typedef world_impl<S> world;
 protected:
@@ -411,9 +427,10 @@ public:
 	class querydata : public node::querydata {
 	public:
 		U8 m_data, padd[3];
-		union { VM m_vm; };
+		union { VM m_vm; world *m_world; };
 	public:
 		VM &vm() { return m_vm; }
+		world &wld() { return *m_world; }
 		S *sender() { return (S *)node::querydata::s; }
 	};
 public:
@@ -423,16 +440,16 @@ public:
 	}
 	CHNODE *chnode() { return &m_node; }
 	const CHNODE *chnode() const { return &m_node; }
-	void set_wid(const world_id &wid) { memcpy(m_wid, &wid, sizeof(m_wid)); }
+	void set_wid(const world_id &wid) { memcpy(m_wid, wid, sizeof(m_wid)); }
 	const world_id &wid() const { return m_wid; }
-	bool registered() const { return m_node.replicas > 0; }
+	bool registered() const { return nbr_conhash_node_registered(&(m_node)); }
+	static const UUID &backend_key() { return protocol::invalid_id(); }
+	const UUID &verify_uuid(const UUID &uuid) const { return uuid; }
 	void fin() {
 		if (registered()) { world::remove_node(*((S *)this)); }
 		super::fin();
 	}
 public:
-	static const UUID &backend_key() { return protocol::invalid_id(); }
-	const UUID &verify_uuid(const UUID &uuid) const { return uuid; }
 	querydata *senddata(S &s, U32 msgid, char *p, int l);
 	world *create_world(const world_id &wid) const;
 	int on_recv(char *p, int l) { return protocol::on_recv(p, l); }
@@ -440,8 +457,12 @@ public:
 			char *p, int l, rpctype rc);
 	int recv_code_rpc(querydata &q, char *p, size_t l, rpctype rc);
 	template <class Q> int load_or_create_object(U32 msgid,
-			UUID &uuid, char *p, size_t l, loadpurpose lp,
-			Q **pq) { ASSERT(false); return 0; }
+			const world_id *id, UUID &uuid, char *p, size_t l, loadpurpose lp,
+			Q **pq);
+	template <class Q> int create_object_with_type(
+			const world_id *id,
+			const char *type, size_t tlen,
+			U32 msgid, loadpurpose lp, Q **pq);
 };
 template <class S> static inline typename S::factory *sf(S &s) {
 	return (typename S::factory *)s.f();

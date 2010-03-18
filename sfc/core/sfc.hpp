@@ -1373,6 +1373,7 @@ public:
 	daemon() : m_sl(), m_cl() {}
 	virtual ~daemon() {}
 	int run();
+	void heartbeat();
 	int	init(int argc, char *argv[]);
 	int read_config(int argc, char *argv[]);
 	void fin();

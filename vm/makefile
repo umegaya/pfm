@@ -10,7 +10,7 @@ AR = ar crv
 DEFS = 
 DEFS += -D_GNU_SOURCE
 ifeq ($(DEBUG), 1)
-CFLAG = -Wall -g -fPIC -D_DEBUG -D_TEST
+CFLAG = -Wall -g -fPIC -D_DEBUG
 else 
 CFLAG = -O4 -fPIC
 endif
@@ -107,11 +107,11 @@ $(DEPS)/$(LIBDIR)/%.d: $(LIBDIR)/%.cpp
 	
 $(OBJS)/$(TESTDIR)/%.o: $(TESTDIR)/%.cpp
 	@mkdir -p $(OBJS)/$(TESTDIR)
-	$(CC) $(CFLAG) $(DEFS) $(INCS) -c -o $@ $<
+	$(CC) $(CFLAG) -D_TEST $(DEFS) $(INCS) -c -o $@ $<
 
 $(DEPS)/$(TESTDIR)/%.d: $(TESTDIR)/%.cpp
 	@mkdir -p $(DEPS)/$(TESTDIR)
-	@$(CC) $(CFLAG) $(DEFS) $(INCS) $< -M | sed 's:.*\.o:${OBJS}/${TESTDIR}/\0:' > $@
+	@$(CC) $(CFLAG) -D_TEST $(DEFS) $(INCS) $< -M | sed 's:.*\.o:${OBJS}/${TESTDIR}/\0:' > $@
 
 $(DEPS)/$(LANG_DIR)/%.d: $(LANG_DIR)/%.cpp
 	@mkdir -p $(DEPS)/$(LANG_DIR)

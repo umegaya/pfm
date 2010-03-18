@@ -81,6 +81,30 @@ void nbr_conhash_set_node(struct node_s *node, const char *iden, u_int replica)
     node->flag = NODE_FLAG_INIT;
 }
 
+NBR_API int
+nbr_conhash_node_registered(const CHNODE *node)
+{
+	return (node->flag&(NODE_FLAG_INIT | NODE_FLAG_IN)
+			== (NODE_FLAG_INIT | NODE_FLAG_IN));
+}
+
+NBR_API int
+nbr_conhash_node_fault(const CHNODE *node)
+{
+	return (node->flag&(NODE_FLAG_INIT | NODE_FLAG_FAULT)
+			== (NODE_FLAG_INIT | NODE_FLAG_FAULT));
+}
+
+NBR_API int
+nbr_conhash_node_set_fault(CHNODE *node)
+{
+	if (nbr_conhash_node_registered(node)) {
+		node->flag |= NODE_FLAG_FAULT;
+		return NBR_OK;
+	}
+	return NBR_EINVAL;
+}
+
 NBR_API
 int nbr_conhash_add_node(CONHASH ch, struct node_s *node)
 {

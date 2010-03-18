@@ -36,40 +36,91 @@ int vmd::vmdmstr::init_login_map(int max_user)
 	return NBR_OK;
 }
 
-int vmd::vmdmstr::recv_cmd_node_ctrl(U32 msgid, const char *cmd,
-		const world_id &wid, const address &a)
+int vmd::vmdmstr::recv_cmd_node_register(U32 msgid, const address &a)
 {
-	TRACE("node ctrl cmd = %s<%s:%s>\n", cmd, wid, (const char *)a);
-	world *w = super::create_world(wid);
-	if (!w) {
-		return reply_node_ctrl(*this, msgid, NBR_ENOTFOUND, cmd, wid, a, "", 0);
-	}
 	/* this node actually have node address 'a' */
 	world::set_node(*this, a);
-#define IS_ADD(cmd) (*cmd == 'a')
-	int r = IS_ADD(cmd) ? w->add_node(*this) : w->del_node(*this);
-	if (r >= 0) {
-		protocol::notify_node_change(*this, cmd, wid, a);
-	}
-	if (IS_ADD(cmd)) {
-		TRACE("reply node list to servant\n");
-		size_t sz = sf(*this)->pool().size() * (sizeof(address) + sizeof(U32));
-		char buffer[sz];
-		sr().pack_start(buffer, sz);
-		/* pack current node list */
-		factory::iterator i = sf(*this)->pool().begin();
-		for (; i != sf(*this)->pool().end(); i = sf(*this)->pool().next(i)) {
-			if (!i->registered()) { continue; }
-			if (sr().push_string(i->chnode()->iden,
-					strlen(i->chnode()->iden)) < 0) {
-				r = NBR_ESHORT;
-			}
-			TRACE("address = <%s>\n", i->chnode()->iden);
+	log(INFO, "node_reg>A:%s,NA:%s\n", (const char *)addr(), (const char *)a);
+	/* here temporary test code */
+#if defined(_TEST)
+	world_id wid = "test_MMO";
+	cmd_add_node(0, wid, addr());
+#endif
+	return reply_node_register(*this, msgid, NBR_OK);
+}
+
+int vmd::vmdmstr::recv_cmd_node_ctrl(U32 msgid, const char *cmd,
+		const world_id &wid, char *p, size_t l)
+{
+	int r;
+	sr().unpack_start(p, l);
+	if (strcmp("add", cmd) == 0) {
+		data d;
+		if (sr().unpack(d) <= 0) { r = NBR_EFORMAT; }
+		else {
+			r = cmd_add_node(msgid, wid, script::to_s(d));
 		}
 	}
-	return (r >= 0) ?
-		reply_node_ctrl(*this, msgid, r, cmd, wid, a, sr().p(), sr().len()) :
-		reply_node_ctrl(*this, msgid, r, cmd, wid, a, "", 0);
+	if (r < 0) {
+		return reply_node_ctrl(*this, msgid, r, cmd, wid, p, l);
+	}
+	return NBR_OK;
+}
+
+int vmd::vmdmstr::cmd_add_node(U32 msgid, const world_id &wid, const address &a)
+{
+	int r;
+	/* add node to world */
+	world *w = super::create_world(wid);
+	if (!w) { return NBR_ENOTFOUND; }
+	vmdmstr *s = sf(*this)->pool().find(a);
+	if (!s) { return NBR_ENOTFOUND; }
+	if ((r = w->add_node(*s)) < 0) { return r; }
+	/* pack current node list */
+	size_t sz = w->nodes().size() * (sizeof(address) + sizeof(U32));
+	char buffer[sz];
+	sr().pack_start(buffer, sz);
+	sr().push_raw((char *)&(w->world_object_uuid()), sizeof(UUID));
+	world::nditer i = w->nodes().begin();
+	for (; i != w->nodes().end(); i = w->nodes().next(i)) {
+		if (!i->registered()) { continue; }
+		if (sr().push_string(i->chnode()->iden,
+				strlen(i->chnode()->iden)) < 0) {
+			return NBR_ESHORT;
+		}
+		TRACE("address = <%s>\n", i->chnode()->iden);
+	}
+	return send_node_ctrl(*this, msgid, "add", wid, sr().p(), sr().len());
+}
+
+#define IS_ADD(cmd) (*cmd == 'a')
+int vmd::vmdmstr::recv_code_node_ctrl(querydata &q,
+		int r, const char *cmd, const world_id &wid, char *p, size_t l)
+{
+	char b[256];
+	log(INFO, "node ctrl cmd = %s<%s:%s>\n", cmd, wid, chnode()->iden);
+	world *w = object_factory::find_world(wid);
+	if (!w) { ASSERT(false); return NBR_ENOTFOUND; }
+	int rr = protocol::notify_node_change(*this, cmd, wid, chnode()->iden);
+	r = rr < 0 ? rr : r;
+	data d;
+	sr().unpack_start(p, l);
+	if (IS_ADD(cmd)) {
+		UUID uuid = w->world_object_uuid();
+		if (r < 0 || sr().unpack(d) <= 0) {
+			w->del_node(*this);
+			protocol::notify_node_change(*this, "del", wid, chnode()->iden);
+		}
+		else if (!protocol::is_valid_id(uuid)) {
+			w->set_world_object_uuid(*(UUID *)script::to_p(d));
+			log(INFO, "set world object %s\n",
+					w->world_object_uuid().to_s(b, sizeof(b)));
+		}
+	}
+	if (q.msgid != 0) {
+		q.sender()->reply_node_ctrl(*this, q.msgid, r, cmd, wid, p, l);
+	}
+	return NBR_OK;
 }
 
 int
@@ -79,6 +130,18 @@ vmd::vmdmstr::recv_cmd_login(U32 msgid, const world_id &wid,
 	char b[256];
 	/* TODO: do something before do this step
 	 * authenticate acc with authdata & len */
+	world *w = object_factory::find_world(wid);
+	if (!w) {
+		ASSERT(false);
+		reply_login(*this, msgid, NBR_ENOTFOUND, wid, UUID(), "", 0);
+		return NBR_OK;
+	}
+	UUID uuid = w->world_object_uuid();
+	if (!protocol::is_valid_id(uuid)) {
+		log(ERROR, "world(%s) not exist\n", wid);
+		reply_login(*this, msgid, NBR_ENOTFOUND, wid, UUID(), "", 0);
+		return NBR_OK;
+	}
 	account_info *pa = m_lm.create(acc);
 	if (pa) {
 		if (pa->login()) {
@@ -87,14 +150,6 @@ vmd::vmdmstr::recv_cmd_login(U32 msgid, const world_id &wid,
 		}
 		else {
 			memcpy(pa->m_login_wid, wid, sizeof(wid));	/* login now */
-			/* if uuid is invalid */
-			if (!protocol::is_valid_id(pa->m_uuid)) {
-				pa->m_uuid = protocol::new_id();
-#if defined(_DEBUG)
-				log(INFO, "create new_id : <%s> for <%s>\n",
-						pa->m_uuid.to_s(b, sizeof(b)), acc);
-#endif
-			}
 			log(INFO, "login>A:%s,UUID:%s,W:%s\n",
 					acc,pa->m_uuid.to_s(b,sizeof(b)),wid);
 			reply_login(*this, msgid, NBR_OK, wid, pa->m_uuid, "", 0);
@@ -149,26 +204,6 @@ vmd::vmdsvnt::recv_cmd_new_object(U32 msgid, const world_id &wid,
 	return reply_new_object(*this, msgid, NBR_OK, uuid, sr().p(), sr().len());
 }
 
-int vmd::vmdsvnt::load_or_create_object(U32 msgid,
-		UUID &uuid, char *p, size_t l, loadpurpose lp, querydata **pq)
-{
-	world *w = object_factory::find_world(super::wid());
-	connector *c;
-	if (!w || !(c = w->connect_assigned_node(cf(), uuid))) {
-		ASSERT(false);
-		return NBR_ENOTFOUND;
-	}
-	/* send object create */
-	querydata *q;
-	if (c->send_new_object(*this, msgid, super::wid(), uuid, p, l, &q) >= 0) {
-		/* success. store purpose data */
-		q->m_data = lp;
-		if (pq) { *pq = q; }
-		return NBR_OK;
-	}
-	return NBR_EEXPIRE;
-}
-
 int
 vmd::vmdsvnt::recv_code_new_object(
 		querydata &q, int r, UUID &uuid, char *p, size_t l)
@@ -176,8 +211,8 @@ vmd::vmdsvnt::recv_code_new_object(
 	char b[256];
 	object *o;
 #if defined(_DEBUG)
-	log(INFO, "code_new_object: %d %s dlen=%u\n",
-			r, uuid.to_s(b, sizeof(b)), l);
+	log(INFO, "code_new_object: %d %s t=%u\n",
+			r, uuid.to_s(b, sizeof(b)), q.m_data);
 #endif
 	switch(q.m_data) {
 	case load_purpose_create:
@@ -199,10 +234,18 @@ vmd::vmdsvnt::recv_code_new_object(
 			/* pid, "", 0 means no argument */
 			r = script::call_proc(*this, cf(), super::wid(), q.msgid, *o, pid,
 					"", 0, rpct_global, vmprotocol::rpcopt_flag_not_set);
-			return q.sender()->reply_login(*this, q.msgid, r, m_wid, uuid, p, l);
+			return q.sender()->reply_login(*this, q.msgid, r,
+				super::wid(), uuid, p, l);
 		}
 		return q.sender()->reply_login(*this, q.msgid, NBR_EEXPIRE, 
 			super::wid(), uuid, "", 0);
+	case vmprotocol::load_purpose_create_world:
+		q.wld().set_world_object_uuid(uuid);
+		log(INFO, "world_create>object_id:%s\n", uuid.to_s(b, sizeof(b)));
+		sr().pack_start(b, sizeof(b));
+		sr().push_raw((char *)&uuid, sizeof(uuid));
+		return backend_conn()->reply_node_ctrl(*this, q.msgid, NBR_OK, "add",
+				q.wld().id(), sr().p(), sr().len());
 	default:
 		log(ERROR, "invalid purpose: %d\n", q.m_data);
 		ASSERT(false);
@@ -229,13 +272,20 @@ vmd::vmdsvnt::recv_code_login(querydata &q, int r, const world_id &wid,
 	if (r < 0) {
 		return q.sender()->reply_login(*this, q.msgid, r, wid, uuid, "", 0);
 	}
-	if (!protocol::is_valid_id(uuid)) {
-		return q.sender()->reply_login(*this, q.msgid, NBR_EINVAL, wid, uuid, "", 0);
+	if (protocol::is_valid_id(uuid)) {
+		sr().unpack_start(p, l);
+		object *o = script::object_new(cf(), wid, NULL/*use main VM*/,
+				uuid, &(sr()), false);
+		if (!o) {
+			return q.sender()->reply_login(*this,
+					q.msgid, NBR_EINVAL, wid, uuid, "", 0);
+		}
+		return q.sender()->reply_login(*this, q.msgid, NBR_OK, wid, uuid, p, l);
 	}
 	else {
-		r = load_or_create_object(q.msgid, uuid, p, l,
-				vmprotocol::load_purpose_login, NULL);
-		if (r < 0) {
+		querydata *dq;
+		if ((r = create_object_with_type(&wid, "Player", sizeof("Player"),
+			q.msgid, vmprotocol::load_purpose_login, &dq)) < 0) {
 			return q.sender()->reply_login(*this, q.msgid, r, wid, uuid, "", 0);
 		}
 		return r;	/* waiting for creation reply */
@@ -252,8 +302,6 @@ vmd::vmdsvnt::recv_notify_node_change(const char *cmd,
 		ASSERT(false);
 		return NBR_EEXPIRE;
 	}
-	/* because this only from connector, factory type is different
-	 * TODO : that is very hard to find, I want to remove such a difference */
 	vmdsvnt *s = cf().pool().create(a);
 	TRACE("create for session object for %s(%p)\n", (const char*)a, s);
 	if (!s) {
@@ -267,31 +315,48 @@ vmd::vmdsvnt::recv_notify_node_change(const char *cmd,
 	return IS_ADD(cmd) ? w->add_node(*s) : w->del_node(*s);
 }
 
-
 int
-vmd::vmdsvnt::recv_code_node_ctrl(querydata &q, int r, const char *cmd,
-			const world_id &wid, const address &a, char *p, size_t l)
+vmd::vmdsvnt::recv_cmd_node_ctrl(U32 msgid, const char *cmd,
+			const world_id &wid, char *p, size_t l)
 {
+	int r;
+	log(ERROR, "node_ctrl>W:%s,CMD:%s\n", wid, cmd);
 	if (!IS_ADD(cmd)) {
-		return NBR_OK;
-	}
-	log(ERROR, "add_node>R:%d,W:%s,A:%s\n", r, wid, (const char *)a);
-	if (r < 0) {
-		close();
-		ASSERT(false);
-		return r;
+		return backend_conn()->reply_node_ctrl(
+				*this, msgid, NBR_OK, cmd, wid, "", 0);
 	}
 	data d;
 	sr().unpack_start(p, l);
+	if (sr().unpack(d) <= 0) { return NBR_EFORMAT; }
+	bool has_object = protocol::is_valid_id(*(UUID *)script::to_p(d));
 	while(sr().unpack(d)) {
 		r = recv_notify_node_change(cmd, wid, script::to_s(d));
 		if (r < 0 && r != NBR_EALREADY) {
 			ASSERT(false);
-			return r;
+			return backend_conn()->reply_node_ctrl(
+					*this, msgid, r, cmd, wid, "", 0);
 		}
 		log(INFO, "add node to consistent hash %s:%d\n", script::to_s(d), r);
 	}
-	return NBR_OK;
+	if (!has_object) {
+		world *w = object_factory::find_world(wid);
+		if (!w) {
+			ASSERT(false);
+			return backend_conn()->reply_node_ctrl(
+					*this, msgid, NBR_ENOTFOUND, cmd, wid, "", 0);
+		}
+		TRACE("this world (%s) has no world object so create now\n", wid);
+		querydata *q;
+		if ((r = create_object_with_type(&wid, "World", sizeof("World"),
+			msgid, vmprotocol::load_purpose_create_world, &q)) < 0) {
+			return backend_conn()->reply_node_ctrl(
+					*this, msgid, r, cmd, wid, "", 0);
+		}
+		q->m_world = w;
+		return NBR_OK;
+	}
+	return backend_conn()->reply_node_ctrl(
+			*this, msgid, NBR_OK, cmd, wid, "", 0);
 }
 
 
@@ -446,12 +511,9 @@ vmd::boot(int argc, char *argv[])
 				return NBR_ESYSCALL;
 			}
 			vmdsvnt::connector *c = svnt->backend_connect("127.0.0.1:8000");
-			if (!c) {
-				return NBR_EEXPIRE;
-			}
+			if (!c) { return NBR_EEXPIRE; }
 			address a("127.0.0.1:9000");
-			vmdsvnt::world_id wid = "test_MMO";
-			if (c->send_node_ctrl(*(c->chain()->m_s), 0, "add", wid, a) < 0) {
+			if (c->send_node_register(*(c->chain()->m_s), 0, a) < 0) {
 				return NBR_ESEND;
 			}
 		}
@@ -459,6 +521,11 @@ vmd::boot(int argc, char *argv[])
 			return NBR_EINVAL;
 		}
 	}
+#if defined(_TEST)
+	/* waiting for world register */
+	int n_cnt = 0;
+	while (n_cnt < 10) { n_cnt++; heartbeat(); }
+#endif
 	vmdclnt::factory *clnt = find_factory<vmdclnt::factory>("clnt");
 	if (clnt) {
 		if ((vc = find_config<vmdconfig>("clnt"))) {
@@ -470,9 +537,7 @@ vmd::boot(int argc, char *argv[])
 				return NBR_ESYSCALL;
 			}
 			vmdclnt::connector *c = clnt->backend_connect("127.0.0.1:9000");
-			if (!c) {
-				return NBR_EEXPIRE;
-			}
+			if (!c) { return NBR_EEXPIRE; }
 			/* set connector factory */
 			vmdclnt::set_cf(clnt);
 			/* send login (you can send immediately :D)*/

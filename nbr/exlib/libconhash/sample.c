@@ -4,6 +4,7 @@
 #include <stdlib.h>
 
 #include "nbr.h"
+#include "macro.h"
 
 CHNODE g_nodes[64];
 int main()
@@ -33,6 +34,13 @@ int main()
         nbr_conhash_add_node(conhash, &g_nodes[2]);
         nbr_conhash_add_node(conhash, &g_nodes[3]);
         nbr_conhash_add_node(conhash, &g_nodes[4]);
+
+        ASSERT(nbr_conhash_node_registered(&g_nodes[0]));
+        ASSERT(nbr_conhash_node_registered(&g_nodes[1]));
+        ASSERT(nbr_conhash_node_registered(&g_nodes[2]));
+        ASSERT(nbr_conhash_node_registered(&g_nodes[3]));
+        ASSERT(nbr_conhash_node_registered(&g_nodes[4]));
+
 
         printf("virtual nodes number %d\n", nbr_conhash_get_vnodes_num(conhash));
         printf("the hashing results--------------------------------------:\n");

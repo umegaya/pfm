@@ -153,7 +153,6 @@ int lua<SR,OF>::init(int max_rpc_entry, int max_rpc_ongoing)
 	if (!(m_lock = nbr_rwlock_create())) {
 		return NBR_EPTHREAD;
 	}
-	TRACE("lua: VM = %p\n", m_vm);
 	lua_settop(m_vm, 0);
 	/* load built in library */
 	lua_pushcfunction(m_vm, luaopen_base);
@@ -953,7 +952,7 @@ int lua<SR,OF>::create(VM lua)
 	}
 	typename S::querydata *q;
 	UUID uuid = OF::new_id();
-	if (c->load_or_create_object(0, uuid, 
+	if (c->load_or_create_object(0, NULL, uuid, 
 		sr.p(), sr.len(), vmprotocol::load_purpose_create, &q) < 0) {
 		FINISH_PACK(c);
 		lua_pushstring(lua, "send object creation fail");

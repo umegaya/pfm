@@ -20,8 +20,9 @@
 #define CONHASH_API  
 #endif
 
-#define NODE_FLAG_INIT  0x01 /* node is initialized */
-#define NODE_FLAG_IN    0x02 /* node is added in the server */
+#define NODE_FLAG_INIT  0x01 	/* node is initialized */
+#define NODE_FLAG_IN    0x02 	/* node is added in the server */
+#define NODE_FLAG_FAULT	0x04	/* node have some trouble and not works */
 
 #if 0
 /* nodes structure */

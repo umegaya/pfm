@@ -66,6 +66,10 @@ int object_factory_impl<S,IDG,KVS>::world_impl<C>::init(
 	if (!(m_ch = nbr_conhash_init(NULL, max_node, max_replica))) {
 		return NBR_EMALLOC;
 	}
+	if (!m_nodes.init(max_node, max_node / 10, -1, opt_expandable | opt_threadsafe)) {
+		nbr_conhash_fin(m_ch);
+		return NBR_EEXPIRE;
+	}
 	return NBR_OK;
 }
 
@@ -98,6 +102,29 @@ retry:
 		TRACE("object replicate addr <%s>\n", n[i]->iden);
 	}
 	return c;
+}
+
+
+template <class S, class IDG, class KVS>
+template <class C>
+int object_factory_impl<S,IDG,KVS>::world_impl<C>::add_node(const C &s)
+{
+	int r = add_node(*s.chnode());
+	if (r < 0) {
+		return r == NBR_EALREADY ? NBR_OK : r;
+	}
+	if (m_nodes.end() != m_nodes.insert(&s, s.chnode()->iden)) {
+		return NBR_OK;
+	}
+	del_node(s);
+	return NBR_EEXPIRE;
+}
+template <class S, class IDG, class KVS>
+template <class C>
+int object_factory_impl<S,IDG,KVS>::world_impl<C>::del_node(const C &s)
+{
+	m_nodes.erase(s.chnode()->iden);
+	return del_node(*s.chnode());
 }
 
 
@@ -148,8 +175,11 @@ int vmprotocol_impl<S,IDG,SNDR>::on_recv(char *p, int l)
 	case vmprotocol::vmcmd_node_ctrl:		/* s->m */
 		POP_STR(strcmd, sizeof(strcmd));
 		POP_STR(wid, sizeof(wid));
+		_this().recv_cmd_node_ctrl(msgid, strcmd, wid, POP_BUF(), POP_REMAIN());
+		break;
+	case vmprotocol::vmcmd_node_register:
 		POP_ADDR(a);
-		_this().recv_cmd_node_ctrl(msgid, strcmd, wid, a);
+		_this().recv_cmd_node_register(msgid, a);
 		break;
 	case vmprotocol::vmcode_rpc:            /* s->c, c->c, s->s */
 		POP_8(rt);
@@ -182,9 +212,15 @@ int vmprotocol_impl<S,IDG,SNDR>::on_recv(char *p, int l)
 		POP_32(r);
 		POP_STR(strcmd, sizeof(strcmd));
 		POP_STR(wid, sizeof(wid));
-		POP_ADDR(a);
-		q->sender()->recv_code_node_ctrl(*q, r, strcmd, wid, a,
+		q->sender()->recv_code_node_ctrl(*q, r, strcmd, wid,
 				POP_BUF(), POP_REMAIN());
+		break;
+	case vmprotocol::vmcode_node_register:
+		q = (typename S::querydata *)sf->find_query(msgid);
+		if (!q || !nbr_sock_is_same(q->sk, q->sender()->sk())) {
+			ASSERT(q); goto error; }
+		POP_32(r);
+		q->sender()->recv_code_node_register(*q, r);
 		break;
 	case vmprotocol::vmnotify_node_change:	/* m->s */
 		POP_STR(strcmd, sizeof(strcmd));
@@ -334,11 +370,11 @@ int vmprotocol_impl<S,IDG,SNDR>::reply_login(SNDR &s, U32 msgid,
 
 template <class S,class IDG,class SNDR>
 int vmprotocol_impl<S,IDG,SNDR>::send_node_ctrl(SNDR &s,
-		U32 rmsgid, const char *cmd, const world_id &wid, const address &a)
+		U32 rmsgid, const char *cmd, const world_id &wid, char *p, size_t pl)
 {
 	size_t sz =
 		2 * (1 + sizeof(U32) + vmd_max_node_ctrl_cmd +
-				sizeof(world_id) + sizeof(address));
+				sizeof(world_id) + sizeof(address) + pl);
 	char buf[sz];
 	PUSH_START(buf, sz);
 	PUSH_8(vmprotocol::vmcmd_node_ctrl);
@@ -346,7 +382,7 @@ int vmprotocol_impl<S,IDG,SNDR>::send_node_ctrl(SNDR &s,
 	PUSH_32(msgid);
 	PUSH_STR(cmd);
 	PUSH_STR(wid);
-	PUSH_ADDR(a);
+	PUSH_MEM(p, pl);
 	typename S::querydata *q = _this().senddata(s, msgid, buf, PUSH_LEN());
 	if (q) {
 		q->msgid = rmsgid;
@@ -355,15 +391,14 @@ int vmprotocol_impl<S,IDG,SNDR>::send_node_ctrl(SNDR &s,
 	return NBR_EEXPIRE;
 }
 
-
 template <class S,class IDG,class SNDR>
 int vmprotocol_impl<S,IDG,SNDR>::reply_node_ctrl(SNDR &s, U32 msgid,
-		int r, const char *cmd, const world_id &wid, const address &a,
+		int r, const char *cmd, const world_id &wid,
 		char *p, size_t pl)
 {
 	size_t sz =
 		2 * (1 + sizeof(U32) + vmd_max_node_ctrl_cmd +
-				sizeof(world_id) + sizeof(address) + pl);
+				sizeof(world_id) + pl);
 	char buf[sz];
 	PUSH_START(buf, sz);
 	PUSH_8(vmprotocol::vmcode_node_ctrl);
@@ -371,8 +406,39 @@ int vmprotocol_impl<S,IDG,SNDR>::reply_node_ctrl(SNDR &s, U32 msgid,
 	PUSH_32(r);
 	PUSH_STR(cmd);
 	PUSH_STR(wid);
-	PUSH_ADDR(a);
 	PUSH_MEM(p, pl);
+	return _this().send(buf, PUSH_LEN());
+}
+
+template <class S,class IDG,class SNDR>
+int vmprotocol_impl<S,IDG,SNDR>::send_node_register(SNDR &s,
+		U32 rmsgid, const address &node_addr)
+{
+	size_t sz = 2 * (1 + sizeof(U32) + sizeof(address));
+	char buf[sz];
+	PUSH_START(buf, sz);
+	PUSH_8(vmprotocol::vmcmd_node_register);
+	U32 msgid = _this().f()->msgid();
+	PUSH_32(msgid);
+	PUSH_ADDR(node_addr);
+	typename S::querydata *q = _this().senddata(s, msgid, buf, PUSH_LEN());
+	if (q) {
+		q->msgid = rmsgid;
+		return PUSH_LEN();
+	}
+	return NBR_EEXPIRE;
+}
+
+template <class S,class IDG,class SNDR>
+int vmprotocol_impl<S,IDG,SNDR>::reply_node_register(SNDR &s,
+		U32 msgid, int r)
+{
+	size_t sz = 2 * (1 + sizeof(U32) + sizeof(U32));
+	char buf[sz];
+	PUSH_START(buf, sz);
+	PUSH_8(vmprotocol::vmcode_node_register);
+	PUSH_32(msgid);
+	PUSH_32(r);
 	return _this().send(buf, PUSH_LEN());
 }
 
@@ -456,6 +522,41 @@ int vmnode<S>::recv_code_rpc(querydata &q, char *p, size_t l, rpctype rt)
 }
 
 template <class S>
+template <class Q>
+int vmnode<S>::create_object_with_type(const world_id *id,
+		const char *type, size_t tlen, U32 msgid, loadpurpose lp, Q **pq)
+{
+	char b[tlen + sizeof(U32)];
+	vmmodule::sr().pack_start(b, sizeof(b));
+	vmmodule::sr().push_string(type, tlen);	/* object type. blessed */
+	UUID uuid = protocol::new_id();
+	return load_or_create_object(msgid, id, uuid,
+			vmmodule::sr().p(), vmmodule::sr().len(), lp, pq);
+}
+
+template <class S>
+template <class Q>
+int vmnode<S>::load_or_create_object(U32 msgid, const world_id *id,
+		UUID &uuid, char *p, size_t l, loadpurpose lp, Q **pq)
+{
+	world *w = object_factory::find_world(id ? *id : wid());
+	connector *c;
+	if (!w || !(c = w->connect_assigned_node(vmmodule::cf(), uuid))) {
+		ASSERT(false);
+		return NBR_ENOTFOUND;
+	}
+	/* send object create */
+	Q *q;
+	if (c->send_new_object(protocol::_this(), msgid, wid(), uuid, p, l, &q) >= 0) {
+		/* success. store purpose data */
+		q->m_data = lp;
+		if (pq) { *pq = q; }
+		return NBR_OK;
+	}
+	return NBR_EEXPIRE;
+}
+
+template <class S>
 typename vmnode<S>::world *vmnode<S>::create_world(
 		const world_id &wid) const
 {
@@ -465,6 +566,7 @@ typename vmnode<S>::world *vmnode<S>::create_world(
 			ASSERT(false);
 			return NULL;
 		}
+		w->set_id(wid);
 		int r;
 		const vmdconfig &vcfg = (const vmdconfig &)super::cfg();
 		if ((r = w->init(vcfg.m_max_node, vcfg.m_max_replica)) < 0) {

@@ -53,20 +53,24 @@ daemon::alive()
 	return 1;
 }
 
+void
+daemon::heartbeat()
+{
+	nbr_poll();
+	UTIME ut = nbr_clock();
+	smap::iterator p = m_sl.begin();
+	for (; p != m_sl.end(); p = m_sl.next(p)) {
+		if ((ut - p->m_last_poll) > p->cfg().m_taskspan) {
+			p->m_last_poll = ut;
+			p->poll(ut);
+		}
+	}
+}
+
 int
 daemon::run()
 {
-	while(alive()) {
-		nbr_poll();
-		UTIME ut = nbr_clock();
-		smap::iterator p = m_sl.begin();
-		for (; p != m_sl.end(); p = m_sl.next(p)) {
-			if ((ut - p->m_last_poll) > p->cfg().m_taskspan) {
-				p->m_last_poll = ut;
-				p->poll(ut);
-			}
-		}
-	}
+	while(alive()) { heartbeat(); }
 	fin();
 	return NBR_OK;
 }

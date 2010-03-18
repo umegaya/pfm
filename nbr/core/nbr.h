@@ -401,6 +401,9 @@ NBR_API int		nbr_conhash_del_node(CONHASH ch, CHNODE *n);
 NBR_API CHNODE		*nbr_conhash_lookup(CONHASH ch, const char *obj, size_t sz);
 NBR_API void		nbr_conhash_get_vnodes(CONHASH ch, long *values, int size);
 NBR_API U32		nbr_conhash_get_vnodes_num(CONHASH ch);
+NBR_API int		nbr_conhash_node_registered(const CHNODE *n);
+NBR_API int		nbr_conhash_node_fault(const CHNODE *n);
+NBR_API int		nbr_conhash_node_set_fault(CHNODE *n);
 
 #ifdef __cplusplus    /* When the user is Using C++,use C-linkage by this */
 }

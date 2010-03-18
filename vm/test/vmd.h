@@ -51,14 +51,20 @@ public:
 		~vmdmstr() {}
 		static int init_login_map(int max_user);
 	public:/* receiver */
+		int recv_cmd_node_register(U32 msgid, const address &a);
 		int recv_cmd_login(U32 msgid, const world_id &wid, const char *acc,
 				char *adata, size_t len);
+		int recv_code_node_ctrl(querydata &q, int r, const char *cmd,
+				const world_id &wid, char *p, size_t l);
+		int recv_cmd_node_ctrl(U32 msgid, const char *cmd,
+				const world_id &wid, char *p, size_t l);
+		/* below dummy handler */
 		int recv_cmd_rpc(U32 msgid, UUID &uuid, proc_id &pid,
 				char *p, int l, rpctype rc) { return 0; }
 		int recv_code_rpc(querydata &q, char *p, size_t l, rpctype rc)
 				{return 0;}
-		int recv_cmd_node_ctrl(U32 msgid, const char *cmd,
-				const world_id &wid, const address &a);
+	protected:
+		int cmd_add_node(U32 msgid, const world_id &wid, const address &a);
 	};
 	class vmdsvnt : public vmnode<vmdsvnt> {
 	public:
@@ -77,9 +83,6 @@ public:
 		~vmdsvnt() {}
 		const UUID &verify_uuid(const UUID &uuid) {
 			return GET_32(&(m_session_uuid)) ? m_session_uuid : uuid; }
-		int load_or_create_object(U32 msgid,
-				UUID &uuid, char *p, size_t l, loadpurpose lp,
-				querydata **pq);
 	public:/* vmdsvnt */
 		int recv_cmd_new_object(U32 msgid, const world_id &wid,
 				UUID &uuid, char *p, size_t l);
@@ -90,8 +93,9 @@ public:
 				UUID &uuid, char *p, size_t l);
 		int recv_notify_node_change(const char *cmd,
 				const world_id &wid, const address &a);
-		int recv_code_node_ctrl(querydata &q, int r, const char *cmd,
-				const world_id &wid, const address &a, char *p, size_t l);
+		int recv_cmd_node_ctrl(U32 msgid, const char *cmd,
+				const world_id &wid, char *p, size_t l);
+		int recv_code_node_register(querydata &q, int r) { return 0; }
 	};
 	class vmdclnt : public vmnode<vmdclnt> {
 	public:
