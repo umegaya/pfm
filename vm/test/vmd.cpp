@@ -30,7 +30,7 @@ map<vmd::vmdmstr::account_info,vmd::vmdmstr::protocol::login_id>
 /* methods */
 int vmd::vmdmstr::init_login_map(int max_user)
 {
-	if (!m_lm.init(max_user, max_user, opt_expandable | opt_threadsafe)) {
+	if (!m_lm.init(max_user, max_user, -1, opt_expandable | opt_threadsafe)) {
 		return NBR_EMALLOC;
 	}
 	return NBR_OK;
@@ -166,6 +166,19 @@ vmd::vmdmstr::recv_cmd_login(U32 msgid, const world_id &wid,
 /*-------------------------------------------------------------*/
 /* sfc::vmd::vmdservant                                        */
 /*-------------------------------------------------------------*/
+/* player object - session mapping */
+map<address, vmd::vmdsvnt::UUID> vmd::vmdsvnt::m_pm;
+
+int
+vmd::vmdsvnt::init_player_map(int max_session)
+{
+	if (!m_pm.init(max_session, max_session, -1,
+			opt_threadsafe | opt_expandable)) {
+		return NBR_EMALLOC;
+	}
+	return NBR_OK;
+}
+
 int
 vmd::vmdsvnt::recv_cmd_new_object(U32 msgid, const world_id &wid,
 		UUID &uuid, char *p, size_t l)
@@ -234,6 +247,11 @@ vmd::vmdsvnt::recv_code_new_object(
 			/* pid, "", 0 means no argument */
 			r = script::call_proc(*this, cf(), super::wid(), q.msgid, *o, pid,
 					"", 0, rpct_global, vmprotocol::rpcopt_flag_not_set);
+			/* insert relation ship table of session - object */
+			if (r >= 0 && m_pm.end() == m_pm.insert(addr(), uuid)) {
+				ASSERT(false);
+				r = NBR_EEXPIRE;
+			}
 			return q.sender()->reply_login(*this, q.msgid, r,
 				super::wid(), uuid, p, l);
 		}
@@ -505,6 +523,9 @@ vmd::boot(int argc, char *argv[])
 		if ((vc = find_config<vmdconfig>("svnt"))) {
 			if ((r = vmdsvnt::init_vm(vc->m_max_object, vc->m_max_world,
 					vc->m_rpc_entry, vc->m_rpc_ongoing)) < 0) {
+				return r;
+			}
+			if ((r = vmdsvnt::init_player_map(vc->m_max_connection)) < 0) {
 				return r;
 			}
 			if (!vmdsvnt::load("./scp/svt.lua")) {

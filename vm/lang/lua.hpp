@@ -43,6 +43,29 @@ typedef struct {
         OBJTYPE type;
         void *o;
 }       USERDATA;
+typedef enum {
+	CALL_NORMAL,
+	CALL_PROTECTED,		/* protected (cannot call from client) */
+	CALL_NOTIFICATION,	/* notificatoin rpc */
+	CALL_CLIENT,	/* client rpc */
+} call_attr;
+static inline call_attr call_attribute(
+		bool rcv, const char *p, const char *&_p) {
+	if (rcv) {
+		if (*p == '_') {
+			return CALL_PROTECTED;
+		}
+		if (memcmp(p, "client_", 7) == 0) {
+			_p = p + 7;
+			return CALL_CLIENT;
+		}
+	}
+	else if (memcmp(p, "notify_", 7) == 0) {
+		_p = p + 7;
+		return CALL_NOTIFICATION;
+	}
+	return CALL_NORMAL;
+}
 /* lua_convtype */
 typedef bool lua_Boolean;
 class lua_convtype {
@@ -204,6 +227,11 @@ protected: 	/* lua methods */
 	static int 	set_object_type(VM);
 	static int 	get_object_type(VM);
 	static void	*allocator(void *ud, void *ptr, size_t os, size_t ns);
+protected:	/* rpc hook */
+	static int rpc_sender_hook(const proc_id &p,
+				fiber &fb, object &o, SR &, rpctype rt);
+	static int rpc_recver_hook(S &c, U32 rmsgid, const proc_id &p,
+			fiber &fb, object &o, char *p, size_t l, rpctype rt);
 protected: 	/* helpers */
 	static void push_object(VM, object *);
 	static rpc 	*rpc_new(VM, object *, const char *);

@@ -57,6 +57,9 @@ function player:get_pos()
 	p[3] = self.z
 	return p
 end
+function player:_protected_call()
+	return "its protected"
+end
 end
 
 function init_object(object,objtype)

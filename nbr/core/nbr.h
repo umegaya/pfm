@@ -70,6 +70,7 @@ enum {
 	NBR_ECBFAIL		= -31,
 	NBR_ECONFIGURE	= -32,
 	NBR_EFULL		= -33,
+	NBR_ERIGHT		= -34,
 };
 
 enum {

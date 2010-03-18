@@ -61,6 +61,21 @@ function main(player)
 	player:enter_world()
 	pos = player:get_pos()
 	assert(compare_table(pos, {10000, 20000, 5000}))
+
+-- 	real test: name convention
+	function player:open_ui(url, p1, p2)
+		print("open_ui called")
+		local r = url .. "|" .. p1 .. "|" .. p2 
+		print("result = " .. r)
+		return r;
+	end
+	player:notify_chat("fuhehe")
+	retval = player:client_open_ui("index.html", "h=20", "w=100")
+	print("client_open_ui : retval = " .. retval)
+	assert(retval == "index.html|h=20|w=100")
+	print("name convention test 1 pass")
+	assert(player:notify_client_open_ui("index.html", "h=20", "w=100") == nil)
+	player:_protected_call()
 end
 
 function remote_error(from, msg)

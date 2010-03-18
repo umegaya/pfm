@@ -517,8 +517,14 @@ template <class S>
 int vmnode<S>::recv_code_rpc(querydata &q, char *p, size_t l, rpctype rt)
 {
 	/* resume fiber */
-	return script::resume_proc(*(q.sender()), protocol::_this().cf(), wid(),
-			q.vm(), p, l, rt);
+	if (q.vm()) {
+		return script::resume_proc(*(q.sender()), protocol::_this().cf(), wid(),
+				q.vm(), p, l, rt);
+	}
+	else {
+		TRACE("notification reply back. ignore.\n");
+		return NBR_OK;
+	}
 }
 
 template <class S>

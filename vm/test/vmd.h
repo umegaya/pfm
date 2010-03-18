@@ -78,11 +78,22 @@ public:
 		typedef super::UUID UUID;
 	protected:
 		UUID m_session_uuid;
+		static map<address, UUID> m_pm;	/* player object - session mapping */
 	public:
 		vmdsvnt() : super(this), m_session_uuid() {}
 		~vmdsvnt() {}
+		static int init_player_map(int max_session);
+		vmdsvnt *from_object(object &o) {
+			address *a = m_pm.find(o.uuid());
+			return a ? sf(*this)->pool().find(*a) : NULL;
+		}
+		void fin() {
+			m_pm.erase(m_session_uuid);
+			super::fin();
+		}
 		const UUID &verify_uuid(const UUID &uuid) {
-			return GET_32(&(m_session_uuid)) ? m_session_uuid : uuid; }
+			return protocol::is_valid_id(m_session_uuid) ? m_session_uuid : uuid; }
+		bool trust() const { return !protocol::is_valid_id(m_session_uuid); }
 	public:/* vmdsvnt */
 		int recv_cmd_new_object(U32 msgid, const world_id &wid,
 				UUID &uuid, char *p, size_t l);
@@ -107,6 +118,7 @@ public:
 	public:
 		vmdclnt() : super(this) {}
 		~vmdclnt() {}
+		vmdclnt *from_object(object &o) { return NULL; }
 	public:/* vmdclnt */
 		int recv_code_login(querydata &q, int r, const world_id &wid, 
 			UUID &uuid, char *p, size_t l);

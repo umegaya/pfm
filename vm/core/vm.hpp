@@ -67,7 +67,7 @@ public:
 	static void fin() {}
 	static const UUID &new_id();
 	static const UUID &invalid_id() { return UUID_INVALID; }
-	static inline bool valid(UUID &uuid) {
+	static inline bool valid(const UUID &uuid) {
 		return uuid.id1 != 0 || uuid.id2 != 0; }
 };
 }	//sfc::idgen
@@ -104,6 +104,8 @@ public:
 		rpct_global,	/* r = global_func(a1,a2,...) */
 		rpct_getter,	/* object[k] */
 		rpct_setter,	/* object[k] = v */
+		rpct_method_fw,	/* method call forwarded */
+		rpct_global_fw,	/* global call forwarded */
 
 		rpct_error = 255,/* error happen on remote */
 	} rpctype;
@@ -143,7 +145,7 @@ public: /* ctor/dtor/(g|s)etter */
 	vmprotocol_impl(S *s) : m_this(*s) {}
 	S &_this() { return m_this; }
 	const S &_this() const { return m_this; }
-	static bool is_valid_id(UUID &uuid) { return IDG::valid(uuid); }
+	static bool is_valid_id(const UUID &uuid) { return IDG::valid(uuid); }
 	static const UUID &new_id() { return IDG::new_id(); }
 	static const UUID &invalid_id() { return IDG::invalid_id(); }
 public:	/* receiver */
@@ -443,6 +445,7 @@ public:
 	void set_wid(const world_id &wid) { memcpy(m_wid, wid, sizeof(m_wid)); }
 	const world_id &wid() const { return m_wid; }
 	bool registered() const { return nbr_conhash_node_registered(&(m_node)); }
+	bool trust() const { return true; }
 	static const UUID &backend_key() { return protocol::invalid_id(); }
 	const UUID &verify_uuid(const UUID &uuid) const { return uuid; }
 	void fin() {

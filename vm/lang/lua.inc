@@ -766,6 +766,18 @@ int	lua<SR,OF>::resume_proc(S &c, CF &cf, const world_id &wid,
 			}
 		}
 		return dispatch(c, vm, 1, true, rt);
+	case vmprotocol::rpct_method_fw:
+	case vmprotocol::rpct_global_fw:
+		while(unpack_lua_stack(cf, wid, c.sr(), vm)) {
+			n_args++;
+			if (n_args > 100) {
+				ASSERT(false);
+				return NBR_EINVAL;
+			}
+		}
+		return rt == vmprotocol::rpct_method_fw ? 
+				reply_result(c, vm, n_args, vmprotocol::rpct_method) : 
+				reply_result(c, vm, n_args, vmprotocol::rpct_global);
 	case vmprotocol::rpct_setter:
 	default:
 		while(unpack_lua_stack(cf, wid, c.sr(), vm)) {
@@ -780,6 +792,48 @@ int	lua<SR,OF>::resume_proc(S &c, CF &cf, const world_id &wid,
 }
 
 template <class SR, class OF>
+int lua<SR,OF>::rpc_recver_hook(S &c, U32 rmsgid, const proc_id &pid,
+			fiber &fb, object &o, char *p, size_t pl, rpctype rt)
+{
+	const char *_pid = pid;
+	call_attr ca = call_attribute(true, pid, _pid);
+	if (ca == CALL_PROTECTED && !c.trust()) {
+		char b[256];
+		lua_pushfstring(fb, "untrust node call protected routine <%s:%s>",
+			(const char *)c.addr(), o.uuid().to_s(b, sizeof(b)));
+		reply_result(c, fb, 1, vmprotocol::rpct_error);
+		return NBR_OK;
+	}
+	else if (ca == CALL_CLIENT) {
+		/* forward this rpc to client which relate with o */
+		S *s = c.from_object(o);
+		if (!s) {
+			lua_pushstring(fb, "client rpc: player already gone");
+			reply_result(c, fb, 1, vmprotocol::rpct_error);
+			return NBR_OK;			
+		}
+		typename S::querydata *q;
+		rpctype rtfw;
+		switch(rt) {
+		case vmprotocol::rpct_method: 
+			rtfw = vmprotocol::rpct_method_fw; break;
+		case vmprotocol::rpct_global: 
+			rtfw = vmprotocol::rpct_global_fw; break;
+		default: ASSERT(false); return NBR_EINVAL;
+		}
+		if (s->send_rpc(c, o.uuid(), (const proc_id &)*_pid, p, pl, rtfw, &q) < 0) {
+			lua_pushstring(fb, "forward rpc to client fail");
+			reply_result(c, fb, 1, vmprotocol::rpct_error);
+			return NBR_OK;			
+		}
+		q->m_vm = fb;
+		q->msgid = rmsgid;
+		return NBR_OK;
+	}
+	return NBR_ENOTFOUND;
+}
+
+template <class SR, class OF>
 int lua<SR,OF>::call_proc(S &c, CF &cf, const world_id &wid, 
 		U32 rmsgid, object &o, proc_id &p,
 		char *args, size_t alen, rpctype rt, U32 rpcopt)
@@ -789,7 +843,7 @@ int lua<SR,OF>::call_proc(S &c, CF &cf, const world_id &wid,
 	if (!fb) {
 		return NBR_EEXPIRE;
 	}
-	int n_args = 0, n_basestk = 1, r;
+	int n_args = 0, r;
 	lua_settop(*fb, 0);
 	c.sr().unpack_start(args, alen);
 	switch(rt) {
@@ -825,8 +879,11 @@ int lua<SR,OF>::call_proc(S &c, CF &cf, const world_id &wid,
 		m_fibers.destroy(fb);
 		return r;
 	case vmprotocol::rpct_method:
+	case vmprotocol::rpct_method_fw:
+		if (rpc_recver_hook(c, rmsgid, p, *fb, o, args, alen, rt) >= 0) { 
+			return NBR_OK; 
+		}
 		push_object(*fb, &o);	/* push object */
-		n_basestk = 2;
 		lua_getfield(*fb, -1, p);/* push function */
 		ASSERT(lua_isfunction(*fb, -1));
 		lua_pushvalue(*fb, -2);	/* copy object of this method */
@@ -834,6 +891,10 @@ int lua<SR,OF>::call_proc(S &c, CF &cf, const world_id &wid,
 		n_args = 1;
 		break;
 	case vmprotocol::rpct_global:
+	case vmprotocol::rpct_global_fw:
+		if (rpc_recver_hook(c, rmsgid, p, *fb, o, args, alen, rt) >= 0) { 
+			return NBR_OK; 
+		}
 		lua_getfield(*fb, LUA_GLOBALSINDEX, p);
 		ASSERT(lua_isfunction(*fb, -1));
 		push_object(*fb, &o);	/* push object */
@@ -984,13 +1045,20 @@ int lua<SR,OF>::index(VM lua)
 			/* if pfm/rpc object set to remote object, then return it */
 			return 1;
 		}
+		/* function which has this name (k) is defined on remote object */
+		if (lua_isfunction(lua, 3)) {
+			/* if same name function defined in remote object method table,
+			 * then we prefer to call this. */
+			return 1;
+		}
 #if !defined(ENABLE_GETTER)
-		/* create rpc object on lua stack */
+		/* otherwise create rpc object on lua stack */
 		rpc *r;
 		if (!(r = rpc_new(lua, o, k))) {
 			lua_pushstring(lua, "fail to create rpcobj");
 			lua_error(lua);
 		}
+		set_object_method(lua, *o, k, 4/* rpc object */);
 		return 1;	/* return this rpc object */
 #else
 		fiber *f = vm_owner(lua);
@@ -1044,6 +1112,11 @@ int lua<SR,OF>::newindex(VM lua)
 	}
 	/* object[k] = function */
 	else if (lua_isfunction(lua, 3)) {
+#if !defined(ENABLE_GETTER)
+		/* we can define function on remote object 
+		 * (mainly for server -> client rpc) */
+		set_object_method(lua, *o, k, 3);
+#else
 		/* create rpc object on lua stack */
 		rpc *r;
 		if (!(r = rpc_new(lua, o, k))) {
@@ -1052,6 +1125,7 @@ int lua<SR,OF>::newindex(VM lua)
 		}
 		/* object[k] = rpc */
 		set_object_method(lua, *o, k, 4/* rpc obj */);
+#endif
 		return 0;	/* no return value */
 	}
 	else {
@@ -1100,6 +1174,26 @@ int lua<SR,OF>::newindex(VM lua)
 }
 
 template <class SR, class OF>
+int lua<SR, OF>::rpc_sender_hook(const proc_id &p,
+			fiber &fb, object &o, SR &sr, rpctype rt)
+{
+	const char *_p = p;
+	call_attr ca = call_attribute(false, p, _p);
+	typename conn::querydata *q;
+	if (o.connection()->send_rpc(*(fb.connection()), 
+		o.uuid(), (const proc_id &)*_p, sr.p(), sr.len(), rt, &q) < 0) {
+		return NBR_ESEND;
+	}
+	if (ca == CALL_NOTIFICATION) {
+		q->m_vm = NULL;
+		lua_pushnil(fb);	/* return nil */
+		return 1;
+	}
+	q->m_vm = fb;
+	return lua_yield(fb, 1);
+}
+
+template <class SR, class OF>
 int lua<SR, OF>::call(VM lua)
 {
 	/* obj.k(a1,a2,...) -> convert to call(obj,k,a1,a2,....) */
@@ -1125,7 +1219,6 @@ int lua<SR, OF>::call(VM lua)
 	}
 	else {
 		/* else: call rpc */
-		conn *c = o->connection();		/* connection to real object */
 		fiber *f = vm_owner(lua);
 		S *sender = f->connection();
 		if (!sender || !sender->valid()) {
@@ -1145,17 +1238,7 @@ int lua<SR, OF>::call(VM lua)
 			}
 			lua_pop(lua, 1);
 		}
-		typename conn::querydata *q;
-		if (c->send_rpc(*sender, o->uuid(), r->proc(), sr.p(), sr.len(),
-				vmprotocol::rpct_method, &q) < 0) {
-			FINISH_PACK(sender);
-			ASSERT(false);
-			lua_pushstring(lua, "fail to rpc");
-			lua_error(lua);
-		}
-		q->m_vm = lua;
-		FINISH_PACK(sender);
-		return lua_yield(lua, 1);
+		return rpc_sender_hook(r->proc(), *f, *o, sr, vmprotocol::rpct_method);
 	}
 }
 
