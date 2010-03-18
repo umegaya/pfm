@@ -1,4 +1,7 @@
 function load_player(player)
+function player:set_name(name)
+	self.name = name
+end
 function player:chat(msg)
 	print(self.name .. ":" .. msg);
 	return 666
@@ -61,21 +64,21 @@ function init_object(object,objtype)
 	pfm.bless(object, objtype);
 	if objtype == "World" then
 		world = object
-		world.seed = 0
-		world.objs = {}
+		object.seed = 0
+		object.objs = {}
 		function world:new_id()
-			self.seed = self.seed + 1
-			if self.seed > 60000 then
+			local s = self.seed + 1
+			if s > 60000 then
 				self.seed = 1
 			end
-			return self.seed
+			return s
 		end
 		function world:enter(obj)
 			print("world:enter called")
 			assert(self == world)
 			local id = self:new_id()
 			obj:init_pos(self:new_id(), 10000, 20000, 5000)
-			world.objs[id] = obj
+			self.objs[id] = obj
 		end
 	end
 end

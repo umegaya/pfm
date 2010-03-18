@@ -12,7 +12,6 @@ function main(player)
 	player.name = "iyatomi"
 	print("set player name!!")
 	retval = player:chat("hehehe")
-	print("retval = " .. retval)
 	assert(retval == 666)
 
 --	real test: single value roundtrip
@@ -55,7 +54,7 @@ function main(player)
 
 --	real test: pfm.new
 	player.item = player:new_item(100)
-	assert(pfm.type_of(player.item) == "ITEM")
+	assert(pfm.typeof(player.item) == "ITEM")
 	assert(player:get_item_data("attack_point") == 1000)
 
 --	real test: enter world

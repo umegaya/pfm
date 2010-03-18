@@ -171,7 +171,7 @@ int lua<SR,OF>::init(int max_rpc_entry, int max_rpc_ongoing)
 	lua_pushcfunction(m_vm, set_object_type);
 	lua_setfield(m_vm, -2, "bless");
 	lua_pushcfunction(m_vm, get_object_type);
-	lua_setfield(m_vm, -2, "type_of");
+	lua_setfield(m_vm, -2, "typeof");
 	return NBR_OK;
 }
 
@@ -817,7 +817,7 @@ int lua<SR,OF>::call_proc(S &c, CF &cf, const world_id &wid,
 			ASSERT(lua_isstring(*fb, -1));
 			return reply_result(c, *fb, 1, vmprotocol::rpct_error);
 		}
-		TRACE("field name = %s\n", to_s(d));
+		TRACE("field name = %s.%s\n", o.uuid().to_s(b, sizeof(b)), to_s(d));
 		unpack_lua_stack(cf, wid, c.sr(), *fb);	/* object put on stack */
 		set_object_value(*fb, o, to_s(d), lua_gettop(*fb)); /* put to object table. 
 											but above object left on stack */
@@ -984,6 +984,15 @@ int lua<SR,OF>::index(VM lua)
 			/* if pfm/rpc object set to remote object, then return it */
 			return 1;
 		}
+#if !defined(ENABLE_GETTER)
+		/* create rpc object on lua stack */
+		rpc *r;
+		if (!(r = rpc_new(lua, o, k))) {
+			lua_pushstring(lua, "fail to create rpcobj");
+			lua_error(lua);
+		}
+		return 1;	/* return this rpc object */
+#else
 		fiber *f = vm_owner(lua);
 		S *sender = f->connection();
 		conn *c = o->connection();
@@ -1014,6 +1023,7 @@ int lua<SR,OF>::index(VM lua)
 		q->m_vm = lua;
 		FINISH_PACK(sender);
 		return lua_yield(lua, 1);
+#endif
 	}
 	return 0;
 }
