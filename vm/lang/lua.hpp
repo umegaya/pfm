@@ -131,8 +131,10 @@ public:	/* typedefs */
 	protected:
 		VM m_ip;
 		S *m_s;
-		U32 m_msgid, m_opt;
+		U32 m_msgid;
+		void (*m_fn)(S &, int, U32, S &, rpctype, char *, size_t);
 	public:
+		typedef void (*exit_fn)(S &, int, U32, S &, rpctype, char *, size_t);
 		/* NOTE : m_ip never destroyed after once created,  
 		memory region which is used for allocating fiber object is
 		assure to be 0 cleared. because this memory is allocated by
@@ -142,6 +144,8 @@ public:	/* typedefs */
 		operator VM () { return m_ip; }
 		U32 rmsgid() const { return m_msgid; }
 		S *connection() { return m_s; }
+		void call_exit(int r, S &s, rpctype rt, char *p, size_t l) {
+			m_fn(*m_s, r, m_msgid, s, rt, p, l); }
 		void set_owner(VM vm, VM th, S *s, U32 msgid) {
 			m_msgid = msgid;
 			m_s = s;
@@ -159,14 +163,13 @@ public:	/* typedefs */
 			lua_pop(vm, 1);
 			return fb;
 		}
-		bool init_from_vm(lua_State *vm, S *s, U32 msgid, U32 opt) {
+		bool init_from_vm(lua_State *vm, S *s, U32 msgid, exit_fn fn) {
 			if (!m_ip) { m_ip = lua_newcthread(vm, 1/* use min size */); }
 			if (m_ip) { set_owner(vm, m_ip, s, msgid); }
-			m_opt = opt;
+			m_fn = fn;
 			return m_ip != NULL;
 		}
-		bool need_reply() const { return m_opt&vmprotocol::rpcopt_flag_invoked; }
-		bool no_yield() const { return m_opt&vmprotocol::rpcopt_flag_notification; }
+		bool need_reply() const { return m_fn == NULL; }
 	};
 	class type_id {
 	protected:
@@ -212,7 +215,8 @@ public:
 			VM vm, UUID &uuid, SR *sr, bool local);
 	static int	pack_object(SR &, const object &, bool);
 	static int	call_proc(S &, CF &, const world_id &,
-			U32, object &, proc_id &, char *, size_t, rpctype, U32);
+			U32, object &, proc_id &, char *, size_t, rpctype,
+			typename fiber::exit_fn);
 	static int	resume_proc(S &, CF &, const world_id &, VM,
 			char *, size_t, rpctype);
 	static int 	resume_create(S &, CF &, const world_id &, VM, UUID &, SR &);
@@ -235,7 +239,8 @@ protected:	/* rpc hook */
 protected: 	/* helpers */
 	static void push_object(VM, object *);
 	static rpc 	*rpc_new(VM, object *, const char *);
-	static fiber	*fiber_new(S *, U32, U32);
+	static fiber	*fiber_new(S *, U32, typename fiber::exit_fn);
+	static void fiber_exit_call(fiber *fb, int basestk, int r, S &s, rpctype rt);
 
 	static int 	get_object_value(VM vm, const object &o, const char *key);
 	static int 	set_object_value(VM vm, const object &o, const char *key, int from);

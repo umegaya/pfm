@@ -9,6 +9,7 @@ function main(player)
 
 --      rediculous test
 	print("login success!")
+	player:set_name("takehiro")
 	player.name = "iyatomi"
 	print("set player name!!")
 	retval = player:chat("hehehe")

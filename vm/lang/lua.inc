@@ -371,12 +371,13 @@ lua<SR,OF>::rpc_new(VM lua, object *o, const char *name)
 }
 
 template <class SR, class OF>
-typename lua<SR,OF>::fiber *lua<SR,OF>::fiber_new(S *c, U32 msgid, U32 opt)
+typename lua<SR,OF>::fiber *lua<SR,OF>::fiber_new(
+		S *c, U32 msgid, typename fiber::exit_fn fn)
 {
 	fiber *fb = m_fibers.create();
 	if (!fb) { ASSERT(false); return NULL; }
 	lock lk(m_lock, true);
-	if (fb->init_from_vm(m_vm, c, msgid, opt)) {
+	if (fb->init_from_vm(m_vm, c, msgid, fn)) {
 		return fb;
 	}
 	else {
@@ -620,6 +621,24 @@ lua<SR,OF>::vm_owner(VM lua)
 }
 
 template <class SR, class OF>
+void lua<SR,OF>::fiber_exit_call(fiber *fb, int basestk, int r, S &c, rpctype rt)
+{
+	ASSERT(basestk >= 0);
+	PREPARE_PACK((&c), max_rpc_packlen);
+	SR &sr = c.sr();
+	int top = lua_gettop(*fb);
+	for (int i = basestk; i <= top; i++) {
+		if (pack_lua_stack(sr, *fb, i) < 0) {
+			break;
+		}
+	}
+	FINISH_PACK((&c));
+	fb->call_exit(r, c, rt, c.sr().p(), c.sr().len());
+	return;
+}
+
+
+template <class SR, class OF>
 int	lua<SR,OF>::reply_result(S &c, VM vm, int n_basestksz, rpctype rt)
 {
 	ASSERT(n_basestksz >= 0);
@@ -658,12 +677,21 @@ int 	lua<SR,OF>::dispatch(S &c, VM vm, int n_args, bool from_resume, rpctype rt)
 				/* send only remote error message to caller */
 				reply_result(c, vm, lua_gettop(vm) - 1, vmprotocol::rpct_error);
 			}
+			else {
+				fiber_exit_call(fb, stksz, NBR_ESYSCALL, c, rt);
+			}
 			m_fibers.destroy(fb);
 			return NBR_ESYSCALL;
 		}
 		else {
 			/* sucessfully finished */
-			r = fb->need_reply() ? reply_result(c, vm, stksz, rt) : NBR_OK;
+			if (fb->need_reply()) {
+				r = reply_result(c, vm, stksz, rt);
+			}
+			else {
+				fiber_exit_call(fb, stksz, NBR_OK, c, rt);
+				r = NBR_OK;
+			}
 			/* whatever result is, free fiber for this function call */
 			m_fibers.destroy(fb);
 		}
@@ -836,10 +864,10 @@ int lua<SR,OF>::rpc_recver_hook(S &c, U32 rmsgid, const proc_id &pid,
 template <class SR, class OF>
 int lua<SR,OF>::call_proc(S &c, CF &cf, const world_id &wid, 
 		U32 rmsgid, object &o, proc_id &p,
-		char *args, size_t alen, rpctype rt, U32 rpcopt)
+		char *args, size_t alen, rpctype rt, typename fiber::exit_fn fn)
 {
 	data d;
-	fiber *fb = fiber_new(&c, rmsgid, rpcopt);
+	fiber *fb = fiber_new(&c, rmsgid, fn);
 	if (!fb) {
 		return NBR_EEXPIRE;
 	}
@@ -1040,6 +1068,23 @@ int lua<SR,OF>::index(VM lua)
 	else {
 		ASSERT(lua_type(lua, 3) == -1);
 		get_object_value(lua, *o, k);
+#if !defined(ENABLE_GETTER)
+		if (!lua_isnil(lua, 3)) {
+			/* already have the element which name is k 
+			 * we prefer to use it than do rpc */
+			return 1;
+		}
+		else {
+			/* create rpc object on lua stack */
+			rpc *r;
+			if (!(r = rpc_new(lua, o, k))) {
+				lua_pushstring(lua, "fail to create rpcobj");
+				lua_error(lua);
+			}
+			set_object_method(lua, *o, k, 4/* rpc object */);
+			return 1;	/* return this rpc object */
+		}
+#else
 		USERDATA *ud = (USERDATA *)lua_touserdata(lua, 3);
 		if (ud && (ud->type == OT_PFM || ud->type == OT_RPC)) {
 			/* if pfm/rpc object set to remote object, then return it */
@@ -1047,20 +1092,9 @@ int lua<SR,OF>::index(VM lua)
 		}
 		/* function which has this name (k) is defined on remote object */
 		if (lua_isfunction(lua, 3)) {
-			/* if same name function defined in remote object method table,
-			 * then we prefer to call this. */
+			/* we prefer to call this than do rpc. */
 			return 1;
 		}
-#if !defined(ENABLE_GETTER)
-		/* otherwise create rpc object on lua stack */
-		rpc *r;
-		if (!(r = rpc_new(lua, o, k))) {
-			lua_pushstring(lua, "fail to create rpcobj");
-			lua_error(lua);
-		}
-		set_object_method(lua, *o, k, 4/* rpc object */);
-		return 1;	/* return this rpc object */
-#else
 		fiber *f = vm_owner(lua);
 		S *sender = f->connection();
 		conn *c = o->connection();
@@ -1129,6 +1163,10 @@ int lua<SR,OF>::newindex(VM lua)
 		return 0;	/* no return value */
 	}
 	else {
+#if !defined(ENABLE_GETTER)
+		set_object_value(lua, *o, k, 3);
+		return 0;
+#else
 		object *v = to_o(lua, 3, false);
 		/* not pfm object and o is remote */
 		if (!v) {
@@ -1169,6 +1207,7 @@ int lua<SR,OF>::newindex(VM lua)
 			/* object[k] = pfmobj */
 			set_object_value(lua, *o, k, 3);
 		}
+#endif
 		return 0;	/* no return variable */
 	}
 }

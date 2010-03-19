@@ -510,7 +510,7 @@ int vmnode<S>::recv_cmd_rpc(U32 msgid, UUID &uuid, proc_id &pid,
 	}
 	/* execute fiber */
 	return script::call_proc(protocol::_this(), protocol::_this().cf(), wid(),
-			msgid, *o, pid, p, (size_t)l, rt, protocol::rpcopt_flag_invoked);
+			msgid, *o, pid, p, (size_t)l, rt, NULL);
 }
 
 template <class S>

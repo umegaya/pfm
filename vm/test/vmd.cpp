@@ -202,7 +202,7 @@ vmd::vmdsvnt::recv_cmd_new_object(U32 msgid, const world_id &wid,
 	if (o->create_new()) {
 		proc_id pid = "init_object";
 		if ((r = script::call_proc(*this, cf(), wid, msgid, *o, pid, p, l,
-				rpct_global, vmprotocol::rpcopt_flag_not_set)) < 0) {
+				rpct_global, super::def_fiber_exit_cb)) < 0) {
 			return reply_new_object(*this, msgid, r, uuid, NULL, 0);
 		}
 	}
@@ -246,7 +246,7 @@ vmd::vmdsvnt::recv_code_new_object(
 			proc_id pid = "load_player";
 			/* pid, "", 0 means no argument */
 			r = script::call_proc(*this, cf(), super::wid(), q.msgid, *o, pid,
-					"", 0, rpct_global, vmprotocol::rpcopt_flag_not_set);
+					"", 0, rpct_global, super::def_fiber_exit_cb);
 			/* insert relation ship table of session - object */
 			if (r >= 0 && m_pm.end() == m_pm.insert(addr(), uuid)) {
 				ASSERT(false);
@@ -408,7 +408,7 @@ vmd::vmdclnt::recv_code_login(querydata &q, int r, const world_id &wid,
 		proc_id pid = "main";
 		/* pid, "", 0 means no argument */
 		script::call_proc(*this, cf(), super::wid(), q.msgid, *o, pid, "", 0,
-				rpct_global, vmprotocol::rpcopt_flag_not_set);
+				rpct_global, super::def_fiber_exit_cb);
 		return NBR_OK;
 	}
 	ASSERT(false);

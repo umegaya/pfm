@@ -466,6 +466,8 @@ public:
 			const world_id *id,
 			const char *type, size_t tlen,
 			U32 msgid, loadpurpose lp, Q **pq);
+	static void def_fiber_exit_cb(S &, int, U32, S &, rpctype, char *, size_t) {}
+
 };
 template <class S> static inline typename S::factory *sf(S &s) {
 	return (typename S::factory *)s.f();
