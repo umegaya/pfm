@@ -76,6 +76,7 @@ public:
 		typedef super::world_id world_id;
 		typedef super::script script;
 		typedef super::UUID UUID;
+		typedef super::VM VM;
 	protected:
 		UUID m_session_uuid;
 		static map<address, UUID> m_pm;	/* player object - session mapping */
@@ -91,6 +92,7 @@ public:
 			m_pm.erase(m_session_uuid);
 			super::fin();
 		}
+		const UUID &session_uuid() const { return m_session_uuid; }
 		const UUID &verify_uuid(const UUID &uuid) {
 			return protocol::is_valid_id(m_session_uuid) ? m_session_uuid : uuid; }
 		bool trust() const { return !protocol::is_valid_id(m_session_uuid); }
@@ -107,6 +109,11 @@ public:
 		int recv_cmd_node_ctrl(U32 msgid, const char *cmd,
 				const world_id &wid, char *p, size_t l);
 		int recv_code_node_register(querydata &q, int r) { return 0; }
+	protected:/* callback */
+		static void exit_init_object(vmdsvnt &sender, vmdsvnt &recver,
+				VM vm, int r, U32 rmsgid, rpctype rt, char *p, size_t l);
+		static void exit_load_player(vmdsvnt &sender, vmdsvnt &recver,
+				VM vm, int r, U32 rmsgid, rpctype rt, char *p, size_t l);
 	};
 	class vmdclnt : public vmnode<vmdclnt> {
 	public:

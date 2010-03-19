@@ -60,6 +60,7 @@ end
 function player:_protected_call()
 	return "its protected"
 end
+return player
 end
 
 function init_object(object,objtype)
@@ -84,4 +85,5 @@ function init_object(object,objtype)
 			self.objs[id] = obj
 		end
 	end
+	return object
 end

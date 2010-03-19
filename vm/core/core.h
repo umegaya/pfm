@@ -315,7 +315,7 @@ int vmprotocol_impl<S,IDG,SNDR>::send_new_object(SNDR &s, U32 rmsgid,
 
 template <class S,class IDG,class SNDR>
 int vmprotocol_impl<S,IDG,SNDR>::reply_new_object(SNDR &s, U32 msgid,
-		int r, UUID &uuid, char *p, size_t l)
+		int r, const UUID &uuid, char *p, size_t l)
 {
 	size_t sz =
 		2 * (1 + sizeof(msgid) + sizeof(r) + sizeof(UUID) + l);

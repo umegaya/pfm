@@ -183,7 +183,8 @@ public: /* sender */
 	template <class Q> int send_new_object(SNDR &s, U32 rmsgid,
 			const world_id &wid, const UUID &uuid,
 			char *p, size_t l, Q **pq);
-	int reply_new_object(SNDR &s, U32 msgid, int r, UUID &uuid, char *p, size_t l);
+	int reply_new_object(SNDR &s, U32 msgid, int r, const UUID &uuid,
+			char *p, size_t l);
 	int send_login(SNDR &s, U32 msgid, const world_id &wid,
 			const char *acc, char *p, size_t l);
 	int reply_login(SNDR &s, U32 msgid, int r, const world_id &wid,
@@ -466,7 +467,7 @@ public:
 			const world_id *id,
 			const char *type, size_t tlen,
 			U32 msgid, loadpurpose lp, Q **pq);
-	static void def_fiber_exit_cb(S &, int, U32, S &, rpctype, char *, size_t) {}
+	static void fb_exit_noop(S &, S &, VM, int, U32, rpctype, char *, size_t) {}
 
 };
 template <class S> static inline typename S::factory *sf(S &s) {

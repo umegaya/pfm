@@ -132,9 +132,9 @@ public:	/* typedefs */
 		VM m_ip;
 		S *m_s;
 		U32 m_msgid;
-		void (*m_fn)(S &, int, U32, S &, rpctype, char *, size_t);
+		void (*m_fn)(S &, S &, VM, int, U32, rpctype, char *, size_t);
 	public:
-		typedef void (*exit_fn)(S &, int, U32, S &, rpctype, char *, size_t);
+		typedef void (*exit_fn)(S &, S &, VM, int, U32, rpctype, char *, size_t);
 		/* NOTE : m_ip never destroyed after once created,  
 		memory region which is used for allocating fiber object is
 		assure to be 0 cleared. because this memory is allocated by
@@ -145,7 +145,7 @@ public:	/* typedefs */
 		U32 rmsgid() const { return m_msgid; }
 		S *connection() { return m_s; }
 		void call_exit(int r, S &s, rpctype rt, char *p, size_t l) {
-			m_fn(*m_s, r, m_msgid, s, rt, p, l); }
+			m_fn(*m_s, s, m_ip, r, m_msgid, rt, p, l); }
 		void set_owner(VM vm, VM th, S *s, U32 msgid) {
 			m_msgid = msgid;
 			m_s = s;
@@ -214,6 +214,7 @@ public:
 	static object 	*object_new(CF &cf, const world_id &wid,
 			VM vm, UUID &uuid, SR *sr, bool local);
 	static int	pack_object(SR &, const object &, bool);
+	static object *unpack_object(SR &);
 	static int	call_proc(S &, CF &, const world_id &,
 			U32, object &, proc_id &, char *, size_t, rpctype,
 			typename fiber::exit_fn);

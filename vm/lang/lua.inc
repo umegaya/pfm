@@ -314,6 +314,15 @@ int 	lua<SR,OF>::unpack_object_value(CF &cf, const world_id &wid,
 
 template <class SR, class OF>
 typename lua<SR,OF>::object *
+lua<SR,OF>::unpack_object(SR &sr)
+{
+	data d;
+	if (sr.unpack(d) <= 0) { return NULL; }
+	return OF::find(*((UUID *)to_p(elem(d, 1))));
+}
+	
+template <class SR, class OF>
+typename lua<SR,OF>::object *
 lua<SR,OF>::object_new(CF &cf, const world_id &wid, VM vm, 
 		UUID &uuid, SR *sr, bool local)
 {
@@ -804,8 +813,8 @@ int	lua<SR,OF>::resume_proc(S &c, CF &cf, const world_id &wid,
 			}
 		}
 		return rt == vmprotocol::rpct_method_fw ? 
-				reply_result(c, vm, n_args, vmprotocol::rpct_method) : 
-				reply_result(c, vm, n_args, vmprotocol::rpct_global);
+				reply_result(c, vm, 1, vmprotocol::rpct_method) : 
+				reply_result(c, vm, 1, vmprotocol::rpct_global);
 	case vmprotocol::rpct_setter:
 	default:
 		while(unpack_lua_stack(cf, wid, c.sr(), vm)) {

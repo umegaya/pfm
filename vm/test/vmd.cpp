@@ -179,6 +179,39 @@ vmd::vmdsvnt::init_player_map(int max_session)
 	return NBR_OK;
 }
 
+void
+vmd::vmdsvnt::exit_init_object(vmdsvnt &sender, vmdsvnt &recver,
+		VM vm, int r, U32 rmsgid, rpctype rt, char *p, size_t l)
+{
+	if (r < 0) {
+		sender.reply_new_object(recver, rmsgid, r,
+				protocol::invalid_id(), "", 0);
+		return;
+	}
+	data d;
+	recver.sr().unpack_start(p, l);
+	/* for init_object, d should be packed object
+	 * (thus init_object should return object) */
+	object *o = script::unpack_object(recver.sr());
+	if (!o) {
+		sender.reply_new_object(recver, rmsgid, NBR_EINVAL,
+				protocol::invalid_id(), "", 0);
+		return;
+	}
+	/* restart pack */
+	char buffer[64 * 1024];
+	recver.sr().pack_start(buffer, sizeof(buffer));
+	/* pack with object value */
+	if ((r = script::pack_object(recver.sr(), *o, true)) < 0) {
+		sender.reply_new_object(recver, rmsgid, r,
+				protocol::invalid_id(), "", 0);
+		return;
+	}
+	/* TODO: send this object information to replicate host. */
+	sender.reply_new_object(recver, rmsgid, NBR_OK, o->uuid(),
+			recver.sr().p(), recver.sr().len());
+}
+
 int
 vmd::vmdsvnt::recv_cmd_new_object(U32 msgid, const world_id &wid,
 		UUID &uuid, char *p, size_t l)
@@ -202,19 +235,37 @@ vmd::vmdsvnt::recv_cmd_new_object(U32 msgid, const world_id &wid,
 	if (o->create_new()) {
 		proc_id pid = "init_object";
 		if ((r = script::call_proc(*this, cf(), wid, msgid, *o, pid, p, l,
-				rpct_global, super::def_fiber_exit_cb)) < 0) {
+				rpct_global, exit_init_object)) < 0) {
 			return reply_new_object(*this, msgid, r, uuid, NULL, 0);
 		}
 	}
-	/* restart pack */
-	char buffer[64 * 1024];
-	sr().pack_start(buffer, sizeof(buffer));
-	/* pack with object value */
-	if ((r = script::pack_object(sr(), *o, true)) < 0) {
-		return reply_new_object(*this, msgid, r, uuid, NULL, 0);
+	return NBR_OK;
+}
+
+void
+vmd::vmdsvnt::exit_load_player(vmdsvnt &sender, vmdsvnt &recver,
+		VM vm, int r, U32 rmsgid, rpctype rt, char *p, size_t l)
+{
+	ASSERT(!sender.trust());
+	if (r < 0) {
+		sender.reply_login(recver, rmsgid, r,
+			sender.wid(), protocol::invalid_id(), "", 0);
+		return;
 	}
-	/* TODO: send this object information to replicate host. */
-	return reply_new_object(*this, msgid, NBR_OK, uuid, sr().p(), sr().len());
+	data d;
+	recver.sr().unpack_start(p, l);
+	/* for init_object, d should be packed object
+	 * (thus init_object should return object) */
+	object *o = script::unpack_object(recver.sr());
+	if (!o) { r = NBR_ENOTFOUND; }
+	/* insert relation ship table of session - object */
+	ASSERT(o->uuid() == sender.session_uuid());
+	if (r >= 0 && m_pm.end() == m_pm.insert(sender.addr(), o->uuid())) {
+		ASSERT(false);
+		r = NBR_EEXPIRE;
+	}
+	sender.reply_login(recver, rmsgid, r,
+		sender.wid(), o->uuid(), "", 0);
 }
 
 int
@@ -245,15 +296,12 @@ vmd::vmdsvnt::recv_code_new_object(
 			m_session_uuid = uuid;
 			proc_id pid = "load_player";
 			/* pid, "", 0 means no argument */
-			r = script::call_proc(*this, cf(), super::wid(), q.msgid, *o, pid,
-					"", 0, rpct_global, super::def_fiber_exit_cb);
-			/* insert relation ship table of session - object */
-			if (r >= 0 && m_pm.end() == m_pm.insert(addr(), uuid)) {
-				ASSERT(false);
-				r = NBR_EEXPIRE;
+			if ((r = script::call_proc(*this, cf(), super::wid(), q.msgid, *o, pid,
+					"", 0, rpct_global, exit_load_player)) < 0) {
+				return q.sender()->reply_login(*this, q.msgid, r,
+					super::wid(), uuid, "", 0);
 			}
-			return q.sender()->reply_login(*this, q.msgid, r,
-				super::wid(), uuid, p, l);
+			return NBR_OK;	/* waiting for load_player end */
 		}
 		return q.sender()->reply_login(*this, q.msgid, NBR_EEXPIRE, 
 			super::wid(), uuid, "", 0);
@@ -400,15 +448,14 @@ vmd::vmdclnt::recv_code_login(querydata &q, int r, const world_id &wid,
 	w->set_node(*this, addr());
 	w->add_node(*this);
 	/* create remote object */
-	sr().unpack_start(p, l);
 	object *o = script::object_new(cf(), wid, NULL/*use main VM*/,
-			uuid, &(sr()), false);
+			uuid, NULL, false);
 	if (o) {
-//		o->set_connection(c);
+		o->set_connection(backend_conn());
 		proc_id pid = "main";
 		/* pid, "", 0 means no argument */
 		script::call_proc(*this, cf(), super::wid(), q.msgid, *o, pid, "", 0,
-				rpct_global, super::def_fiber_exit_cb);
+				rpct_global, fb_exit_noop);
 		return NBR_OK;
 	}
 	ASSERT(false);
