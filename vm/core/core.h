@@ -553,7 +553,7 @@ int vmnode<S>::load_or_create_object(U32 msgid, const world_id *id,
 	}
 	/* send object create */
 	Q *q;
-	if (c->send_new_object(protocol::_this(), msgid, wid(), uuid, p, l, &q) >= 0) {
+	if (c->send_new_object(protocol::_this(), msgid, w->id(), uuid, p, l, &q) >= 0) {
 		/* success. store purpose data */
 		q->m_data = lp;
 		if (pq) { *pq = q; }
@@ -576,6 +576,10 @@ typename vmnode<S>::world *vmnode<S>::create_world(
 		int r;
 		const vmdconfig &vcfg = (const vmdconfig &)super::cfg();
 		if ((r = w->init(vcfg.m_max_node, vcfg.m_max_replica)) < 0) {
+			return NULL;
+		}
+		world_id from = "";
+		if ((r = script::init_world(wid, from)) < 0) {
 			return NULL;
 		}
 	}

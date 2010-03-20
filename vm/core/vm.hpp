@@ -341,7 +341,6 @@ public:
 			int max_rpc, int max_rpc_ongoing);
 	static void fin_vm();
 	static object_factory &of() { return m_of; }
-	static bool load(const char *srcfile) { return script::load(srcfile); }
 public:
 	SR &sr() { return m_sr; }
 	const SR &sr() const { return m_sr; }

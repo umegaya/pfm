@@ -20,6 +20,9 @@
 
 using namespace sfc;
 using namespace sfc::vm;
+#if defined(_TEST)
+static vmprotocol::world_id test_wid = "test_MMO";
+#endif
 /*-------------------------------------------------------------*/
 /* sfc::vmd::vmdmaster 					       */
 /*-------------------------------------------------------------*/
@@ -72,9 +75,9 @@ int vmd::vmdmstr::cmd_add_node(U32 msgid, const world_id &wid, const address &a)
 	int r;
 	/* add node to world */
 	world *w = super::create_world(wid);
-	if (!w) { return NBR_ENOTFOUND; }
+	if (!w) { ASSERT(false); return NBR_ENOTFOUND; }
 	vmdmstr *s = sf(*this)->pool().find(a);
-	if (!s) { return NBR_ENOTFOUND; }
+	if (!s) { ASSERT(false); return NBR_ENOTFOUND; }
 	if ((r = w->add_node(*s)) < 0) { return r; }
 	/* pack current node list */
 	size_t sz = w->nodes().size() * (sizeof(address) + sizeof(U32));
@@ -221,7 +224,8 @@ vmd::vmdsvnt::recv_cmd_new_object(U32 msgid, const world_id &wid,
 	int r;
 #if defined(_DEBUG)
 	char b[256];
-	log(INFO, "svnt: new object: %u for <%s>\n",msgid, uuid.to_s(b, sizeof(b)));
+	log(INFO, "svnt: new object<%s>: %u for <%s>\n",
+			wid,msgid,uuid.to_s(b, sizeof(b)));
 #endif
 	if (protocol::is_valid_id(m_session_uuid)) {
 		ASSERT(false);
@@ -362,11 +366,22 @@ int
 vmd::vmdsvnt::recv_notify_node_change(const char *cmd,
 		const world_id &wid, const address &a)
 {
-	world *w = IS_ADD(cmd) ? create_world(wid) :
-			object_factory::find_world(wid);
+	world *w = object_factory::find_world(wid);
 	if (!w) {
-		ASSERT(false);
-		return NBR_EEXPIRE;
+		if (IS_ADD(cmd)){
+			if (!(w = create_world(wid))) {
+				return NBR_EEXPIRE;
+			}
+		}
+		else if (!w) {
+			ASSERT(false);
+			return NBR_EEXPIRE;
+		}
+#if defined(_TEST)
+		if (script::load(wid, "./scp/svt.lua") < 0) {
+			return NBR_ESYSCALL;
+		}
+#endif
 	}
 	vmdsvnt *s = cf().pool().create(a);
 	TRACE("create for session object for %s(%p)\n", (const char*)a, s);
@@ -438,11 +453,19 @@ vmd::vmdclnt::recv_code_login(querydata &q, int r, const world_id &wid,
 		log(ERROR, "login fail: %d\n", r);
 		return r;
 	}
-	object_factory::world *w;
-	if (!(w = create_world(wid))) {
-		ASSERT(false);
-		return NBR_EEXPIRE;
+	object_factory::world *w = object_factory::find_world(wid);
+	if (!w) {
+		if (!(w = create_world(wid))) {
+			ASSERT(false);
+			return NBR_EEXPIRE;
+		}
+#if defined(_TEST)
+		if (script::load(test_wid, "./scp/clt.lua") < 0) {
+			return NBR_ESYSCALL;
+		}
+#endif
 	}
+
 	super::set_wid(wid);
 	/* add node */
 	w->set_node(*this, addr());
@@ -451,7 +474,8 @@ vmd::vmdclnt::recv_code_login(querydata &q, int r, const world_id &wid,
 	object *o = script::object_new(cf(), wid, NULL/*use main VM*/,
 			uuid, NULL, false);
 	if (o) {
-		o->set_connection(backend_conn());
+		connector *c = w->connect_assigned_node(cf(), o->uuid());
+		o->set_connection(c);
 		proc_id pid = "main";
 		/* pid, "", 0 means no argument */
 		script::call_proc(*this, cf(), super::wid(), q.msgid, *o, pid, "", 0,
@@ -484,9 +508,10 @@ vmd::create_factory(const char *sname)
 int
 vmd::create_config(config *cl[], int sz)
 {
-	cl[0] = new vmdconfig (
+	CONF_START(cl);
+	CONF_ADD(vmdconfig, (
 			"mstr",
-			"localhost:8000",
+			"0.0.0.0:8000",
 			10,
 			60, opt_not_set,
 			64 * 1024, 64 * 1024,
@@ -502,11 +527,11 @@ vmd::create_config(config *cl[], int sz)
 			"lua", "", "tc", "",
 			10000, 10, 10000, 10000,
 			10000, vmprotocol::vnode_replicate_num
-			);
-	cl[1] = new vmdconfig (
+			));
+	CONF_ADD(vmdconfig, (
 			"svnt",
-			"localhost:9000",
-			10,
+			"0.0.0.0:9000",
+			100,
 			60, opt_expandable,
 			64 * 1024, 64 * 1024,
 			1000 * 1000 * 1000, 3 * 1000 * 1000,
@@ -521,11 +546,11 @@ vmd::create_config(config *cl[], int sz)
 			"lua", "", "tc", "",
 			10000, 10, 10000, 10000,
 			10000, vmprotocol::vnode_replicate_num
-			);
-	cl[2] = new vmdconfig (
+			));
+	CONF_ADD(vmdconfig, (
 			"clnt",
 			"",
-			10,
+			1,
 			60, opt_not_set,
 			64 * 1024, 64 * 1024,
 			1000 * 1000 * 1000, 3 * 1000 * 1000,
@@ -541,8 +566,8 @@ vmd::create_config(config *cl[], int sz)
 			"lua", "", "tc", "",
 			10000, 10, 10000, 10000,
 			10000, vmprotocol::vnode_replicate_num
-			);
-	return 3;
+			));
+	CONF_END();
 }
 
 int
@@ -575,15 +600,13 @@ vmd::boot(int argc, char *argv[])
 			if ((r = vmdsvnt::init_player_map(vc->m_max_connection)) < 0) {
 				return r;
 			}
-			if (!vmdsvnt::load("./scp/svt.lua")) {
-				return NBR_ESYSCALL;
-			}
+#if defined(_TEST)
 			vmdsvnt::connector *c = svnt->backend_connect("127.0.0.1:8000");
 			if (!c) { return NBR_EEXPIRE; }
-			address a("127.0.0.1:9000");
-			if (c->send_node_register(*(c->chain()->m_s), 0, a) < 0) {
+			if (c->send_node_register(*(c->chain()->m_s), 0, svnt->ifaddr()) < 0) {
 				return NBR_ESEND;
 			}
+#endif
 		}
 		else {
 			return NBR_EINVAL;
@@ -601,17 +624,15 @@ vmd::boot(int argc, char *argv[])
 					vc->m_rpc_entry, vc->m_rpc_ongoing)) < 0) {
 				return r;
 			}
-			if (!vmdclnt::load("./scp/clt.lua")) {
-				return NBR_ESYSCALL;
-			}
+#if defined(_TEST)
 			vmdclnt::connector *c = clnt->backend_connect("127.0.0.1:9000");
 			if (!c) { return NBR_EEXPIRE; }
 			/* set connector factory */
 			vmdclnt::set_cf(clnt);
 			/* send login (you can send immediately :D)*/
-			vmdclnt::world_id wid = "test_MMO";
-			return c->send_login(*(c->chain()->m_s), 0, wid,
+			return c->send_login(*(c->chain()->m_s), 0, test_wid,
 					"umegaya", "iyatomi", sizeof("iyatomi"));
+#endif
 		}
 		return NBR_EINVAL;
 	}

@@ -163,9 +163,13 @@ public:	/* typedefs */
 			lua_pop(vm, 1);
 			return fb;
 		}
-		bool init_from_vm(lua_State *vm, S *s, U32 msgid, exit_fn fn) {
+		bool init_from_vm(lua_State *vm, const world_id &wid,
+			S *s, U32 msgid, exit_fn fn) {
 			if (!m_ip) { m_ip = lua_newcthread(vm, 1/* use min size */); }
 			if (m_ip) { set_owner(vm, m_ip, s, msgid); }
+			lua_pushthread(m_ip);
+			lua_getfield(vm, LUA_REGISTRYINDEX, wid);
+			lua_setfenv(vm, -2);
 			m_fn = fn;
 			return m_ip != NULL;
 		}
@@ -211,6 +215,7 @@ public:
 	~lua() {}
 	/* external interfaces */
 	static int 	init(int max_rpc_entry, int max_rpc_ongoing);
+	static int  init_world(const world_id &wid, const world_id &from);
 	static object 	*object_new(CF &cf, const world_id &wid,
 			VM vm, UUID &uuid, SR *sr, bool local);
 	static int	pack_object(SR &, const object &, bool);
@@ -221,7 +226,7 @@ public:
 	static int	resume_proc(S &, CF &, const world_id &, VM,
 			char *, size_t, rpctype);
 	static int 	resume_create(S &, CF &, const world_id &, VM, UUID &, SR &);
-	static bool load(const char *srcfile);
+	static bool load(const world_id &, const char *srcfile);
 protected: 	/* lua methods */
 	static int	create(VM);
 	static int 	index(VM);
@@ -240,7 +245,7 @@ protected:	/* rpc hook */
 protected: 	/* helpers */
 	static void push_object(VM, object *);
 	static rpc 	*rpc_new(VM, object *, const char *);
-	static fiber	*fiber_new(S *, U32, typename fiber::exit_fn);
+	static fiber	*fiber_new(S *, U32, const world_id &, typename fiber::exit_fn);
 	static void fiber_exit_call(fiber *fb, int basestk, int r, S &s, rpctype rt);
 
 	static int 	get_object_value(VM vm, const object &o, const char *key);
@@ -257,7 +262,9 @@ protected: 	/* helpers */
 
 	static int 	unpack_object(CF &, const world_id &, VM, data &, object &);
 
-	static const char *add_type(const char *typestr);
+	static int	copy_table(VM, int index_from, int index_to, int type);
+
+	static const char *add_type(VM, const world_id *, const char *typestr);
 
 	static int	dispatch(S &, VM, int, bool, rpctype);
 	static int	reply_result(S &, VM, int, rpctype);

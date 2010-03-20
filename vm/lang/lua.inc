@@ -159,29 +159,71 @@ int lua<SR,OF>::init(int max_rpc_entry, int max_rpc_ongoing)
 	lua_pcall(m_vm, 0, 0, 0);
 	/* set panic callback */
 	lua_atpanic(m_vm, panic);
-	/* create global table object (that represent library) */
+	/* load basic library */
+	lua_pushcfunction(m_vm, luaopen_base);
+	if (0 != lua_pcall(m_vm, 0, 0, 0)) {
+		return NBR_ESYSCALL;
+	}
+	return NBR_OK;
+}
+
+template <class SR, class OF>
+int lua<SR,OF>::init_world(const world_id &wid, const world_id &from)
+{
+	TRACE("init VM for world(%s)\n", wid);
+	lua_settop(m_vm, 0);
+	if (*from) { /* reuse existing table */
+		lua_getfield(m_vm, LUA_REGISTRYINDEX, from); 
+		if (!lua_isnil(m_vm, -1)) {
+			lua_setfield(m_vm, LUA_REGISTRYINDEX, wid);
+			return NBR_OK;
+		}
+		lua_pop(m_vm, 1);	/* remove nil object */
+	}
+	/* initialize new env */
 	lua_newtable(m_vm);
-	lua_setfield(m_vm, LUA_REGISTRYINDEX, "_generic_");
+	/* create basic method table */
 	lua_newtable(m_vm);
-	lua_setglobal(m_vm, "pfm");
+	lua_setfield(m_vm, -2, "_generic_");
+	/* load pfm library table */
+	lua_newtable(m_vm);
 	/* add API */
-	lua_getglobal(m_vm, "pfm");
 	lua_pushcfunction(m_vm, create);
 	lua_setfield(m_vm, -2, "new");
 	lua_pushcfunction(m_vm, set_object_type);
 	lua_setfield(m_vm, -2, "bless");
 	lua_pushcfunction(m_vm, get_object_type);
-	lua_setfield(m_vm, -2, "typeof");
+	lua_setfield(m_vm, -2, "typeof");		
+	/* register to new world env table */
+	lua_setfield(m_vm, -2, "pfm");
+	/* inherit loaded module table from global */
+//	lua_getfield(m_vm, LUA_GLOBALSINDEX, "_LOADED");
+//	ASSERT(lua_istable(m_vm, -1));
+//	lua_setfield(m_vm, -2, "_LOADED");
+	/* copy built in library into this table */
+	if (copy_table(m_vm, LUA_GLOBALSINDEX, lua_gettop(m_vm), LUA_TNIL) < 0) {
+		return NBR_ESYSCALL;
+	}
+	/* register this world env */
+	ASSERT(lua_istable(m_vm, -1));
+	lua_setfield(m_vm, LUA_REGISTRYINDEX, wid);
 	return NBR_OK;
 }
 
 template <class SR, class OF>
-bool lua<SR,OF>::load(const char *srcfile)
+bool lua<SR,OF>::load(const world_id &wid, const char *srcfile)
 {
 	/* loadfile only load file into lua stack (thus soon it loses)
 	 * so need to call this chunk. */
-	return (luaL_loadfile(m_vm, srcfile) == 0 &&
-			lua_pcall(m_vm, 0, 0, 0) == 0);
+	if (luaL_loadfile(m_vm, srcfile) != 0) {
+		return NBR_ESYSCALL;
+	}
+	lua_getfield(m_vm, LUA_REGISTRYINDEX, wid);
+	lua_setfenv(m_vm, -2);
+	if (lua_pcall(m_vm, 0, 0, 0) != 0) {
+		return NBR_ESYSCALL;
+	}
+	return NBR_OK;
 }
 
 template <class SR, class OF>
@@ -236,7 +278,7 @@ int 	lua<SR,OF>::get_object_method(VM vm, const object &o, const char *key)
 {
 	/* push stack to registry[uuid][key] */
 	/* search object value table */
-	lua_getfield(vm, LUA_REGISTRYINDEX, o.type());
+	lua_getfield(vm, LUA_ENVIRONINDEX, o.type());
 	ASSERT(lua_istable(vm, -1));
 	lua_getfield(vm, -1, key);
 	ASSERT(lua_isnil(vm, -1) || lua_isfunction(vm, -1) ||
@@ -252,7 +294,7 @@ int 	lua<SR,OF>::set_object_method(
 {
 	ASSERT(index_from > 0);	/* should use lua_gettop or something */
 	lock lk(m_lock, true);
-	lua_getfield(vm, LUA_REGISTRYINDEX, o.type());
+	lua_getfield(vm, LUA_ENVIRONINDEX, o.type());
 	lua_pushvalue(vm, index_from);
 	lua_setfield(vm, -2, key);
 	lua_pop(vm, 1);	/* remove method table from stack */
@@ -291,6 +333,28 @@ int 	lua<SR,OF>::set_object_value(
 	lua_setfield(vm, -2, key);
 	lua_pop(vm, 1);	/* remove object table */
 	return 0;
+}
+
+template <class SR, class OF>
+int		lua<SR,OF>::copy_table(VM vm, int from, int to, int type)
+{
+	TRACE("copy_table(%u) : %d -> %d\n", type, from, to);
+	int cnt = 0;
+	ASSERT(lua_istable(vm, from) && lua_istable(vm, to));
+	lua_pushnil(vm);	/* push first key (idiom, i think) */
+	while(lua_next(vm, from)) {	/* put next key/value on stack */
+		const char *k = lua_tostring(vm, -2);
+		if (!k) {
+			return NBR_EINVAL;
+		}
+		if (type > 0 && lua_type(vm, -1) != type) {
+			continue;
+		}
+		TRACE("add element[%s]:%u:%u\n", k, lua_type(vm, -1), lua_gettop(vm));
+		lua_setfield(vm, to, k);
+		cnt++;
+	}
+	return cnt;
 }
 
 template <class SR, class OF>
@@ -381,12 +445,12 @@ lua<SR,OF>::rpc_new(VM lua, object *o, const char *name)
 
 template <class SR, class OF>
 typename lua<SR,OF>::fiber *lua<SR,OF>::fiber_new(
-		S *c, U32 msgid, typename fiber::exit_fn fn)
+		S *c, U32 msgid, const world_id &wid, typename fiber::exit_fn fn)
 {
 	fiber *fb = m_fibers.create();
 	if (!fb) { ASSERT(false); return NULL; }
 	lock lk(m_lock, true);
-	if (fb->init_from_vm(m_vm, c, msgid, fn)) {
+	if (fb->init_from_vm(m_vm, wid, c, msgid, fn)) {
 		return fb;
 	}
 	else {
@@ -735,7 +799,7 @@ int lua<SR,OF>::unpack_object(CF &cf, const world_id &wid, VM vm, data &d, objec
 	if (!c) { return NBR_ENOTFOUND; }
 	o.set_connection(c);
 	/* add object type */
-	const char *t = add_type(to_s(elem(d, 0)));
+	const char *t = add_type(vm, m_vm == vm ? &wid : NULL, to_s(elem(d, 0)));
 	if (!t) { return NBR_EEXPIRE; }
 	ASSERT(*t);
 	o.set_type(t);
@@ -770,6 +834,8 @@ int	lua<SR,OF>::resume_proc(S &c, CF &cf, const world_id &wid,
 	switch(rt) {
 	case vmprotocol::rpct_error:
 		/* unpack error string on stack */
+		/* seems vm's GLOBAL == ENVIRONMENT (but now when no function starts,
+		 * ENVIRONINDEX is not valid. */
 		lua_getfield(vm, LUA_GLOBALSINDEX, "remote_error");
 		lua_pushstring(vm, (const char *)c.addr());
 		unpack_lua_stack(cf, wid, c.sr(), vm);
@@ -876,7 +942,7 @@ int lua<SR,OF>::call_proc(S &c, CF &cf, const world_id &wid,
 		char *args, size_t alen, rpctype rt, typename fiber::exit_fn fn)
 {
 	data d;
-	fiber *fb = fiber_new(&c, rmsgid, fn);
+	fiber *fb = fiber_new(&c, rmsgid, wid, fn);
 	if (!fb) {
 		return NBR_EEXPIRE;
 	}
@@ -932,6 +998,8 @@ int lua<SR,OF>::call_proc(S &c, CF &cf, const world_id &wid,
 		if (rpc_recver_hook(c, rmsgid, p, *fb, o, args, alen, rt) >= 0) { 
 			return NBR_OK; 
 		}
+		/* seems *fb's GLOBAL == ENVIRONMENT (but now when no function starts,
+		 * ENVIRONINDEX is not valid. */
 		lua_getfield(*fb, LUA_GLOBALSINDEX, p);
 		ASSERT(lua_isfunction(*fb, -1));
 		push_object(*fb, &o);	/* push object */
@@ -962,7 +1030,7 @@ int lua<SR,OF>::set_object_type(VM lua)
 		lua_pushstring(lua, "illegal argument");
 		lua_error(lua);
 	}
-	const char *ts = add_type(lua_tostring(lua, 2));
+	const char *ts = add_type(lua, NULL, lua_tostring(lua, 2));
 	if (!ts) {
 		lua_pushstring(lua, "add type fail");
 		lua_error(lua);
@@ -972,8 +1040,9 @@ int lua<SR,OF>::set_object_type(VM lua)
 }
 	
 template <class SR, class OF>
-const char *lua<SR,OF>::add_type(const char *typestr)
+const char *lua<SR,OF>::add_type(VM vm, const world_id *wid, const char *typestr)
 {
+	ASSERT(vm || wid);
 	type_id *t = m_types.find(typestr);
 	if (t) { return (const char *)*t; }
 	else if (!(t = m_types.create(typestr))) {
@@ -982,9 +1051,15 @@ const char *lua<SR,OF>::add_type(const char *typestr)
 	}
 	t->set_type(typestr);
 	if (!t->has_table()) {
-		lock lk(m_lock, true);
-		lua_newtable(m_vm);
-		lua_setfield(m_vm, LUA_REGISTRYINDEX, typestr);
+		if (wid) {
+			lua_getfield(m_vm, LUA_REGISTRYINDEX, *wid);
+			lua_newtable(m_vm);
+			lua_setfield(vm, -2, typestr);		
+		}
+		else {
+			lua_newtable(vm);
+			lua_setfield(vm, LUA_ENVIRONINDEX, typestr);
+		}
 		TRACE("create new method table <%s>\n", typestr);
 		t->set_has_table();
 	}

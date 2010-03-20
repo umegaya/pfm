@@ -22,11 +22,43 @@
 using namespace sfc;
 using namespace sfc::vm;
 
+bool
+test(int argc, char *argv[])
+{
+	for (int i = 0; i < argc; i++) {
+		if (strcmp("--test", argv[i]) == 0) {
+			return true;
+		}
+	}
+	return false;
+}
+
+int
+testmain(char *prog)
+{
+	vmd d;
+	int r, sv_argc = 1;
+	char *sv_argv[] = { "sv.conf", NULL };
+	char *cl_argv[] = { "cl.conf", NULL };
+	if ((r = d.init(sv_argc,sv_argv)) < 0) {
+		return r;
+	}
+	for (int i = 0; i < 100; i++) {
+		if ((r = app::daemon::fork(prog, cl_argv, NULL)) < 0) {
+			return r;
+		}
+	}
+	return d.run();
+}
+
 int
 main(int argc, char *argv[])
 {
 	vmd d;
 	int r;
+	if (test(argc, argv)) {
+		return testmain(argv[0]);
+	}
 	if ((r = d.init(argc,argv)) < 0) {
 		return r;
 	}

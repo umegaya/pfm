@@ -60,6 +60,11 @@
 	r = (type)tmp;					\
 }
 
+/* configuration */
+#define CONF_START(cl)	{ int __nconf = 0; config **__cl = cl;
+#define CONF_ADD(conftype, initializer) __cl[__nconf++] = new conftype initializer;
+#define CONF_END() return __nconf; }
+
 /* function argument */
 #define UNUSED(val)
 

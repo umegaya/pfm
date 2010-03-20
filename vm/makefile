@@ -32,7 +32,7 @@ INCS = -I. -Icore -Ilib -Itest -I$(NBRCOREDIR) -I$(SFCCOREDIR) -I$(SFCLIBDIR)
 DEPS = dep
 OBJS = obj
 ifeq ($(DEBUG), 1)
-LUA = lua
+LUA = luad
 else
 LUA = lua
 endif
