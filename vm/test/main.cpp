@@ -38,8 +38,8 @@ testmain(char *prog)
 {
 	vmd d;
 	int r, sv_argc = 1;
-	char *sv_argv[] = { "sv.conf", NULL };
-	char *cl_argv[] = { "cl.conf", NULL };
+	char *sv_argv[] = { "./test/sv.conf", NULL };
+	char *cl_argv[] = { "./test/cl.conf", NULL };
 	if ((r = d.init(sv_argc,sv_argv)) < 0) {
 		return r;
 	}

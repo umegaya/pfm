@@ -554,7 +554,7 @@ vmd::create_config(config *cl[], int sz)
 			60, opt_not_set,
 			64 * 1024, 64 * 1024,
 			1000 * 1000 * 1000, 3 * 1000 * 1000,
-			10000,
+			100,
 			sizeof(vmdclnt::factory::connector::querydata),
 			"TCP", "eth0",
 			1 * 10 * 1000/* 10msec task span */,
@@ -564,8 +564,8 @@ vmd::create_config(config *cl[], int sz)
 			nbr_sock_send_bin16,
 			config::cfg_flag_not_set,
 			"lua", "", "tc", "",
-			10000, 10, 10000, 10000,
-			10000, vmprotocol::vnode_replicate_num
+			100, 5, 100, 100,
+			100, vmprotocol::vnode_replicate_num
 			));
 	CONF_END();
 }
@@ -611,12 +611,12 @@ vmd::boot(int argc, char *argv[])
 		else {
 			return NBR_EINVAL;
 		}
-	}
 #if defined(_TEST)
-	/* waiting for world register */
-	int n_cnt = 0;
-	while (n_cnt < 10) { n_cnt++; heartbeat(); }
+		/* waiting for world register */
+		int n_cnt = 0;
+		while (n_cnt < 10) { n_cnt++; heartbeat(); }
 #endif
+	}
 	vmdclnt::factory *clnt = find_factory<vmdclnt::factory>("clnt");
 	if (clnt) {
 		if ((vc = find_config<vmdconfig>("clnt"))) {
@@ -648,6 +648,11 @@ vmd::initlib(CONFIG &c)
 void
 vmd::shutdown()
 {
+	vmdmstr::fin_vm();
+	vmdmstr::fin_login_map();
+	vmdsvnt::fin_vm();
+	vmdsvnt::fin_player_map();
+	vmdclnt::fin_vm();
 }
 
 

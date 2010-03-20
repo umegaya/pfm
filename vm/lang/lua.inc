@@ -168,6 +168,22 @@ int lua<SR,OF>::init(int max_rpc_entry, int max_rpc_ongoing)
 }
 
 template <class SR, class OF>
+void lua<SR,OF>::fin()
+{
+	if (m_vm) {
+		lua_close(m_vm);
+		m_vm = NULL;
+	}
+	if (m_lock) {
+		nbr_rwlock_destroy(m_lock);
+		m_lock = NULL;
+	}
+	m_fibers.fin();
+	m_rpcs.fin();
+	m_types.fin();
+}
+
+template <class SR, class OF>
 int lua<SR,OF>::init_world(const world_id &wid, const world_id &from)
 {
 	TRACE("init VM for world(%s)\n", wid);

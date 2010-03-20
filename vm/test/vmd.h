@@ -50,6 +50,7 @@ public:
 		vmdmstr() : super(this) {}
 		~vmdmstr() {}
 		static int init_login_map(int max_user);
+		static void fin_login_map() { m_lm.fin(); }
 	public:/* receiver */
 		int recv_cmd_node_register(U32 msgid, const address &a);
 		int recv_cmd_login(U32 msgid, const world_id &wid, const char *acc,
@@ -84,6 +85,7 @@ public:
 		vmdsvnt() : super(this), m_session_uuid() {}
 		~vmdsvnt() {}
 		static int init_player_map(int max_session);
+		static void fin_player_map() { m_pm.fin(); }
 		vmdsvnt *from_object(object &o) {
 			address *a = m_pm.find(o.uuid());
 			return a ? sf(*this)->pool().find(*a) : NULL;

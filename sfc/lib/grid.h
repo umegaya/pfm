@@ -228,15 +228,15 @@ public:
 		return super::init(cfg);
 	}
 	void fin() {
-		m_failover_chain_factory.fin();
 		m_failover_chain_group.fin();
+		m_failover_chain_factory.fin();
 		if (connector::m_lock) {
 			nbr_rwlock_destroy(connector::m_lock);
 		}
 		if (m_lock) {
 			nbr_rwlock_destroy(m_lock);
 		}
-		fin();
+		super::fin();
 	}
 	void poll(UTIME ut) {
 		connector *c = m_failure_connector, *pc;

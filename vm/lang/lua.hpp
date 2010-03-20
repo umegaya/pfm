@@ -215,6 +215,7 @@ public:
 	~lua() {}
 	/* external interfaces */
 	static int 	init(int max_rpc_entry, int max_rpc_ongoing);
+	static void fin();
 	static int  init_world(const world_id &wid, const world_id &from);
 	static object 	*object_new(CF &cf, const world_id &wid,
 			VM vm, UUID &uuid, SR *sr, bool local);
