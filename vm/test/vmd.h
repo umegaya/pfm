@@ -51,6 +51,8 @@ public:
 		~vmdmstr() {}
 		static int init_login_map(int max_user);
 		static void fin_login_map() { m_lm.fin(); }
+		inline script *fetch_vm();
+		static inline script *fetch_vm_from_thread(THREAD);
 	public:/* receiver */
 		int recv_cmd_node_register(U32 msgid, const address &a);
 		int recv_cmd_login(U32 msgid, const world_id &wid, const char *acc,
@@ -76,6 +78,8 @@ public:
 		typedef super::world world;
 		typedef super::world_id world_id;
 		typedef super::script script;
+		typedef super::vm_msg vm_msg;
+		typedef super::serializer serializer;
 		typedef super::UUID UUID;
 		typedef super::VM VM;
 	protected:
@@ -86,6 +90,8 @@ public:
 		~vmdsvnt() {}
 		static int init_player_map(int max_session);
 		static void fin_player_map() { m_pm.fin(); }
+		inline script *fetch_vm();
+		static inline script *fetch_vm_from_thread(THREAD);
 		vmdsvnt *from_object(object &o) {
 			address *a = m_pm.find(o.uuid());
 			return a ? sf(*this)->pool().find(*a) : NULL;
@@ -123,15 +129,28 @@ public:
 		typedef super::clnt_base_factory factory;
 		typedef super::protocol protocol;
 		typedef super::script script;
+		typedef super::vm_msg vm_msg;
 		typedef super::UUID UUID;
 	public:
 		vmdclnt() : super(this) {}
 		~vmdclnt() {}
+		inline script *fetch_vm();
+		static inline script *fetch_vm_from_thread(THREAD);
 		vmdclnt *from_object(object &o) { return NULL; }
 	public:/* vmdclnt */
 		int recv_code_login(querydata &q, int r, const world_id &wid, 
 			UUID &uuid, char *p, size_t l);
+	protected:
+		static void exit_main(vmdsvnt &sender, vmdsvnt &recver,
+				VM vm, int r, U32 rmsgid, rpctype rt, char *p, size_t l);
 	};
+public:
+	struct worker_data {
+		vmdmstr::script *m_mstr_vm;
+		vmdsvnt::script *m_svnt_vm;
+		vmdclnt::script *m_clnt_vm;
+	} *m_wkp;
+	int m_wks;
 public:
 	/* daemon proces */
 	factory *create_factory(const char *sname);
@@ -140,6 +159,52 @@ public:
 	int	initlib(CONFIG &c);
 	void	shutdown();
 };
+
+inline vmd::vmdmstr::script *vmd::vmdmstr::fetch_vm()
+{
+	vmd::worker_data *wd =
+		(vmd::worker_data *)nbr_sock_get_worker_data_from(sk());
+	return wd ? wd->m_mstr_vm : NULL;
+}
+
+inline vmd::vmdsvnt::script *vmd::vmdsvnt::fetch_vm()
+{
+	vmd::worker_data *wd =
+		(vmd::worker_data *)nbr_sock_get_worker_data_from(sk());
+	return wd ? wd->m_svnt_vm : NULL;
+}
+
+inline vmd::vmdclnt::script *vmd::vmdclnt::fetch_vm()
+{
+	vmd::worker_data *wd =
+		(vmd::worker_data *)nbr_sock_get_worker_data_from(sk());
+	return wd ? wd->m_clnt_vm : NULL;
+}
+
+inline vmd::vmdmstr::script *
+vmd::vmdmstr::fetch_vm_from_thread(THREAD th)
+{
+	vmd::worker_data *wd =
+		(vmd::worker_data *)nbr_sock_get_worker_data(th);
+	return wd ? wd->m_mstr_vm : NULL;
+}
+
+inline vmd::vmdsvnt::script *
+vmd::vmdsvnt::fetch_vm_from_thread(THREAD th)
+{
+	vmd::worker_data *wd =
+		(vmd::worker_data *)nbr_sock_get_worker_data(th);
+	return wd ? wd->m_svnt_vm : NULL;
+}
+
+inline vmd::vmdclnt::script *
+vmd::vmdclnt::fetch_vm_from_thread(THREAD th)
+{
+	vmd::worker_data *wd =
+		(vmd::worker_data *)nbr_sock_get_worker_data(th);
+	return wd ? wd->m_clnt_vm : NULL;
+}
+
 }	//namespace vm;
 }	//namespace sfc; 
 

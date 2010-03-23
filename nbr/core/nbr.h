@@ -354,6 +354,13 @@ NBR_API char	*nbr_sock_rparser_bin16(char *p, int *len, int *rlen);
 NBR_API char	*nbr_sock_rparser_bin32(char *p, int *len, int *rlen);
 NBR_API char	*nbr_sock_rparser_text(char *p, int *len, int *rlen);
 NBR_API char	*nbr_sock_rparser_raw(char *p, int *len, int *rlen);
+NBR_API int		nbr_sock_get_worker(THREAD ths[], int n_th);
+NBR_API void	*nbr_sock_get_worker_data(THREAD th);
+NBR_API void	*nbr_sock_get_worker_data_from(SOCK sk);
+NBR_API int		nbr_sock_set_worker_data(THREAD th, void *p,
+					void (*on_event)(THREAD, THREAD, char *, size_t));
+NBR_API int		nbr_sock_worker_event(THREAD from, THREAD to, char *p, size_t l);
+NBR_API int		nbr_sock_worker_bcast_event(THREAD from, char *p, size_t l);
 
 
 /* sig.c */

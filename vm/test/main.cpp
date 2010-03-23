@@ -43,8 +43,9 @@ testmain(char *prog)
 	if ((r = d.init(sv_argc,sv_argv)) < 0) {
 		return r;
 	}
-	for (int i = 0; i < 100; i++) {
+	for (int i = 0; i < 10; i++) {
 		if ((r = app::daemon::fork(prog, cl_argv, NULL)) < 0) {
+			ASSERT(false);
 			return r;
 		}
 	}

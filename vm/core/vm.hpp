@@ -3,6 +3,7 @@
 
 #include "sfc.hpp"
 #include "grid.h"
+#include <stdarg.h>
 
 /*-------------------------------------------------------------*/
 /* sfc::vm::kvs                                                */
@@ -85,17 +86,20 @@ public:
 	enum {
 		vmcmd_invalid,
 
-		vmcmd_rpc,		/* c->s, c->c, s->s */
+		vmcmd_rpc,		/* c->s, c->c, s->s, vmmsg */
 		vmcmd_new_object,	/* s->m, m->s */
 		vmcmd_login,	/* c->s->m */
 		vmcmd_node_ctrl,	/* m->s */
 		vmcmd_node_register,	/* s->m */
-		vmcode_rpc,		/* s->c, c->c, s->s */
+		vmcode_rpc,		/* s->c, c->c, s->s, vmmsg */
 		vmcode_new_object,	/* s->m, m->s */
 		vmcode_login,	/* m->s->c */
 		vmcode_node_ctrl,	/* m->s */
 		vmcode_node_register,	/* s->m */
 		vmnotify_node_change,	/* m->s */
+		vmnotify_init_world,		/* vmmsg */
+		vmnotify_add_global_object,	/* vmmsg */
+		vmnotify_load_module,		/* vmmsg */
 	};
 	typedef enum {
 		rpct_invalid,
@@ -104,6 +108,7 @@ public:
 		rpct_global,	/* r = global_func(a1,a2,...) */
 		rpct_getter,	/* object[k] */
 		rpct_setter,	/* object[k] = v */
+		rpct_call,		/* local method call */
 		rpct_method_fw,	/* method call forwarded */
 		rpct_global_fw,	/* global call forwarded */
 
@@ -176,6 +181,10 @@ public:	/* receiver */
 	template <class Q> int recv_code_node_register(Q &q, int r) {__PE();}
 	int recv_notify_node_change(const char *cmd,
 			const world_id &wid, const address &a) {__PE();}
+	int recv_notify_init_world(const world_id &nw, const world_id &from) {__PE();}
+	int recv_notify_add_global_object(const world_id &nw, char *p, size_t pl)
+			{__PE();}
+	int recv_notify_load_module(const world_id &nw, const char *file) {__PE();}
 public: /* sender */
 	template <class Q> int send_rpc(SNDR &s, const UUID &uuid, const proc_id &p, 
 			char *a, size_t al, rpctype rt, Q **pq);
@@ -197,7 +206,69 @@ public: /* sender */
 	int reply_node_register(SNDR &s, U32 msgid, int r);
 	int notify_node_change(SNDR &s, const char *cmd,
 			const world_id &wid, const address &a);
+	int notify_init_world(SNDR &s, const world_id &nw, const world_id &from);
+	int notify_add_global_object(SNDR &s, const world_id &nw, char *p, size_t l);
+	int notify_load_module(SNDR &s, const world_id &nw, const char *file);
 };
+
+/*-------------------------------------------------------------*/
+/* sfc::vm::message_passer								       */
+/*-------------------------------------------------------------*/
+template <class S>
+class message_passer : public kernel {
+public:
+	typedef typename S::factory factory;
+	typedef typename S::querydata querydata;
+protected:
+	static factory *m_f;
+	THREAD m_to;
+	THREAD m_from;
+public:
+	message_passer() : m_to(NULL), m_from(NULL) {}
+	message_passer(THREAD from, THREAD to) {
+		set_thread_to(to);
+		set_thread_from(from);
+	}
+	static void set_factory(factory *f) { m_f = f; }
+	void set_thread_to(THREAD th) { m_to = th; }
+	void set_thread_from(THREAD th) { m_from = th; }
+	const char *addr() { return "localhost(VMMSG)"; }
+	int log(loglevel lv, const char *fmt, ...);
+	operator THREAD () { return m_to; }
+	static factory *f() { return m_f; }
+	querydata *senddata(S &, U32, char *, int);
+	int send(char *p, int l) {
+		return m_to ? nbr_sock_worker_event(m_from, m_to, p, l) :
+				nbr_sock_worker_bcast_event(m_from, p, l);
+	}
+};
+
+template <class S, template <class S> class CP>
+class vm_message_protocol_impl : public message_passer<S>,
+	public CP<vm_message_protocol_impl<S,CP> > {
+public:
+	typedef message_passer<S> super;
+	typedef typename S::script script;
+	typedef CP<vm_message_protocol_impl<S,CP> > protocol;
+	typedef typename protocol::UUID UUID;
+	typedef typename protocol::rpctype rpctype;
+	typedef typename protocol::proc_id proc_id;
+	typedef vmprotocol::world_id world_id;
+protected:
+	script *m_scp;
+public:
+	vm_message_protocol_impl(script *scp, THREAD from, THREAD to) :
+		super(from, to), protocol(this), m_scp(scp) {}
+	script *scp() { return m_scp; }
+	static void on_event(THREAD from, THREAD to, char *p, size_t l);
+	int recv_cmd_rpc(U32 msgid, UUID &uuid, proc_id &pid,
+			char *p, int l, rpctype rc);
+	int recv_notify_init_world(const world_id &nw, const world_id &from);
+	int recv_notify_add_global_object(const world_id &nw, char *p, size_t pl);
+	int recv_notify_load_module(const world_id &nw, const char *file);
+	template <class Q> int recv_code_rpc(Q &q, char *p, size_t l, rpctype rc);
+};
+
 
 /*-------------------------------------------------------------*/
 /* sfc::vm::object_factory_impl				       */
@@ -214,40 +285,9 @@ public:
 		CP() : vmprotocol_impl<C,IDG,S>(NULL) {}
 	};
 	typedef connector_factory_impl<S,UUID,CP> connector_factory;
+	typedef vm_message_protocol_impl<S,CP> vm_message_protocol;
 	typedef typename connector_impl<S,UUID,CP>::connector conn;
 	typedef typename connector_impl<S,UUID,CP>::failover_chain chain;
-public:
-	/* G=IDG */
-	template <class G>
-	class object_impl : public kernel {
-	protected:
-		UUID	m_uuid;		/* unique ID for each object */
-		U32		m_flag;		/* object flag */
-		conn	*m_conn;	/* remote : rpc replication / local : replication */
-		const char *m_type;	/* object type */
-	public:
-		enum {
-			object_flag_local = 0x00000001,
-		};
-	public:
-		object_impl() : m_uuid(), m_flag(0), m_conn(NULL),
-			m_type("_generic_") {}
-		~object_impl() {}
-		void set_uuid(const UUID &uuid) { m_uuid = uuid; }
-		const UUID &uuid() const { return m_uuid; }
-		conn *connection() { return m_conn; }
-		const conn *connection() const { return m_conn; }
-		void set_connection(conn *c) { m_conn = c; }
-		void set_type(const char *type) { m_type = type; }
-		void set_flag(U32 f, bool on) {
-			if (on) { m_flag |= f; } else { m_flag &= ~(f); } }
-		bool local() const { return m_flag & object_flag_local; }
-		bool remote() const { return !local(); }
-		const char *type() const { return m_type; }
-		/* now no save, so every time newly create */
-		bool create_new() const { return true; }
-	};
-	typedef object_impl<IDG> object;
 public:
 	template <class C>
 	class world_impl  {
@@ -290,6 +330,45 @@ public:
 			return nbr_conhash_del_node(m_ch, (CHNODE *)&n); }
 	};
 	typedef world_impl<S> world;
+public:
+	/* G=IDG */
+	template <class G>
+	class object_impl : public kernel {
+	protected:
+		UUID	m_uuid;		/* unique ID for each object */
+		U32		m_flag;		/* object flag */
+		conn	*m_conn;	/* remote : rpc replication / local : replication */
+		const char *m_type;	/* object type */
+		THREAD 	m_thrd;	/* thrd address which assigned to this object */
+		const world_id 	*m_wid;	/* WORLD which this object belongs to */
+	public:
+		enum {
+			object_flag_local = 0x00000001,
+		};
+	public:
+		object_impl() : m_uuid(), m_flag(0), m_conn(NULL),
+			m_type("_generic_"), m_thrd(NULL) {}
+		~object_impl() {}
+		void set_uuid(const UUID &uuid) { m_uuid = uuid; }
+		const UUID &uuid() const { return m_uuid; }
+		conn *connection() { return m_conn; }
+		const conn *connection() const { return m_conn; }
+		THREAD thread() { return m_thrd; }
+		const world_id *wid() { return m_wid; }
+		bool thread_current() { return nbr_thread_is_current(m_thrd); }
+		void set_connection(conn *c) { m_conn = c; }
+		void set_thread(THREAD th) { m_thrd = th; }
+		void set_type(const char *type) { m_type = type; }
+		void set_wid(const world_id *w) { m_wid = w; }
+		void set_flag(U32 f, bool on) {
+			if (on) { m_flag |= f; } else { m_flag &= ~(f); } }
+		bool local() const { return m_flag & object_flag_local; }
+		bool remote() const { return !local(); }
+		const char *type() const { return m_type; }
+		/* now no save, so every time newly create */
+		bool create_new() const { return true; }
+	};
+	typedef object_impl<IDG> object;
 protected:
 	static map<object,UUID> m_om;
 	static map<world, world_id> m_wl;	/* world list */
@@ -327,6 +406,8 @@ public:
 	typedef vmprotocol_impl<S,IDG> super;
 	typedef vmprotocol_impl<S,IDG> protocol;
 	typedef OF<S,IDG,KVS> object_factory;
+	typedef SR serializer;
+	typedef typename object_factory::vm_message_protocol vm_msg;
 	typedef typename object_factory::object object;
 	typedef typename object_factory::connector_factory connector_factory;
 	typedef typename protocol::UUID UUID;
@@ -334,16 +415,14 @@ public:
 protected:
 	static object_factory m_of;
 	static connector_factory *m_cf;
-	SR m_sr;
 public:
 	vm_impl(S *s) : protocol(s) {}
-	static int init_vm(int max_object, int max_world,
-			int max_rpc, int max_rpc_ongoing);
-	static void fin_vm();
+	static int init_world(int max_object, int max_world);
+	static void fin_world();
+	static script *init_vm(int max_rpc, int max_rpc_ongoing, int n_wkr);
+	static void fin_vm(script *vm);
 	static object_factory &of() { return m_of; }
 public:
-	SR &sr() { return m_sr; }
-	const SR &sr() const { return m_sr; }
 	static connector_factory &cf() { return *m_cf; }
 	static void set_cf(connector_factory *cf) { m_cf = cf; }
 };
@@ -408,7 +487,10 @@ public:
 	typedef typename vmmodule::UUID UUID;
 	typedef typename vmmodule::script script;
 	typedef typename vmmodule::loadpurpose loadpurpose;
+	typedef typename vmmodule::serializer serializer;
+	typedef typename vmmodule::vm_msg vm_msg;
 	typedef typename script::VM VM;
+	typedef typename script::fiber fiber;
 	typedef typename script::proc_id proc_id;
 	typedef typename object_factory::conn connector;
 	typedef typename object_factory::world world;
@@ -421,29 +503,43 @@ public:
 		mstr_base_factory;
 protected:
 	CHNODE m_node;	/* node information */
-	world_id m_wid;
+	const world_id *m_wid;
+	script *m_vm;
 public:
 	connector *backend_connect(address &a) {
 		return vmmodule::cf().backend_connect(a); }
 	connector *backend_conn() { return vmmodule::cf().backend_conn(); }
-	class querydata : public node::querydata {
+	class querydata {
 	public:
+		U32 msgid;
+		SOCK sk;
+		session *s;
 		U8 m_data, padd[3];
-		union { VM m_vm; world *m_world; };
+		fiber *m_fb;
+		world *m_world;
 	public:
-		VM &vm() { return m_vm; }
+		fiber &fb() { return *m_fb; }
+		bool valid_fb() const { return m_fb != NULL; }
+		bool valid_query() const { return s ? nbr_sock_is_same(s->sk(), sk) : true; }
 		world &wld() { return *m_world; }
-		S *sender() { return (S *)node::querydata::s; }
+		S *sender() { return (S *)s; }
 	};
 public:
-	vmnode(S *s) : session(), vmmodule(s) {
+	vmnode(S *s) : session(), vmmodule(s), m_wid(NULL) {
 		memset(&m_node, 0, sizeof(m_node));
-		memset(&m_wid, 0, sizeof(m_wid));
 	}
 	CHNODE *chnode() { return &m_node; }
 	const CHNODE *chnode() const { return &m_node; }
-	void set_wid(const world_id &wid) { memcpy(m_wid, wid, sizeof(m_wid)); }
-	const world_id &wid() const { return m_wid; }
+	script *fetch_vm() { ASSERT(false); return NULL; }
+	script *vm() { return m_vm; }
+	const script *vm() const { return m_vm; }
+	int set_wid(const world_id &wid) {
+		world *w = object_factory::find_world(wid);
+		if (!w) { return NBR_ENOTFOUND; }
+		m_wid = &(w->id());
+		return NBR_OK;
+	}
+	const world_id &wid() const { return m_wid ? *m_wid : *(const world_id*)""; }
 	bool registered() const { return nbr_conhash_node_registered(&(m_node)); }
 	bool trust() const { return true; }
 	static const UUID &backend_key() { return protocol::invalid_id(); }
@@ -454,8 +550,9 @@ public:
 	}
 public:
 	querydata *senddata(S &s, U32 msgid, char *p, int l);
-	world *create_world(const world_id &wid) const;
+	world *create_world(const world_id &wid);
 	int on_recv(char *p, int l) { return protocol::on_recv(p, l); }
+	int on_open(const config &cfg);
 	int recv_cmd_rpc(U32 msgid, UUID &uuid, proc_id &pid,
 			char *p, int l, rpctype rc);
 	int recv_code_rpc(querydata &q, char *p, size_t l, rpctype rc);

@@ -56,10 +56,11 @@ int vmd::vmdmstr::recv_cmd_node_ctrl(U32 msgid, const char *cmd,
 		const world_id &wid, char *p, size_t l)
 {
 	int r;
-	sr().unpack_start(p, l);
+	serializer &sr = vm()->serializer();
+	sr.unpack_start(p, l);
 	if (strcmp("add", cmd) == 0) {
 		data d;
-		if (sr().unpack(d) <= 0) { r = NBR_EFORMAT; }
+		if (sr.unpack(d) <= 0) { r = NBR_EFORMAT; }
 		else {
 			r = cmd_add_node(msgid, wid, script::to_s(d));
 		}
@@ -82,21 +83,22 @@ int vmd::vmdmstr::cmd_add_node(U32 msgid, const world_id &wid, const address &a)
 	/* pack current node list */
 	size_t sz = w->nodes().size() * (sizeof(address) + sizeof(U32));
 	char buffer[sz];
-	sr().pack_start(buffer, sz);
-	sr().push_raw((char *)&(w->world_object_uuid()), sizeof(UUID));
+	serializer &sr = vm()->serializer();
+	sr.pack_start(buffer, sz);
+	sr.push_raw((char *)&(w->world_object_uuid()), sizeof(UUID));
 	world::nditer i = w->nodes().begin();
 	for (; i != w->nodes().end(); i = w->nodes().next(i)) {
 		if (!i->registered()) { continue; }
-		if (sr().push_string(i->chnode()->iden,
+		if (sr.push_string(i->chnode()->iden,
 				strlen(i->chnode()->iden)) < 0) {
 			return NBR_ESHORT;
 		}
 		TRACE("address = <%s>\n", i->chnode()->iden);
 	}
-	return send_node_ctrl(*this, msgid, "add", wid, sr().p(), sr().len());
+	return send_node_ctrl(*this, msgid, "add", wid, sr.p(), sr.len());
 }
 
-#define IS_ADD(cmd) (*cmd == 'a')
+#define IS_ADD(cmd) (strcmp(cmd, "add") == 0)
 int vmd::vmdmstr::recv_code_node_ctrl(querydata &q,
 		int r, const char *cmd, const world_id &wid, char *p, size_t l)
 {
@@ -107,10 +109,11 @@ int vmd::vmdmstr::recv_code_node_ctrl(querydata &q,
 	int rr = protocol::notify_node_change(*this, cmd, wid, chnode()->iden);
 	r = rr < 0 ? rr : r;
 	data d;
-	sr().unpack_start(p, l);
+	serializer &sr = vm()->serializer();
+	sr.unpack_start(p, l);
 	if (IS_ADD(cmd)) {
 		UUID uuid = w->world_object_uuid();
-		if (r < 0 || sr().unpack(d) <= 0) {
+		if (r < 0 || sr.unpack(d) <= 0) {
 			w->del_node(*this);
 			protocol::notify_node_change(*this, "del", wid, chnode()->iden);
 		}
@@ -192,10 +195,11 @@ vmd::vmdsvnt::exit_init_object(vmdsvnt &sender, vmdsvnt &recver,
 		return;
 	}
 	data d;
-	recver.sr().unpack_start(p, l);
+	serializer &sr = recver.vm()->serializer();
+	sr.unpack_start(p, l);
 	/* for init_object, d should be packed object
 	 * (thus init_object should return object) */
-	object *o = script::unpack_object(recver.sr());
+	object *o = recver.vm()->unpack_object(sr);
 	if (!o) {
 		sender.reply_new_object(recver, rmsgid, NBR_EINVAL,
 				protocol::invalid_id(), "", 0);
@@ -203,16 +207,15 @@ vmd::vmdsvnt::exit_init_object(vmdsvnt &sender, vmdsvnt &recver,
 	}
 	/* restart pack */
 	char buffer[64 * 1024];
-	recver.sr().pack_start(buffer, sizeof(buffer));
+	sr.pack_start(buffer, sizeof(buffer));
 	/* pack with object value */
-	if ((r = script::pack_object(recver.sr(), *o, true)) < 0) {
+	if ((r = recver.vm()->pack_object(vm, sr, *o, true)) < 0) {
 		sender.reply_new_object(recver, rmsgid, r,
 				protocol::invalid_id(), "", 0);
 		return;
 	}
 	/* TODO: send this object information to replicate host. */
-	sender.reply_new_object(recver, rmsgid, NBR_OK, o->uuid(),
-			recver.sr().p(), recver.sr().len());
+	sender.reply_new_object(recver, rmsgid, NBR_OK, o->uuid(), sr.p(), sr.len());
 }
 
 int
@@ -231,14 +234,19 @@ vmd::vmdsvnt::recv_cmd_new_object(U32 msgid, const world_id &wid,
 		ASSERT(false);
 		return reply_new_object(*this, msgid, NBR_EINVAL, uuid, NULL, 0);
 	}
-	object *o = script::object_new(cf(), wid, NULL/*main VM*/, uuid, NULL, true);
+	world *w = object_factory::find_world(wid);
+	if (!w) {
+		return reply_new_object(*this, msgid, NBR_ENOTFOUND, uuid, NULL, 0);
+	}
+	object *o = super::vm()->object_new(cf(), &(w->id()),
+			NULL/*main VM*/, uuid, NULL, true);
 	if (!o) {
 		return reply_new_object(*this, msgid, NBR_EEXPIRE, uuid, NULL, 0);
 	}
 	/* if really newly created, then call initializer with parameter */
 	if (o->create_new()) {
 		proc_id pid = "init_object";
-		if ((r = script::call_proc(*this, cf(), wid, msgid, *o, pid, p, l,
+		if ((r = super::vm()->call_proc(*this, cf(), msgid, *o, pid, p, l,
 				rpct_global, exit_init_object)) < 0) {
 			return reply_new_object(*this, msgid, r, uuid, NULL, 0);
 		}
@@ -256,11 +264,12 @@ vmd::vmdsvnt::exit_load_player(vmdsvnt &sender, vmdsvnt &recver,
 			sender.wid(), protocol::invalid_id(), "", 0);
 		return;
 	}
+	serializer &sr = recver.vm()->serializer();
 	data d;
-	recver.sr().unpack_start(p, l);
+	sr.unpack_start(p, l);
 	/* for init_object, d should be packed object
 	 * (thus init_object should return object) */
-	object *o = script::unpack_object(recver.sr());
+	object *o = recver.vm()->unpack_object(sr);
 	if (!o) { r = NBR_ENOTFOUND; }
 	/* insert relation ship table of session - object */
 	ASSERT(o->uuid() == sender.session_uuid());
@@ -282,25 +291,26 @@ vmd::vmdsvnt::recv_code_new_object(
 	log(INFO, "code_new_object: %d %s t=%u\n",
 			r, uuid.to_s(b, sizeof(b)), q.m_data);
 #endif
+	serializer &sr = vm()->serializer();
 	switch(q.m_data) {
 	case load_purpose_create:
 		/* lua script resume the point attempt to create pfm object */
-		sr().unpack_start(p, l);
-		return script::resume_create(*(q.sender()), cf(), super::wid(),
-			q.vm(), uuid, sr());
+		sr.unpack_start(p, l);
+		return vm()->resume_create(*(q.sender()), cf(), super::wid(),
+			q.fb(), uuid, sr);
 	case load_purpose_login:
 		if (r < 0) {
 			return q.sender()->reply_login(*this, q.msgid, r,
 				super::wid(), uuid, p, l);
 		}
-		sr().unpack_start(p, l);
+		sr.unpack_start(p, l);
 		/* when login, create local object */
-		if ((o = script::object_new(cf(), super::wid(),
-				NULL/*main VM*/, uuid, &(sr()), true))) {
+		if ((o = vm()->object_new(cf(), &(super::wid()),
+				NULL/*main VM*/, uuid, &sr, true))) {
 			m_session_uuid = uuid;
 			proc_id pid = "load_player";
 			/* pid, "", 0 means no argument */
-			if ((r = script::call_proc(*this, cf(), super::wid(), q.msgid, *o, pid,
+			if ((r = vm()->call_proc(*this, cf(), q.msgid, *o, pid,
 					"", 0, rpct_global, exit_load_player)) < 0) {
 				return q.sender()->reply_login(*this, q.msgid, r,
 					super::wid(), uuid, "", 0);
@@ -310,12 +320,16 @@ vmd::vmdsvnt::recv_code_new_object(
 		return q.sender()->reply_login(*this, q.msgid, NBR_EEXPIRE, 
 			super::wid(), uuid, "", 0);
 	case vmprotocol::load_purpose_create_world:
+		if (r < 0) {
+			return q.sender()->reply_node_ctrl(*this, q.msgid, r, "add",
+					q.wld().id(), "", 0);
+		}
 		q.wld().set_world_object_uuid(uuid);
 		log(INFO, "world_create>object_id:%s\n", uuid.to_s(b, sizeof(b)));
-		sr().pack_start(b, sizeof(b));
-		sr().push_raw((char *)&uuid, sizeof(uuid));
+		sr.pack_start(b, sizeof(b));
+		sr.push_raw((char *)&uuid, sizeof(uuid));
 		return backend_conn()->reply_node_ctrl(*this, q.msgid, NBR_OK, "add",
-				q.wld().id(), sr().p(), sr().len());
+				q.wld().id(), sr.p(), sr.len());
 	default:
 		log(ERROR, "invalid purpose: %d\n", q.m_data);
 		ASSERT(false);
@@ -329,7 +343,10 @@ vmd::vmdsvnt::recv_cmd_login(U32 msgid, const world_id &wid,
 {
 	/* just forward to master (with log) */
 	log(INFO, "try_login>A:%s,W:%s\n",acc,wid);
-	super::set_wid(wid);
+	if (super::set_wid(wid) < 0) {
+		return reply_login(*this, msgid, NBR_ENOTFOUND,
+				wid, protocol::invalid_id(), "", 0);
+	}
 	return backend_conn()->send_login(*this, msgid, wid, acc, ath, athl);
 }
 
@@ -343,9 +360,15 @@ vmd::vmdsvnt::recv_code_login(querydata &q, int r, const world_id &wid,
 		return q.sender()->reply_login(*this, q.msgid, r, wid, uuid, "", 0);
 	}
 	if (protocol::is_valid_id(uuid)) {
-		sr().unpack_start(p, l);
-		object *o = script::object_new(cf(), wid, NULL/*use main VM*/,
-				uuid, &(sr()), false);
+		serializer &sr = vm()->serializer();
+		sr.unpack_start(p, l);
+		world *w = object_factory::find_world(wid);
+		if (!w) {
+			return q.sender()->reply_login(*this,
+					q.msgid, NBR_ENOTFOUND, wid, uuid, "", 0);
+		}
+		object *o = vm()->object_new(cf(), &(w->id()), NULL/*use main VM*/,
+				uuid, &sr, false);
 		if (!o) {
 			return q.sender()->reply_login(*this,
 					q.msgid, NBR_EINVAL, wid, uuid, "", 0);
@@ -378,7 +401,8 @@ vmd::vmdsvnt::recv_notify_node_change(const char *cmd,
 			return NBR_EEXPIRE;
 		}
 #if defined(_TEST)
-		if (script::load(wid, "./scp/svt.lua") < 0) {
+		vm_msg c(vm(), vm()->thread(), NULL);
+		if (vm()->load(c, wid, "./scp/svt.lua") < 0) {
 			return NBR_ESYSCALL;
 		}
 #endif
@@ -407,10 +431,11 @@ vmd::vmdsvnt::recv_cmd_node_ctrl(U32 msgid, const char *cmd,
 				*this, msgid, NBR_OK, cmd, wid, "", 0);
 	}
 	data d;
-	sr().unpack_start(p, l);
-	if (sr().unpack(d) <= 0) { return NBR_EFORMAT; }
+	serializer &sr = vm()->serializer();
+	sr.unpack_start(p, l);
+	if (sr.unpack(d) <= 0) { return NBR_EFORMAT; }
 	bool has_object = protocol::is_valid_id(*(UUID *)script::to_p(d));
-	while(sr().unpack(d)) {
+	while(sr.unpack(d)) {
 		r = recv_notify_node_change(cmd, wid, script::to_s(d));
 		if (r < 0 && r != NBR_EALREADY) {
 			ASSERT(false);
@@ -451,6 +476,7 @@ vmd::vmdclnt::recv_code_login(querydata &q, int r, const world_id &wid,
 {
 	if (r < 0) {
 		log(ERROR, "login fail: %d\n", r);
+		daemon::stop();
 		return r;
 	}
 	object_factory::world *w = object_factory::find_world(wid);
@@ -460,7 +486,8 @@ vmd::vmdclnt::recv_code_login(querydata &q, int r, const world_id &wid,
 			return NBR_EEXPIRE;
 		}
 #if defined(_TEST)
-		if (script::load(test_wid, "./scp/clt.lua") < 0) {
+		vm_msg c(vm(), vm()->thread(), NULL);
+		if (vm()->load(c, wid, "./scp/clt.lua") < 0) {
 			return NBR_ESYSCALL;
 		}
 #endif
@@ -471,19 +498,25 @@ vmd::vmdclnt::recv_code_login(querydata &q, int r, const world_id &wid,
 	w->set_node(*this, addr());
 	w->add_node(*this);
 	/* create remote object */
-	object *o = script::object_new(cf(), wid, NULL/*use main VM*/,
+	object *o = vm()->object_new(cf(), &(w->id()), NULL/*use main VM*/,
 			uuid, NULL, false);
 	if (o) {
 		connector *c = w->connect_assigned_node(cf(), o->uuid());
 		o->set_connection(c);
 		proc_id pid = "main";
 		/* pid, "", 0 means no argument */
-		script::call_proc(*this, cf(), super::wid(), q.msgid, *o, pid, "", 0,
+		vm()->call_proc(*this, cf(), q.msgid, *o, pid, "", 0,
 				rpct_global, fb_exit_noop);
 		return NBR_OK;
 	}
 	ASSERT(false);
 	return NBR_OK;
+}
+
+void vmd::vmdclnt::exit_main(vmdsvnt &sender, vmdsvnt &recver,
+		VM vm, int r, U32 rmsgid, rpctype rt, char *p, size_t l)
+{
+	daemon::stop();
 }
 
 
@@ -525,7 +558,7 @@ vmd::create_config(config *cl[], int sz)
 			nbr_sock_send_bin16,
 			config::cfg_flag_server,
 			"lua", "", "tc", "",
-			10000, 10, 10000, 10000,
+			10000, 10, 10000, 3000,
 			10000, vmprotocol::vnode_replicate_num
 			));
 	CONF_ADD(vmdconfig, (
@@ -544,7 +577,7 @@ vmd::create_config(config *cl[], int sz)
 			nbr_sock_send_bin16,
 			config::cfg_flag_server,
 			"lua", "", "tc", "",
-			10000, 10, 10000, 10000,
+			10000, 10, 10000, 3000,
 			10000, vmprotocol::vnode_replicate_num
 			));
 	CONF_ADD(vmdconfig, (
@@ -564,7 +597,7 @@ vmd::create_config(config *cl[], int sz)
 			nbr_sock_send_bin16,
 			config::cfg_flag_not_set,
 			"lua", "", "tc", "",
-			100, 5, 100, 100,
+			100, 5, 100, 30,
 			100, vmprotocol::vnode_replicate_num
 			));
 	CONF_END();
@@ -573,17 +606,36 @@ vmd::create_config(config *cl[], int sz)
 int
 vmd::boot(int argc, char *argv[])
 {
-	int r;
+	int r, i;
+	m_wks = 256;
+	THREAD wkr[m_wks];
+	if ((m_wks = nbr_sock_get_worker(wkr, m_wks)) < 0) {
+		return m_wks;
+	}
+	m_wkp = new worker_data[r];
+	for (i = 0; i < m_wks; i++) {
+		if ((r = nbr_sock_set_worker_data(wkr[i], &(m_wkp[i]),
+				vmdsvnt::vm_msg::on_event)) < 0) {
+			return r;
+		}
+	}
 	vmdconfig *vc;
 	vmdmstr::factory *mstr = find_factory<vmdmstr::factory>("mstr");
 	if (mstr) {
 		if ((vc = find_config<vmdconfig>("mstr"))) {
-			if ((r = vmdmstr::init_vm(vc->m_max_object, vc->m_max_world,
-					vc->m_rpc_entry, vc->m_rpc_ongoing)) < 0) {
+			if ((r = vmdmstr::init_world(vc->m_max_object, vc->m_max_world)) < 0) {
 				return r;
 			}
 			if ((r = vmdmstr::init_login_map(10000)) < 0) {
 				return r;
+			}
+			vmdmstr::vm_msg::set_factory(mstr);
+			for (i = 0; i < m_wks; i++) {
+				if (!(m_wkp[i].m_mstr_vm =
+					vmdmstr::init_vm(vc->m_rpc_entry, vc->m_rpc_ongoing, m_wks))) {
+					return NBR_EMALLOC;
+				}
+				m_wkp[i].m_mstr_vm->set_thread(wkr[i]);
 			}
 		}
 		else {
@@ -593,12 +645,19 @@ vmd::boot(int argc, char *argv[])
 	vmdsvnt::factory *svnt = find_factory<vmdsvnt::factory>("svnt");
 	if (svnt) {
 		if ((vc = find_config<vmdconfig>("svnt"))) {
-			if ((r = vmdsvnt::init_vm(vc->m_max_object, vc->m_max_world,
-					vc->m_rpc_entry, vc->m_rpc_ongoing)) < 0) {
+			if ((r = vmdsvnt::init_world(vc->m_max_object, vc->m_max_world)) < 0) {
 				return r;
 			}
 			if ((r = vmdsvnt::init_player_map(vc->m_max_connection)) < 0) {
 				return r;
+			}
+			vmdsvnt::vm_msg::set_factory(svnt);
+			for (i = 0; i < m_wks; i++) {
+				if (!(m_wkp[i].m_svnt_vm =
+					vmdsvnt::init_vm(vc->m_rpc_entry, vc->m_rpc_ongoing, m_wks))) {
+					return NBR_EMALLOC;
+				}
+				m_wkp[i].m_svnt_vm->set_thread(wkr[i]);
 			}
 #if defined(_TEST)
 			vmdsvnt::connector *c = svnt->backend_connect("127.0.0.1:8000");
@@ -620,9 +679,16 @@ vmd::boot(int argc, char *argv[])
 	vmdclnt::factory *clnt = find_factory<vmdclnt::factory>("clnt");
 	if (clnt) {
 		if ((vc = find_config<vmdconfig>("clnt"))) {
-			if ((r = vmdclnt::init_vm(vc->m_max_object, vc->m_max_world,
-					vc->m_rpc_entry, vc->m_rpc_ongoing)) < 0) {
+			if ((r = vmdclnt::init_world(vc->m_max_object, vc->m_max_world)) < 0) {
 				return r;
+			}
+			vmdclnt::vm_msg::set_factory(clnt);
+			for (i = 0; i < m_wks; i++) {
+				if (!(m_wkp[i].m_clnt_vm =
+					vmdclnt::init_vm(vc->m_rpc_entry, vc->m_rpc_ongoing, m_wks))) {
+					return NBR_EMALLOC;
+				}
+				m_wkp[i].m_clnt_vm->set_thread(wkr[i]);
 			}
 #if defined(_TEST)
 			vmdclnt::connector *c = clnt->backend_connect("127.0.0.1:9000");
@@ -630,13 +696,15 @@ vmd::boot(int argc, char *argv[])
 			/* set connector factory */
 			vmdclnt::set_cf(clnt);
 			/* send login (you can send immediately :D)*/
+			char buffer[256];
+			snprintf(buffer, sizeof(buffer), "umegaya%04x", daemon::pid());
 			return c->send_login(*(c->chain()->m_s), 0, test_wid,
-					"umegaya", "iyatomi", sizeof("iyatomi"));
+					buffer, "iyatomi", sizeof("iyatomi"));
 #endif
 		}
 		return NBR_EINVAL;
 	}
-	return NBR_ENOTFOUND;
+	return NBR_OK;
 }
 
 int
@@ -648,11 +716,16 @@ vmd::initlib(CONFIG &c)
 void
 vmd::shutdown()
 {
-	vmdmstr::fin_vm();
+	for (int i = 0; i < m_wks; i++) {
+		vmdmstr::fin_vm(m_wkp[i].m_mstr_vm);
+		vmdsvnt::fin_vm(m_wkp[i].m_svnt_vm);
+		vmdclnt::fin_vm(m_wkp[i].m_clnt_vm);
+	}
+	vmdmstr::fin_world();
 	vmdmstr::fin_login_map();
-	vmdsvnt::fin_vm();
+	vmdsvnt::fin_world();
 	vmdsvnt::fin_player_map();
-	vmdclnt::fin_vm();
+	vmdclnt::fin_world();
 }
 
 
