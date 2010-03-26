@@ -27,6 +27,12 @@ using namespace lang;
 using namespace cluster;
 class vmd : public app::daemon {
 public:
+	/* enum session type */
+	typedef enum {
+		vmd_session_master = 1,
+		vmd_session_servant = 2,
+		vmd_session_client = 3,
+	} vmd_stype;
 	/* sessions */
 	class vmdmstr : public vmnode<vmdmstr> {
 	public:
@@ -49,6 +55,8 @@ public:
 	public:
 		vmdmstr() : super(this) {}
 		~vmdmstr() {}
+		static const int vmd_session_type = vmd_session_master;
+		static U32 get_msgid(factory *f) { return f->msgid(); }
 		static int init_login_map(int max_user);
 		static void fin_login_map() { m_lm.fin(); }
 		inline script *fetch_vm();
@@ -88,6 +96,8 @@ public:
 	public:
 		vmdsvnt() : super(this), m_session_uuid() {}
 		~vmdsvnt() {}
+		static const int vmd_session_type = vmd_session_servant;
+		static U32 get_msgid(factory *f) { return f->cf()->msgid(); }
 		static int init_player_map(int max_session);
 		static void fin_player_map() { m_pm.fin(); }
 		inline script *fetch_vm();
@@ -119,9 +129,9 @@ public:
 		int recv_code_node_register(querydata &q, int r) { return 0; }
 	protected:/* callback */
 		static void exit_init_object(vmdsvnt &sender, vmdsvnt &recver,
-				VM vm, int r, U32 rmsgid, rpctype rt, char *p, size_t l);
+			VM vm, int r, U32 rmsgid, rpctype rt, char *p, size_t l);
 		static void exit_load_player(vmdsvnt &sender, vmdsvnt &recver,
-				VM vm, int r, U32 rmsgid, rpctype rt, char *p, size_t l);
+			VM vm, int r, U32 rmsgid, rpctype rt, char *p, size_t l);
 	};
 	class vmdclnt : public vmnode<vmdclnt> {
 	public:
@@ -131,18 +141,38 @@ public:
 		typedef super::script script;
 		typedef super::vm_msg vm_msg;
 		typedef super::UUID UUID;
+		enum client_state {
+			client_state_invalid,
+			client_state_login_attempt,
+			client_state_resume,
+			client_state_pending,
+			/* invalid -> login_attempt -> state_pending <-> state_resume */
+			client_state_error,
+		};
+		static client_state m_cs;
+	protected:
+		UUID m_session_uuid;
+		UTIME m_last_process;
+		protocol::login_id m_account;
 	public:
-		vmdclnt() : super(this) {}
+		vmdclnt() : super(this), m_session_uuid(protocol::invalid_id()),
+			m_last_process(0LL) {}
 		~vmdclnt() {}
+		static const int vmd_session_type = vmd_session_client;
+		static U32 get_msgid(factory *f) { return f->msgid(); }
 		inline script *fetch_vm();
 		static inline script *fetch_vm_from_thread(THREAD);
 		vmdclnt *from_object(object &o) { return NULL; }
+		static void set_state(client_state cs) { m_cs = cs; }
 	public:/* vmdclnt */
 		int recv_code_login(querydata &q, int r, const world_id &wid, 
 			UUID &uuid, char *p, size_t l);
+		session::pollret poll(UTIME ut, bool from_worker);
+		UTIME last_process() const { return m_last_process; }
+		void set_last_process(UTIME ut) { m_last_process = ut; }
 	protected:
-		static void exit_main(vmdsvnt &sender, vmdsvnt &recver,
-				VM vm, int r, U32 rmsgid, rpctype rt, char *p, size_t l);
+		static void exit_main(vmdclnt &sender, vmdclnt &recver,
+			VM vm, int r, U32 rmsgid, rpctype rt, char *p, size_t l);
 	};
 public:
 	struct worker_data {
@@ -151,8 +181,9 @@ public:
 		vmdclnt::script *m_clnt_vm;
 	} *m_wkp;
 	int m_wks;
+	static void on_worker_event(THREAD, THREAD, char *, size_t);
 public:
-	/* daemon proces */
+	/* daemon process */
 	factory *create_factory(const char *sname);
 	int	create_config(config* cl[], int size);
 	int	boot(int argc, char *argv[]);

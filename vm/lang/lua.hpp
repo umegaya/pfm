@@ -129,15 +129,30 @@ public:	/* typedefs */
 		UUID uuid() const { return m_uuid; }
 	};
 	class fiber {
+	public:
+		enum io_type {
+			io_type_socket, /* rpc over network */
+			io_type_channel,/* rpc over memory (inter thread) */
+		};
+		template <class V> struct exit_fn {
+                typedef void (*type)(V &, V &, VM, int, U32, rpctype, char *, size_t);
+                };
 	protected:
 		VM m_ip;
-		S *m_s;
+		struct {
+			S *s;
+			VMMSG *vmm;
+		} m_sender;
+		union {
+			typename exit_fn<S>::type s;
+			typename exit_fn<VMMSG>::type vmm;
+		} m_exit_fn;
+		U8 m_type, m_rpc_type;
+		U16 padd;
 		U32 m_msgid;
 		const world_id *m_wid;
 		lua<SR,OF> *m_scp;
-		void (*m_fn)(S &, S &, VM, int, U32, rpctype, char *, size_t);
 	public:
-		typedef void (*exit_fn)(S &, S &, VM, int, U32, rpctype, char *, size_t);
 		/* NOTE : m_ip never destroyed after once created,  
 		memory region which is used for allocating fiber object is
 		assure to be 0 cleared. because this memory is allocated by
@@ -148,28 +163,46 @@ public:	/* typedefs */
 		static U64 fbkey_from(VM vm) { return (U64)vm; }
 		U64 fbkey() const { return fbkey_from(m_ip); }
 		U32 rmsgid() const { return m_msgid; }
-		S *connection() { return (S *)m_s; }
+		S *connection() { return (S *)m_sender.s; }
+		VMMSG &vmmsg() { return *m_sender.vmm; }
+		io_type iot() const { return (io_type)m_type; }
+		rpctype rt() const { return (rpctype)m_rpc_type; }
 		const world_id &wid() const { return *m_wid; }
 		lua<SR,OF> *scp() { return m_scp; }
-		void call_exit(int r, S &s, rpctype rt, char *p, size_t l) {
-			m_fn(*m_s, s, m_ip, r, m_msgid, rt, p, l); }
+		/* only second sender is current thread domain */
+		void call_exit(int r, S &sk, rpctype rt, char *p, size_t l) {
+			m_exit_fn.s(*connection(), sk, m_ip, r, m_msgid, rt, p, l); }
+		void call_exit(int r, VMMSG &v, rpctype rt, char *p, size_t l) {
+			m_exit_fn.vmm(vmmsg(), v, m_ip, r, m_msgid, rt, p, l); }
+		void set_sender(VMMSG &v, typename exit_fn<VMMSG>::type f); 
+		void set_sender(S &s, typename exit_fn<S>::type f) { 
+			m_type = (U8)io_type_socket; m_sender.s = &s; 
+			m_exit_fn.s = f; }
+		template <class V>
 		bool init_from_vm(class lua<SR,OF> *scp, const world_id *wid,
-			S *s, U32 msgid, exit_fn fn) {
+			rpctype rt,
+			V &v, U32 msgid, typename exit_fn<V>::type fn) {
 			ASSERT(wid);
 			if (!m_ip) {
 				m_ip = lua_newcthread(scp->vm(), 1/* use min size */);
 			}
+			ASSERT(((int **)m_ip)[-1]);
 			lua_pushthread(m_ip);
 			lua_getfield(m_ip, LUA_REGISTRYINDEX, *wid);
+			if (!lua_istable(m_ip, -1)) {
+				return false;
+			}
 			lua_setfenv(m_ip, -2);
-			m_fn = fn;
+			lua_settop(m_ip, 0);
 			m_scp = scp;
 			m_msgid = msgid;
-			m_s = s;
 			m_wid = wid;
+			m_rpc_type = (U8)rt;
+			set_sender(v, fn);
 			return m_ip != NULL;
 		}
-		bool need_reply() const { return m_fn == NULL; }
+		/* because it union, s == NULL means vmm == NULL */
+		bool need_reply() const { return m_exit_fn.s == NULL; }
 		static void exit_noop(S &, S &, VM, int, U32, rpctype, char *, size_t) {}
 	};
 	class type_id {
@@ -203,45 +236,50 @@ public: /* constant */
 	};
 protected:	/* static variable */
 	static map<type_id, char*> 	m_types;
-	static array<rpc>			m_rpcs;
+	static array<rpc>		m_rpcs;
 	static map<fiber*,U64>		m_fbmap;
 	array<fiber> 	m_fibers;
-	VM 				m_vm;
-	THREAD			m_thrd;
-	SR				m_serializer;
+	VM 		m_vm;
+	THREAD		m_thrd;
+	SR		m_serializer;
 public:
 	lua() : m_fibers(), m_vm(NULL), m_thrd(NULL), m_serializer() {}
 	~lua() {}
 	/* external interfaces */
 	int 	init(int max_rpc_entry, int max_rpc_ongoing, int n_wkr);
 	void 	fin();
-	int  	init_world(const world_id &wid, const world_id &from);
-	int		add_global_object(CF &, const world_id &wid, char *p, size_t l);
+	int  	init_world(const world_id &wid, const world_id &from, const char *srcfile);
+	int	add_global_object(CF &, const world_id &wid, char *p, size_t l);
 	void 	set_thread(THREAD th) { m_thrd = th; }
 	THREAD	thread() const { return m_thrd; }
-	VM		vm() const { return m_vm; }
-	SR		&serializer() { return m_serializer; }
-	object 	*object_new(CF &cf, const world_id *w,
-				VM vm, UUID &uuid, SR *sr, bool local);
-	int		call_proc(S &, CF &, U32, object &, proc_id &, char *, size_t, rpctype,
-				typename fiber::exit_fn);
+	VM	vm() const { return m_vm; }
+	SR	&serializer() { return m_serializer; }
+	array<fiber> &fibers() { return m_fibers; }
+	bool check_fiber(fiber &f) {
+		int idx = nbr_array_get_index(m_fibers.get_a(), &f);
+		//TRACE("check_fiber: %p %d %d %p %p\n", thread(), idx, 
+		//	nbr_array_max(m_fibers.get_a()), m_fibers.get_a(), &f); 
+		return (nbr_array_max(m_fibers.get_a()) > idx && idx >= 0); 
+	}
+	static object 	*object_new(CF &cf, const world_id *w,
+			VM vm, lua<SR,OF> *scp, UUID &uuid, SR *sr, bool local);
+	int	call_proc(S &, CF &, U32, object &, proc_id &, char *, size_t, rpctype,
+			typename fiber::template exit_fn<S>::type);
 	int 	resume_create(S &, CF &, const world_id &, fiber &, UUID &, SR &);
+	bool 	load(const world_id &, const char *srcfile);
 	template <class SNDR>
-	bool 	load(SNDR &, const world_id &, const char *srcfile);
-	template <class SNDR>
-	int		resume_proc(SNDR &, CF &, const world_id &, fiber &,
-				char *, size_t, rpctype);
-	template <class SNDR>
-	int 	local_call(SNDR &c, CF &cf, U32 rmsgid,
-				object &o, proc_id &pid, char *p, size_t l, rpctype rt);
+	int	resume_proc(SNDR &, CF &, const world_id &, fiber &,
+			char *, size_t, rpctype);
+	int 	local_call(VMMSG &c, CF &cf, U32 rmsgid,
+			object &o, proc_id &pid, char *p, size_t l, rpctype rt);
 public:
-	static int		pack_object(VM, SR &, const object &, bool);
+	static int	pack_object(VM, SR &, const object &, bool);
 	static object 	*unpack_object(SR &);
 protected: 	/* lua methods */
 	static int	create(VM);
 	static int 	index(VM);
 	static int 	newindex(VM);
-	static int  global_newindex(VM);
+	static int  	global_newindex(VM);
 	static int 	call(VM);
 	static int 	gc(VM);
 	static int	panic(VM);
@@ -252,17 +290,25 @@ protected: 	/* lua methods */
 	static int	chunk_sr_writer(VM, const void *, size_t, void *);
 #if defined(_DEBUG)
 	static int 	gc_fiber(VM);
+	static void	dump_table(VM, int);
+	static void	dump_stack(VM);
+#else
+	#define dump_stack(VM)
 #endif
 protected:	/* rpc hook */
 	template <class SNDR> static int
-				rpc_sender_hook(SNDR &, const proc_id &p,
+			rpc_sender_hook(SNDR &, const proc_id &p,
 					fiber &fb, object &o, SR &, rpctype rt);
 	static int 	rpc_recver_hook(S &c, U32 rmsgid, const proc_id &p,
 					fiber &fb, object &o, char *p, size_t l, rpctype rt);
 protected: 	/* helpers */
 	static rpc 	*rpc_new(VM, object *, const char *);
-	fiber	*fiber_new(S *, U32, const world_id *, typename fiber::exit_fn);
-	void 	fiber_exit_call(fiber &fb, int basestk, int r, void *p, rpctype rt);
+	template <class V> fiber* fiber_new(V &, rpctype, U32, const world_id *, 
+			typename fiber::template exit_fn<V>::type fn);
+	static void 	fiber_delete(fiber *fb);
+	template <class SNDR>
+	static void 	fiber_exit_call(fiber &fb, int basestk, int r, SNDR &s, 
+				rpctype rt = vmprotocol::rpct_invalid);
 
 	static void	push_object(VM, object *);
 	static int 	get_object_value(VM vm, const object &o, const char *key);
@@ -271,22 +317,25 @@ protected: 	/* helpers */
 	static int 	set_object_method(VM vm, const object &o, const char *key, int from);
 	static int 	pack_object_value(VM vm, const object &o, SR &sr);
 	static int	pack_lua_stack(SR &, VM, int);
-	int 	unpack_object_value(CF &cf, const world_id &wid,
-				VM vm, const object &o, data &sr);
-	bool	unpack_lua_stack(CF &, const world_id &, SR &, VM);
-	int 	put_to_lua_stack(CF &, const world_id &, VM, data &);
-	int 	unpack_object(CF &, const world_id &, VM, data &, object &);
+	static int 	unpack_object_value(CF &cf, const world_id &wid,
+				VM vm, lua<SR,OF> *scp, const object &o, data &sr);
+	static bool	unpack_lua_stack(CF &cf, const world_id &w, SR &sr, fiber &fb) {
+		return unpack_lua_stack(cf, w, sr, fb, fb.scp());
+	}
+	static bool	unpack_lua_stack(CF &, const world_id &, SR &, VM, lua<SR,OF> *scp);
+	static int 	put_to_lua_stack(CF &, const world_id &, VM, lua<SR,OF> *scp, data &);
+	static int 	unpack_object(CF &, const world_id &, VM, lua<SR,OF> *, data &, object &);
 
-	int		copy_table(VM, int index_from, int index_to, int type);
+	static int	copy_table(VM, int index_from, int index_to, int type);
 
 	static const char *add_type(VM, const world_id *, const char *typestr);
 
-	template <class SNDR> int 	dispatch(SNDR &, fiber &, int, bool, rpctype);
-	template <class SNDR> static int reply_result(SNDR &, fiber &, int, rpctype);
-	static object 		*to_o(VM, int, bool abort = true);
-	static rpc 			*to_r(VM, int, bool abort = true);
+	template <class SNDR> static int dispatch(SNDR &, fiber &, int, bool);
+	static int 	reply_result(fiber &, int, rpctype rt = vmprotocol::rpct_invalid);
+	static object 	*to_o(VM, int, bool abort = true);
+	static rpc 	*to_r(VM, int, bool abort = true);
 	static const char 	*to_k(VM, int);
-	static fiber 		*vm_owner(VM);
+	static fiber 	*vm_owner(VM);
 };
 #include "lua.inc"
 }	//lang

@@ -715,6 +715,9 @@ public:
 	typedef struct {
 		session *s;
 		SOCK	sk;
+		void set_from_sock(session *sock) { 
+			s = sock; if (s) { sk = s->sk(); }
+		}
 	} querydata;
 	static const size_t SOCK_ADDR_SIZE = address::SIZE;
 protected:
@@ -1081,6 +1084,10 @@ public:
 		U32 msgid;
 		SOCK sk;
 		session *s;
+		void set_from_sock(node *sock) {
+			s = sock; 
+			if (s) { sk = s->sk(); }
+		}
 	};
 public:
 	node() : session() {}

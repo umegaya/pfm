@@ -602,7 +602,7 @@ sock_push_worker_event(THREAD from, THREAD to, char *data, int len)
 	if (!to && !from) { return NBR_EINVAL; }
 	j = nbr_thread_get_data(to);
 	THREAD_LOCK(nbr_thread_signal_mutex(to), error);
-	sockbuf_worker_event(j->web, from, data, len);
+	r = sockbuf_worker_event(j->web, from, data, len);
 	THREAD_UNLOCK(nbr_thread_singal_mutex(to));
 	return r;
 error:

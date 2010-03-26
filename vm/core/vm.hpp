@@ -109,6 +109,7 @@ public:
 		rpct_getter,	/* object[k] */
 		rpct_setter,	/* object[k] = v */
 		rpct_call,		/* local method call */
+		rpct_call_global,	/* local global func call */
 		rpct_method_fw,	/* method call forwarded */
 		rpct_global_fw,	/* global call forwarded */
 
@@ -148,6 +149,12 @@ protected:
 	S &m_this;
 public: /* ctor/dtor/(g|s)etter */
 	vmprotocol_impl(S *s) : m_this(*s) {}
+	vmprotocol_impl &operator = (vmprotocol_impl &v) {
+		/* no need copy this pointer (because it will initialize with ctor, 
+		and always with this object. */
+		ASSERT(&m_this);
+		return *this;
+	}
 	S &_this() { return m_this; }
 	const S &_this() const { return m_this; }
 	static bool is_valid_id(const UUID &uuid) { return IDG::valid(uuid); }
@@ -181,7 +188,8 @@ public:	/* receiver */
 	template <class Q> int recv_code_node_register(Q &q, int r) {__PE();}
 	int recv_notify_node_change(const char *cmd,
 			const world_id &wid, const address &a) {__PE();}
-	int recv_notify_init_world(const world_id &nw, const world_id &from) {__PE();}
+	int recv_notify_init_world(const world_id &nw, const world_id &from,
+			const char *file) {__PE();}
 	int recv_notify_add_global_object(const world_id &nw, char *p, size_t pl)
 			{__PE();}
 	int recv_notify_load_module(const world_id &nw, const char *file) {__PE();}
@@ -206,7 +214,8 @@ public: /* sender */
 	int reply_node_register(SNDR &s, U32 msgid, int r);
 	int notify_node_change(SNDR &s, const char *cmd,
 			const world_id &wid, const address &a);
-	int notify_init_world(SNDR &s, const world_id &nw, const world_id &from);
+	int notify_init_world(SNDR &s, const world_id &nw, const world_id &from,
+			const char *file);
 	int notify_add_global_object(SNDR &s, const world_id &nw, char *p, size_t l);
 	int notify_load_module(SNDR &s, const world_id &nw, const char *file);
 };
@@ -223,9 +232,10 @@ protected:
 	static factory *m_f;
 	THREAD m_to;
 	THREAD m_from;
+	U32 m_type;
 public:
 	message_passer() : m_to(NULL), m_from(NULL) {}
-	message_passer(THREAD from, THREAD to) {
+	message_passer(THREAD from, THREAD to, U32 type) : m_type(type) {
 		set_thread_to(to);
 		set_thread_from(from);
 	}
@@ -236,8 +246,13 @@ public:
 	int log(loglevel lv, const char *fmt, ...);
 	operator THREAD () { return m_to; }
 	static factory *f() { return m_f; }
+	static U32 msgid() { return S::get_msgid(m_f); }
+	static U32 stype(char p) { return (U32)((p) >> 4); }
+	static void remove_stype(char *p) { (*p) &= (0x0F); }
+	static void add_stype(char *p, U32 type) { (*p) |= (type << 4); }
 	querydata *senddata(S &, U32, char *, int);
 	int send(char *p, int l) {
+		add_stype(p, m_type);
 		return m_to ? nbr_sock_worker_event(m_from, m_to, p, l) :
 				nbr_sock_worker_bcast_event(m_from, p, l);
 	}
@@ -249,24 +264,31 @@ class vm_message_protocol_impl : public message_passer<S>,
 public:
 	typedef message_passer<S> super;
 	typedef typename S::script script;
+	typedef typename S::object_factory object_factory;
+	typedef typename object_factory::world world;
+	typedef typename object_factory::conn connector;	
 	typedef CP<vm_message_protocol_impl<S,CP> > protocol;
 	typedef typename protocol::UUID UUID;
 	typedef typename protocol::rpctype rpctype;
 	typedef typename protocol::proc_id proc_id;
 	typedef vmprotocol::world_id world_id;
+	typedef typename protocol::loadpurpose loadpurpose;
 protected:
 	script *m_scp;
 public:
-	vm_message_protocol_impl(script *scp, THREAD from, THREAD to) :
-		super(from, to), protocol(this), m_scp(scp) {}
+	vm_message_protocol_impl(script *scp, THREAD from, THREAD to, 
+		U32 type = S::vmd_session_type) :
+		super(from, to, type), protocol(this), m_scp(scp) {}
 	script *scp() { return m_scp; }
 	static void on_event(THREAD from, THREAD to, char *p, size_t l);
 	int recv_cmd_rpc(U32 msgid, UUID &uuid, proc_id &pid,
 			char *p, int l, rpctype rc);
-	int recv_notify_init_world(const world_id &nw, const world_id &from);
+	int recv_notify_init_world(const world_id &nw, const world_id &from, const char *f);
 	int recv_notify_add_global_object(const world_id &nw, char *p, size_t pl);
 	int recv_notify_load_module(const world_id &nw, const char *file);
 	template <class Q> int recv_code_rpc(Q &q, char *p, size_t l, rpctype rc);
+	template <class Q> int load_or_create_object(U32 msgid, const world_id *id,
+		UUID &uuid, char *p, size_t l, loadpurpose lp, Q **pq);
 };
 
 
@@ -437,6 +459,7 @@ public:
 	char m_langopt[256];
 	char m_kvs[16];
 	char m_kvsopt[256];
+	char m_root_dir[256];
 	U32	m_max_object, m_max_world,
 		m_rpc_entry, m_rpc_ongoing;
 	U32 m_max_node, m_max_replica;
@@ -447,9 +470,14 @@ public:
 	vmdconfig(BASE_CONFIG_PLIST,
 			char *lang, char *lopt,
 			char *kvs, char *kopt,
+			char *root_dir,
 			int max_object, int max_world,
 			int rpc_entry, int rpc_ongoing,
 			int max_node, int max_replica);
+	const char *getpath(char *buff, size_t len, const char *file) const {
+		snprintf(buff, len, "%s%s", m_root_dir, file);
+		return buff;
+	}
 	virtual int set(const char *k, const char *v);
 	virtual config *dup() const {
 		vmdconfig *cfg = new vmdconfig;
@@ -489,6 +517,7 @@ public:
 	typedef typename vmmodule::loadpurpose loadpurpose;
 	typedef typename vmmodule::serializer serializer;
 	typedef typename vmmodule::vm_msg vm_msg;
+	typedef message_passer<S> message_passer;
 	typedef typename script::VM VM;
 	typedef typename script::fiber fiber;
 	typedef typename script::proc_id proc_id;
@@ -514,15 +543,24 @@ public:
 		U32 msgid;
 		SOCK sk;
 		session *s;
+		vm_msg vmm;
 		U8 m_data, padd[3];
 		fiber *m_fb;
 		world *m_world;
 	public:
+		void set_from_sock(S *sock) { 
+			s = sock; if (s) { sk = s->sk(); }
+		}
+		void set_from_vmmsg(message_passer &p) {
+			vmm = ((vm_msg &)p);
+		}
 		fiber &fb() { return *m_fb; }
 		bool valid_fb() const { return m_fb != NULL; }
-		bool valid_query() const { return s ? nbr_sock_is_same(s->sk(), sk) : true; }
+		bool valid_query() const { 
+			return s ? nbr_sock_is_same(s->sk(), sk) : false; }
 		world &wld() { return *m_world; }
 		S *sender() { return (S *)s; }
+		vm_msg &vmmsg() { return vmm; }
 	};
 public:
 	vmnode(S *s) : session(), vmmodule(s), m_wid(NULL) {
@@ -550,7 +588,7 @@ public:
 	}
 public:
 	querydata *senddata(S &s, U32 msgid, char *p, int l);
-	world *create_world(const world_id &wid);
+	world *create_world(vm_msg &vmm, const world_id &wid);
 	int on_recv(char *p, int l) { return protocol::on_recv(p, l); }
 	int on_open(const config &cfg);
 	int recv_cmd_rpc(U32 msgid, UUID &uuid, proc_id &pid,

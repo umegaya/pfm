@@ -16,8 +16,8 @@ function player:call_vfunc3(a1,a2,a3,fn)
 end
 function player:calc_table_element_sum(tbl)
 	self:chat("calc_table_element_sum")
-	sum = 0;
-	k,v=next(tbl)
+	local sum = 0;
+	local k,v=next(tbl)
 	while k do
 		print("vtype = " .. type(v))
 		if (type(v) == "string") then
@@ -57,14 +57,27 @@ function player:get_pos()
 	p[3] = self.z
 	return p
 end
+	local a = 1000
+	local b = 2000
+	local c = 3000
 function player:_protected_call()
 	return "its protected"
 end
+	print( "a,b,c = " .. a .. "," .. b .. "," .. c)
+	assert((a + b + c) == 6000)
 return player
 end
 
+function dump_table(tbl)
+	local k,v=next(tbl)
+	while k do
+		print("t[" .. k .. "]=" .. type(v))
+		k,v=next(tbl,k)
+	end
+end
+
 function init_object(object,objtype)
-	print("init_object : type = " .. objtype)
+	print("init_object : type = " .. objtype);
 	pfm.bless(object, objtype);
 	if objtype == "World" then
 		world = object

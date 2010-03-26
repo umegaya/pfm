@@ -126,6 +126,7 @@ public:
 			failover_chain *c = chain(); 
 			return c ? c->m_s->f() : NULL; 
 		}
+		U32 msgid() { return f()->msgid(); }
 		connector_factory_impl<S,K,CP> *cf() {
 			return (connector_factory_impl<S,K,CP> *) f();
 		}
@@ -312,8 +313,7 @@ public:
 		querydata *q;
 		if ((q = via.sendlow(msgid, p, l, r, fq))) {
 			/* send success. register to sent list */
-			q->s = &sender;
-			q->sk = sender.sk();
+			q->set_from_sock(&sender);
 			q->m_is_query = 1;
 			/* if r == 0, it means, packet insert to fail list.
 			so dont insert it to sent list */
@@ -488,6 +488,7 @@ public:
 		~grid_servant_factory_impl() {}
 		connector *from_key(const K &k) {
 			return m_connector_factory.from_key(k); }
+		connector_factory_impl<S,K,CP> *cf() { return &m_connector_factory; }
 		int init(const config &cfg) {
 			if (super::init(cfg) < 0) {
 				return NBR_EINVAL;

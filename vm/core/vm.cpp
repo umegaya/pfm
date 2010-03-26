@@ -42,6 +42,10 @@ vmdconfig::set(const char *k, const char *v)
 		strncpy(m_kvsopt, v, MAX_VALUE_STR);
 		return NBR_OK;
 	}
+	else if (cmp("rootdir", k)) {
+		strncpy(m_root_dir, v, MAX_VALUE_STR);
+		return NBR_OK;
+	}
 	else if (cmp("max_object", k)) {
 		SAFETY_ATOI(v, m_max_object, U32);
 	}
@@ -60,6 +64,7 @@ vmdconfig::set(const char *k, const char *v)
 vmdconfig::vmdconfig(BASE_CONFIG_PLIST,
 		char *lang, char *lopt,
 		char *kvs, char *kopt,
+		char *root_dir,
 		int max_object, int max_world,
 		int rpc_entry, int rpc_ongoing,
 		int max_node, int max_replica)
@@ -72,4 +77,5 @@ vmdconfig::vmdconfig(BASE_CONFIG_PLIST,
 	strcpy(m_langopt, lopt);
 	strcpy(m_kvs, kvs);
 	strcpy(m_kvsopt, kopt);
+	strcpy(m_root_dir, root_dir);
 }
