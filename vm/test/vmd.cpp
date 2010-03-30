@@ -301,7 +301,7 @@ vmd::vmdsvnt::recv_code_new_object(
 	case load_purpose_create:
 		/* lua script resume the point attempt to create pfm object */
 		sr.unpack_start(p, l);
-		return vm()->resume_create(*(q.sender()), cf(), super::wid(),
+		return vm()->resume_create(*(q.sender()), cf(), r, super::wid(),
 			q.fb(), uuid, sr);
 	case load_purpose_login:
 		if (r < 0) {
@@ -541,7 +541,6 @@ vmd::vmdclnt::poll(UTIME ut, bool from_worker)
 			set_state(client_state_error);
 			break;
 		}
-		char buffer[256];
 		snprintf(m_account, sizeof(m_account), "umegaya%04x", daemon::pid());
 		if (c->send_login(*this, 0, test_wid,
 			m_account, "iyatomi", sizeof("iyatomi")) >= 0) {
@@ -665,7 +664,9 @@ vmd::create_config(config *cl[], int sz)
 void
 vmd::on_worker_event(THREAD from, THREAD to, char *p, size_t l)
 {
-	switch(vmdmstr::vm_msg::stype(*p)) {
+	int ntype = vmdmstr::vm_msg::stype(*p);
+	ASSERT(ntype >= 0);
+	switch(ntype) {
 	case vmd_session_master:
 		vmdmstr::vm_msg::on_event(from, to, p, l);
 		return;
@@ -695,6 +696,7 @@ vmd::boot(int argc, char *argv[])
 	if (!(m_wkp = new worker_data[m_wks])) {
 		return NBR_EMALLOC;
 	}
+	memset(m_wkp, 0, sizeof(worker_data) * m_wks);
 	for (i = 0; i < m_wks; i++) {
 		if ((r = nbr_sock_set_worker_data(wkr[i], &(m_wkp[i]),
 				vmd::on_worker_event)) < 0) {
@@ -780,6 +782,12 @@ vmd::boot(int argc, char *argv[])
 		return NBR_EINVAL;
 	}
 	return NBR_OK;
+}
+
+int
+vmd::on_signal(int signo)
+{
+	return daemon::on_signal(signo);
 }
 
 int

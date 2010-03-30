@@ -31,13 +31,13 @@ function player:calc_table_element_sum(tbl)
 	return sum
 end
 function player:new_item(atkbase)
-	item = pfm.new("ITEM");
-	item.attack_point = atkbase * 10
-	print("item.atk = " .. item.attack_point)
-	return item
+	self.item = pfm.new("ITEM");
+	self.item.attack_point = atkbase * 10
+	print("item.atk = " .. self.item.attack_point)
+	return self.item
 end
 function player:get_item_data(prop)
-	return item[prop]
+	return self.item[prop]
 end
 function player:init_pos(id,x,y,z)
 	self.id = id

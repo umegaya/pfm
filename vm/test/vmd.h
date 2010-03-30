@@ -97,7 +97,7 @@ public:
 		vmdsvnt() : super(this), m_session_uuid() {}
 		~vmdsvnt() {}
 		static const int vmd_session_type = vmd_session_servant;
-		static U32 get_msgid(factory *f) { return f->cf()->msgid(); }
+		static U32 get_msgid(factory *f) { return cf().msgid(); }
 		static int init_player_map(int max_session);
 		static void fin_player_map() { m_pm.fin(); }
 		inline script *fetch_vm();
@@ -188,6 +188,7 @@ public:
 	int	create_config(config* cl[], int size);
 	int	boot(int argc, char *argv[]);
 	int	initlib(CONFIG &c);
+	int 	on_signal(int signo);
 	void	shutdown();
 };
 
@@ -225,6 +226,11 @@ vmd::vmdsvnt::fetch_vm_from_thread(THREAD th)
 {
 	vmd::worker_data *wd =
 		(vmd::worker_data *)nbr_sock_get_worker_data(th);
+#if defined(_DEBUG)
+	if (wd) {
+		ASSERT(wd->m_svnt_vm->thread() == th);
+	}
+#endif
 	return wd ? wd->m_svnt_vm : NULL;
 }
 

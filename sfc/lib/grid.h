@@ -40,6 +40,8 @@ public:
 		connector_session() : S(), m_chain(NULL) {}
 		struct failover_chain *chain() { return m_chain; }
 		void insert(struct failover_chain *c);
+		int on_recv(char *p, int l);
+		int on_event(char *p, int l) { return on_recv(p, l); }
 	};
 	struct failover_chain {
 		struct failover_chain *m_vnext, *m_vprev;
@@ -99,7 +101,7 @@ public:
 		}
 		/* TODO: all insert and unlink need to be thread safe */
 		void insert(querylist &list, querydata *q) {
-			lock lk(connector::m_lock, true);
+			lock lk(connector::m_lock, false);
 			q->m_c = this;
 			q->m_next_q = NULL;
 			q->m_prev_q = list.m_last;
@@ -107,7 +109,7 @@ public:
 			if (!list.m_top) { list.m_top = q; }
 		}
 		void unlink(querylist &list, querydata *q) {
-			lock lk(connector::m_lock, true);
+			lock lk(connector::m_lock, false);
 			if (list.m_top == q) {
 				list.m_top = list.m_top->m_next_q;
 			}
@@ -170,7 +172,7 @@ connector_impl<S,K,CP>::connector::connector(connector *c) :
 super(), protocol(c)
 {
 	memset(&m_sent, 0, sizeof(m_sent));
-	memset(&m_fail, 0, siaeof(m_fail));
+	memset(&m_fail, 0, sizeof(m_fail));
 }
 
 template <class S, class K, template <class C> class CP>
@@ -180,6 +182,13 @@ void connector_impl<S,K,CP>::connector_session::insert(
 	c->m_vprev = NULL;
 	c->m_vnext = m_chain;
 	m_chain = c;
+}
+
+template <class S, class K, template <class C> class CP>
+int connector_impl<S,K,CP>::connector_session::on_recv(char *p, int l)
+{
+	CP<connector_session> proto(this);
+	return proto.on_recv(p, l);
 }
 
 template <class S, typename K, template <class C> class CP>
@@ -262,7 +271,7 @@ public:
 		connector_session *s;
 		connector *ct;
 		failover_chain *c;
-		lock lk(m_lock, true);
+		lock lk(m_lock, false);
 		if (!(ct = m_failover_chain_group.create(k))) {
 			return NULL;
 		}
@@ -300,7 +309,7 @@ public:
 		return del_failover_chain_low(c.chain());
 	}
 	int del_failover_chain_low(failover_chain *c) {
-		lock lk(m_lock, true);
+		lock lk(m_lock, false);
 		failover_chain *pc;
 		while((pc = c)) {
 			c = c->m_next;
@@ -338,14 +347,21 @@ public:
 	void remove_query_low(U32 msgid) {
 		querydata *q = find_query(msgid);
 		if (q) {
-			if (q->m_p) { free(q->m_p); }
-			q->m_c->sent_unlink(q);
+			if (q->m_p) { 
+				free(q->m_p); 
+				q->m_p = NULL;
+			}
+			if (q->m_c) { 
+				q->m_c->sent_unlink(q); 
+				q->m_c = NULL;
+			}
 			super::remove_query(msgid);
 		}
 	}
 	void insert_failure_connector(connector *c) {
 		TRACE("connector %p fail\n", c);
 		if (is_failure_connector(c)) { return; }
+		lock lk(m_lock, false);
 		ASSERT(c->m_next_ct == NULL && m_failure_connector->m_prev_ct == NULL);
 		c->m_next_ct = m_failure_connector;
 		if (c->m_next_ct) { c->m_next_ct->m_prev_ct = c; }
@@ -354,6 +370,7 @@ public:
 	}
 	void unlink_failure_connector(connector *c) {
 		TRACE("connector %p recover from failure\n", c);
+		lock lk(m_lock, false);
 		if (c->m_next_ct) { c->m_next_ct->m_prev_ct = c->m_prev_ct; }
 		if (c->m_prev_ct) { c->m_prev_ct->m_next_ct = c->m_next_ct; }
 		c->m_next_ct = NULL;
@@ -449,6 +466,7 @@ connector_impl<S,K,CP>::connector::sendlow(
 		q->m_l = l;
 		q->m_sent_msgid = msgid;
 		q->m_is_query = 0;
+		ASSERT(!q->m_p);
 		if (!(q->m_p = (char *)malloc(l))) { goto error; }
 		memcpy(q->m_p, p, l);
 		fq = q;
@@ -480,6 +498,7 @@ template <class S, typename K/* failover_chain group key */,
 class grid_servant_factory_impl : public factory_impl<S> {
 public:
 		typedef factory_impl<S> super;
+		typedef typename S::querydata querydata;
 		typedef typename connector_factory_impl<S,K,CP>::connector connector;
 protected:
 		connector_factory_impl<S,K,CP>	m_connector_factory;
@@ -499,10 +518,20 @@ public:
 			if (!dcfg) {
 				return NBR_EMALLOC;
 			}
+			strcat(dcfg->m_name, ".c");
 			dcfg->m_flag &= (~(config::cfg_flag_server));
 			dcfg->m_query_bufsz = sizeof(
 					typename connector_impl<S,K,CP>::connector::querydata);
 			return m_connector_factory.init(*dcfg);
+		}
+		querydata *insert_query(U32 msgid) {
+			return (querydata *)m_connector_factory.insert_query(msgid);
+		}
+		querydata *find_query(U32 msgid) {
+			return (querydata *)m_connector_factory.find_query(msgid);
+		}        
+		void remove_query(U32 msgid) {
+			m_connector_factory.remove_query(msgid);
 		}
 		void fin() {
 			m_connector_factory.fin();

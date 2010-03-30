@@ -1194,15 +1194,14 @@ NBR_API int
 nbr_sock_set_worker_data(THREAD th, void *p,
 		void (*on_event)(THREAD, THREAD, char *, size_t))
 {
-	int i;
-	for (i = 0; i < g_sock.jobmax; i++) {
-		if (g_sock.jobs[i].thrd == th) {
-			g_sock.jobs[i].p = p;
-			g_sock.jobs[i].on_event = on_event;
-			return NBR_OK;
-		}
+	ASSERT(th);
+	sockjob_t *j = nbr_thread_get_data(th);
+	if (!j) {
+		return NBR_ENOTFOUND;
 	}
-	return NBR_ENOTFOUND;
+	j->p = p;
+	j->on_event = on_event;
+	return NBR_OK;
 }
 
 NBR_API int
@@ -1222,6 +1221,13 @@ NBR_API int
 nbr_sock_worker_event(THREAD from, THREAD to, char *p, size_t l)
 {
 	return sock_push_worker_event(from, to, p, l);
+}
+
+NBR_API int
+nbr_sock_worker_is_current(SOCK sk)
+{
+	sockdata_t *skd = (sockdata_t *)sk.p;
+	return nbr_thread_is_current(skd->thrd);
 }
 
 NBR_API SOCKMGR

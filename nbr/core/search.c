@@ -501,15 +501,14 @@ nbr_search_destroy(SEARCH sd)
 	SEARCH_WRITE_LOCK(m,LASTERR);							\
 	pe = search_get_hushelm(m, hushfunc);					\
 	e = *pe;												\
-	if (!e) {												\
-		SEARCH_WRITE_UNLOCK(m);								\
-		return NBR_OK;										\
-	}														\
 	while(e) {												\
 		if (keycmp) { break; }								\
 		e = e->next;										\
 	}														\
-	ASSERT(e);												\
+	if (!e) {				\
+		SEARCH_WRITE_UNLOCK(m);		\
+		return NBR_OK;			\
+	}												\
 	/* remove e from hush-collision chain */				\
 	if (e->prev) {											\
 		ASSERT(e->prev->next == e);							\

@@ -183,8 +183,11 @@ public:	/* typedefs */
 			rpctype rt,
 			V &v, U32 msgid, typename exit_fn<V>::type fn) {
 			ASSERT(wid);
+			bool first = false;
 			if (!m_ip) {
 				m_ip = lua_newcthread(scp->vm(), 1/* use min size */);
+				if (!m_ip) { return false; }
+				first = true;
 			}
 			ASSERT(((int **)m_ip)[-1]);
 			lua_pushthread(m_ip);
@@ -193,6 +196,13 @@ public:	/* typedefs */
 				return false;
 			}
 			lua_setfenv(m_ip, -2);
+			if (first) {
+				/* add this thread to registroy index so that 
+				thread is never garbage collected.*/
+				lua_pushinteger(m_ip, (U32)m_ip);
+				lua_pushvalue(m_ip, -2);
+				lua_settable(m_ip, LUA_REGISTRYINDEX);
+			}
 			lua_settop(m_ip, 0);
 			m_scp = scp;
 			m_msgid = msgid;
@@ -234,10 +244,19 @@ public: /* constant */
 		lua_rpc_entry = 0x1, 	/* first rpc (start point?) */
 		lua_rpc_reply = 0x2,	/* reply is needed? */
 	};
+#if defined(_DEBUG)
+	struct thent {
+		THREAD th;
+	};
+#endif
 protected:	/* static variable */
 	static map<type_id, char*> 	m_types;
 	static array<rpc>		m_rpcs;
 	static map<fiber*,U64>		m_fbmap;
+#if defined(_DEBUG)
+	static map<thent,U64>	m_mmap;
+	static RWLOCK m_mlk;
+#endif
 	array<fiber> 	m_fibers;
 	VM 		m_vm;
 	THREAD		m_thrd;
@@ -255,6 +274,9 @@ public:
 	VM	vm() const { return m_vm; }
 	SR	&serializer() { return m_serializer; }
 	array<fiber> &fibers() { return m_fibers; }
+#if defined(_DEBUG)
+	static map<thent,U64> &mmap() { return m_mmap; }
+#endif
 	bool check_fiber(fiber &f) {
 		int idx = nbr_array_get_index(m_fibers.get_a(), &f);
 		//TRACE("check_fiber: %p %d %d %p %p\n", thread(), idx, 
@@ -265,7 +287,8 @@ public:
 			VM vm, lua<SR,OF> *scp, UUID &uuid, SR *sr, bool local);
 	int	call_proc(S &, CF &, U32, object &, proc_id &, char *, size_t, rpctype,
 			typename fiber::template exit_fn<S>::type);
-	int 	resume_create(S &, CF &, const world_id &, fiber &, UUID &, SR &);
+	template <class SNDR>
+	int 	resume_create(SNDR &, CF &, int, const world_id &, fiber &, UUID &, SR &);
 	bool 	load(const world_id &, const char *srcfile);
 	template <class SNDR>
 	int	resume_proc(SNDR &, CF &, const world_id &, fiber &,

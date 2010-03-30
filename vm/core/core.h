@@ -187,10 +187,21 @@ int vmprotocol_impl<S,IDG,SNDR>::on_recv(char *p, int l)
 		q = (typename S::querydata *)sf->find_query(msgid);
 		if (!q) { ASSERT(false); goto error; }
 		if (q->valid_query()) {
-			q->sender()->recv_code_rpc(*q, POP_BUF(), POP_REMAIN(), (rpctype)rt);
+			if (q->sender()->thread_current()) {
+				q->sender()->recv_code_rpc(*q, POP_BUF(), POP_REMAIN(), (rpctype)rt);
+			}
+			else {
+				return q->sender()->event(p, l);
+			}
 		}
 		else if (!q->sender()) {
-			_this().recv_code_rpc(*q, POP_BUF(), POP_REMAIN(), (rpctype)rt);
+			if (q->vmmsg().thread_current()) {
+				q->vmmsg().recv_code_rpc(*q, POP_BUF(), POP_REMAIN(), 
+					(rpctype)rt);
+			}
+			else {
+				return q->vmmsg().event(p, l);
+			}
 		}
 		break;
 	case vmprotocol::vmcode_new_object:     /* s->m, m->s */
@@ -200,15 +211,28 @@ int vmprotocol_impl<S,IDG,SNDR>::on_recv(char *p, int l)
 		len = sizeof(UUID);
 		POP_8A(&(uuid), len);
 		if (q->valid_query()) {
-			q->sender()->recv_code_new_object(*q, r, uuid, POP_BUF(), POP_REMAIN());
+			if (q->sender()->thread_current()) {
+				q->sender()->recv_code_new_object(*q, r, uuid, 
+					POP_BUF(), POP_REMAIN());
+			}
+			else {
+				return q->sender()->event(p, l);
+			}
 		}
 		else if (!q->sender()) {
-			_this().recv_code_new_object(*q, r, uuid, POP_BUF(), POP_REMAIN());
+			if (q->vmmsg().thread_current()) {
+				q->vmmsg().recv_code_new_object(*q, r, uuid, 
+					POP_BUF(), POP_REMAIN());
+			}
+			else {
+				return q->vmmsg().event(p, l);
+			}
 		}
 		break;
 	case vmprotocol::vmcode_login:
 		q = (typename S::querydata *)sf->find_query(msgid);
 		if (!q || !q->valid_query()) { ASSERT(q); goto error; }
+		if (!q->sender()->thread_current()) { return q->sender()->event(p, l); }
 		POP_32(r);
 		POP_STR(wid, sizeof(wid));
 		len = sizeof(UUID);
@@ -218,6 +242,7 @@ int vmprotocol_impl<S,IDG,SNDR>::on_recv(char *p, int l)
 	case vmprotocol::vmcode_node_ctrl:
 		q = (typename S::querydata *)sf->find_query(msgid);
 		if (!q || !q->valid_query()) { ASSERT(q); goto error; }
+		if (!q->sender()->thread_current()) { return q->sender()->event(p, l); }
 		POP_32(r);
 		POP_STR(strcmd, sizeof(strcmd));
 		POP_STR(wid, sizeof(wid));
@@ -227,6 +252,7 @@ int vmprotocol_impl<S,IDG,SNDR>::on_recv(char *p, int l)
 	case vmprotocol::vmcode_node_register:
 		q = (typename S::querydata *)sf->find_query(msgid);
 		if (!q || !q->valid_query()) { ASSERT(q); goto error; }
+		if (!q->sender()->thread_current()) { return q->sender()->event(p, l); }
 		POP_32(r);
 		q->sender()->recv_code_node_register(*q, r);
 		break;
@@ -550,9 +576,9 @@ message_passer<S>::senddata(S &s, U32 msgid, char *p, int l)
 		return NULL;
 	}
 	if (send(p, l) >= 0) {
-		S *p = &s;
-		if (p) { q->set_from_sock(p); }
-		else { q->set_from_vmmsg(*this); }
+		S *ps = &s;
+		if (ps) { q->set_from_sock(ps); }
+		else { q->set_from_vmm(this); }
 		return q;
 	}
 	f()->log(ERROR, "evss:send fail\n");
@@ -573,11 +599,25 @@ int message_passer<S>::log(loglevel lv, const char *fmt, ...)
 }
 
 template <class S, template <class S> class CP>
+void vm_message_protocol_impl<S,CP>::set_receiver(
+		const vm_message_protocol_impl<S,CP> &p)
+{
+	/* make from and to invert */
+	super::m_to = p.thread_from();
+	super::m_from = p.thread_to();
+	super::m_type = p.get_type();
+	m_scp = S::fetch_vm_from_thread(super::m_to);
+}
+
+template <class S, template <class S> class CP>
 void vm_message_protocol_impl<S,CP>::on_event(
 		THREAD from, THREAD to, char *p, size_t l)
 {
 	script *scp = S::fetch_vm_from_thread(to);
-	U32 type = super::stype(type);
+	TRACE("cur=%08x:from=%p,to=%p,from_id=%08x,to_id=%08x\n", 
+		nbr_thread_get_curid(), from, to, 
+		nbr_thread_get_id(from), nbr_thread_get_id(to));
+	U32 type = super::stype(*p);
 	super::remove_stype(p);
 	vm_message_protocol_impl<S,CP> s(scp, to, from, type);
 	/* because it will reply to 'from' */
@@ -606,10 +646,23 @@ int vm_message_protocol_impl<S,CP>::load_or_create_object(
         if (c->send_new_object(*rsndr, msgid, w->id(), uuid, p, l, &q) >= 0) {
                 /* success. store purpose data */
                 q->m_data = lp;
+		q->set_from_vmm(this);
                 if (pq) { *pq = q; }
                 return NBR_OK;
         }
         return NBR_EEXPIRE;
+}
+
+template <class S, template <class S> class CP>
+template <class Q>
+int vm_message_protocol_impl<S,CP>::recv_code_new_object(Q &q, int r, UUID &uuid,
+		char *p, size_t l)
+{
+	ASSERT(nbr_thread_is_current(scp()->thread()));
+	typename S::serializer &sr = scp()->serializer();
+	sr.unpack_start(p, l);
+	return scp()->resume_create(*this, S::vmmodule::cf(), r, q.fb().wid(),
+		q.fb(), uuid, sr);
 }
 
 template <class S, template <class S> class CP>
@@ -620,6 +673,8 @@ int vm_message_protocol_impl<S,CP>::recv_cmd_rpc(
 	if (!o) {
 		char buf[256];
 		log(kernel::ERROR, "object not found (%s)\n", uuid.to_s(buf, sizeof(buf)));
+		ASSERT(false);
+		return NBR_ENOTFOUND;
 	}
 	/* execute fiber */
 	return scp()->local_call(protocol::_this(), S::vmmodule::cf(),
@@ -707,7 +762,9 @@ template <class S,template <class OF,class SR> class L,
 	template <class S, class IDG, class KVS> class OF>
 void vm_impl<S,L,KVS,SR,IDG,OF>::fin_vm(script *vm)
 {
-	vm->fin();
+	if (vm) {
+		vm->fin();
+	}
 	delete vm;
 }
 
@@ -725,6 +782,7 @@ int vmnode<S>::recv_cmd_rpc(U32 msgid, UUID &uuid, proc_id &pid,
 	if (!o) {
 		char buf[256];
 		log(ERROR, "object not found (%s)\n", vuuid.to_s(buf, sizeof(buf)));
+		return NBR_ENOTFOUND;
 	}
 	/* execute fiber */
 	return vm()->call_proc(protocol::_this(), protocol::_this().cf(),
@@ -784,6 +842,7 @@ template <class S>
 typename vmnode<S>::world *vmnode<S>::create_world(
 		vm_msg &vmm, const world_id &wid)
 {
+	ASSERT(0 != vmm.type());
 	world *w = object_factory::find_world(wid);
 	if (!w) {
 		if (!(w = object_factory::create_world(wid))) {
