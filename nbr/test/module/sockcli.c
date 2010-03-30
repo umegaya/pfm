@@ -184,7 +184,7 @@ static int parser(SOCK sk, char *p, int l)
 	POP_START(p, l);
 	POP_8(type);
 	if (len != sizeof(*wkb)) {
-		TRACE("cl: sock buffer size differ %u %u\n", len, sizeof(wkb));
+		TRACE("cl: sock buffer size differ %u %u\n", len, (U32)sizeof(wkb));
 		alive = 0;
 		emerg = NBR_EINVAL;
 		return 0;

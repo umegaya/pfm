@@ -367,12 +367,12 @@ void	*lua<SR,OF>::allocator(void *ud, void *ptr, size_t os, size_t ns)
 		}
 #if 1
 		if (scp->thread() && ptr) {
-		thent *the = scp->mmap().find(((U64)(U32)ptr));
+		thent *the = scp->mmap().find(((U64)ptr));
 		THREAD th = the->th;
 		ASSERT(!th || ((th == scp->thread()) && (nbr_thread_get_id(th) == nbr_thread_get_curid())));
 		}
 		if (ptr) {
-			scp->mmap().erase(((U64)(U32)ptr));
+			scp->mmap().erase(((U64)ptr));
 		}
 #endif
 #endif
@@ -397,19 +397,19 @@ void	*lua<SR,OF>::allocator(void *ud, void *ptr, size_t os, size_t ns)
 		thent the = { scp->thread() };
 		if (!ptr && os == 0) {
 			TRACE("check memory address %p,%p\n", ptr, p);
-			thent *pthe = m_mmap.find(((U64)(U32)p));
+			thent *pthe = m_mmap.find(((U64)p));
 			if (pthe) {
 				void *pp = p;
 				p = realloc(NULL, ns);
 				TRACE("avoid used address: %p->%p\n", pp, p);
 			}
-			ASSERT(m_mmap.insert(the, ((U64)(U32)p)) != m_mmap.end());
+			ASSERT(m_mmap.insert(the, ((U64)p)) != m_mmap.end());
 		}
 		else if (p != ptr) {
 			TRACE("realloced: remove %p, insert %p\n", ptr, p);
-			m_mmap.erase(((U64)(U32)ptr));
-			ASSERT(!m_mmap.find(((U64)(U32)ptr)));
-			ASSERT(m_mmap.insert(the, ((U64)(U32)p)) != m_mmap.end());
+			m_mmap.erase(((U64)ptr));
+			ASSERT(!m_mmap.find(((U64)ptr)));
+			ASSERT(m_mmap.insert(the, ((U64)p)) != m_mmap.end());
 		}
 #endif
 		return p;

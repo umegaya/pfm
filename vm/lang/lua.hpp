@@ -199,7 +199,7 @@ public:	/* typedefs */
 			if (first) {
 				/* add this thread to registroy index so that 
 				thread is never garbage collected.*/
-				lua_pushinteger(m_ip, (U32)m_ip);
+				lua_pushinteger(m_ip, (lua_Integer)m_ip);
 				lua_pushvalue(m_ip, -2);
 				lua_settable(m_ip, LUA_REGISTRYINDEX);
 			}

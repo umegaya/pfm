@@ -99,7 +99,7 @@ nbr_search_int_test()
 
 	TESTOUT("int test start: entry=%u,bucket=%u\n", MAX_ENTRY, bucket_num);
 	if (!(buffer = (unsigned int*)malloc(MAX_ENTRY * sizeof(unsigned int)))) {
-		TESTOUT("cannot allocate memory size=%u", MAX_ENTRY * sizeof(unsigned int));
+		TESTOUT("cannot allocate memory size=%u", (U32)MAX_ENTRY * sizeof(unsigned int));
 	}
 	if ((sd = nbr_search_init_int_engine(MAX_ENTRY, g_use_mt, bucket_num)) < 0) {
 		TESTOUT( "nbr_search_init_int_engine fail(%p)\n", sd );
