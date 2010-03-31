@@ -136,6 +136,12 @@ map<typename lua<SR,OF>::thent, U64>		lua<SR,OF>::m_mmap;
 template <class SR, class OF>
 RWLOCK						lua<SR,OF>::m_mlk = NULL;
 #endif
+#if defined(_RPC_PROF)
+template <class SR, class OF> U32 lua<SR,OF>::m_rpcmin = 0;
+template <class SR, class OF> U32 lua<SR,OF>::m_rpcmax = 0;
+template <class SR, class OF> U32 lua<SR,OF>::m_rpctot = 0;
+template <class SR, class OF> int lua<SR,OF>::m_rpccnt = 0;
+#endif
 
 /* fiber */
 template <class SR, class OF>
@@ -212,14 +218,6 @@ void lua<SR,OF>::fin()
 		m_vm = NULL;
 	}
 	m_fibers.fin();
-#if defined(_RPC_PROF)
-	if (m_rpccnt > 0) {
-		printf("max/min/tot/ave/time=%llu,%llu,%llu,%f,%u\n",
-			m_rpcmax, m_rpcmin, m_rpctot, 
-			((float)((float)m_rpctot) / ((float)m_rpccnt)), 
-			m_rpccnt);
-	}
-#endif
 }
 
 template <class SR, class OF>
@@ -230,6 +228,14 @@ void lua<SR,OF>::fin_global()
 	m_types.fin();
 #if defined(_DEBUG)
 	m_mmap.fin();
+#endif
+#if defined(_RPC_PROF)
+        if (m_rpccnt > 0) {
+                printf("max/min/tot/ave/time=%u,%u,%u,%f,%u\n",
+                        m_rpcmax, m_rpcmin, m_rpctot,
+                        ((float)((float)m_rpctot) / ((float)m_rpccnt)),
+                        m_rpccnt);
+        }
 #endif	
 }
 
@@ -639,7 +645,7 @@ void lua<SR,OF>::fiber_delete(fiber *fb)
 {
 	ASSERT(fb->scp()->check_fiber(*fb));
 #if defined(_RPC_PROF)
-	fb->scp()->update_rpc_prof(*fb);
+	update_rpc_prof(*fb);
 #endif
 	fb->scp()->fibers().destroy(fb);
 }
@@ -651,7 +657,7 @@ void lua<SR,OF>::update_rpc_prof(fiber &fb)
 	TRACE("fb-attr = %u %u\n", fb.iot(), fb.rt());
 	if (fb.iot() == fiber::io_type_socket && 
 		fb.rt() == vmprotocol::rpct_method) {
-		UTIME t = nbr_time() - fb.start_time();
+		U32 t = (U32)(nbr_time() - fb.start_time());
 		if (t > m_rpcmax) {
 			m_rpcmax = t;
 		}
@@ -1022,7 +1028,7 @@ int 	lua<SR,OF>::dispatch(SNDR &c, fiber &fb,
 	else {
 		if (r != 0) {
 			/* error happen */
-			TRACE("fiber execution failure %d <%s>\n", r, lua_tostring(fb, -1));
+			fprintf(stderr,"fiber failure %d <%s>\n", r, lua_tostring(fb, -1));
 			if (fb.need_reply()) {
 				/* send only remote error message to caller */
 				reply_result(fb, lua_gettop(fb), vmprotocol::rpct_error);

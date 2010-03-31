@@ -191,6 +191,20 @@ int connector_impl<S,K,CP>::connector_session::on_recv(char *p, int l)
 	return proto.on_recv(p, l);
 }
 
+class connector_config : public config
+{
+public:
+	int m_max_chain;
+public:
+	connector_config() : config(), m_max_chain(100000) {}
+	inline connector_config(BASE_CONFIG_PLIST, int max_chain);
+};
+
+inline 
+connector_config::connector_config(BASE_CONFIG_PLIST, int max_chain)
+	: config(BASE_CONFIG_CALL), m_max_chain(max_chain) {}
+
+
 template <class S, typename K, template <class C> class CP>
 class connector_factory_impl :
 public factory_impl<typename connector_impl<S,K,CP>::connector_session > {
@@ -218,16 +232,18 @@ public:
 	const grid_servant_factory_impl<S,K,CP>	*gsf() const { return m_gsf; }
 	void set_gsf(grid_servant_factory_impl<S,K,CP> *gsf) { m_gsf = gsf; }
 	int init(const config &cfg) {
+		const connector_config &ccfg = (const connector_config &)cfg;
 		if (!(connector::m_lock = nbr_rwlock_create())) {
 			return NBR_EPTHREAD;
 		}
 		if (!(m_lock = nbr_rwlock_create())) {
 			return NBR_EPTHREAD;
 		}
-		if (!m_failover_chain_factory.init(100000 * 2, -1, opt_expandable)) {
+		if (!m_failover_chain_factory.init(ccfg.m_max_chain * 2, -1, opt_expandable)) {
 			return NBR_EMALLOC;
 		}
-		if (!m_failover_chain_group.init(100000, 100000, -1, opt_expandable)) {
+		if (!m_failover_chain_group.init(ccfg.m_max_chain, ccfg.m_max_chain / 3, 
+			-1, opt_expandable)) {
 			return NBR_EMALLOC;
 		}
 		/* TODO: better way? it is too personal */

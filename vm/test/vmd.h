@@ -93,6 +93,11 @@ public:
 	protected:
 		UUID m_session_uuid;
 		static map<address, UUID> m_pm;	/* player object - session mapping */
+#if defined(_RPC_PROF)
+		static int m_client_finish;
+		static UTIME m_start;
+		static bool m_first;
+#endif
 	public:
 		vmdsvnt() : super(this), m_session_uuid() {}
 		~vmdsvnt() {}
@@ -114,6 +119,8 @@ public:
 		const UUID &verify_uuid(const UUID &uuid) {
 			return protocol::is_valid_id(m_session_uuid) ? m_session_uuid : uuid; }
 		bool trust() const { return !protocol::is_valid_id(m_session_uuid); }
+		int on_open(const config &);
+		int on_close(int );
 	public:/* vmdsvnt */
 		int recv_cmd_new_object(U32 msgid, const world_id &wid,
 				UUID &uuid, char *p, size_t l);

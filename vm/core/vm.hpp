@@ -465,7 +465,7 @@ public:
 /*-------------------------------------------------------------*/
 /* sfc::vm::vmdconfig									       */
 /*-------------------------------------------------------------*/
-class vmdconfig : public config {
+class vmdconfig : public connector_config {
 public:
 	char m_lang[16];
 	char m_langopt[256];
@@ -477,10 +477,11 @@ public:
 		m_rpc_entry, m_rpc_ongoing;
 	U32 m_max_node, m_max_replica;
 public:
-	vmdconfig() : config(), m_max_object(1000 * 1000), m_max_world(10),
+	vmdconfig() : connector_config(), m_max_object(1000 * 1000), m_max_world(10),
 		m_rpc_entry(1000 * 1000), m_rpc_ongoing(1000 * 1000),
 		m_max_node(10000), m_max_replica(vmprotocol::vnode_replicate_num) {}
 	vmdconfig(BASE_CONFIG_PLIST,
+			int max_chain,
 			char *lang, char *lopt,
 			char *kvs, char *kopt,
 			char *root_dir, char *be_addr,

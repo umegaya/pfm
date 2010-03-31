@@ -198,6 +198,7 @@ public:	/* typedefs */
 #if defined(_RPC_PROF)
 			m_start = nbr_time();
 #endif
+			/* coco is enabled? */
 			ASSERT(((int **)m_ip)[-1]);
 			lua_pushthread(m_ip);
 			lua_getfield(m_ip, LUA_REGISTRYINDEX, *wid);
@@ -268,8 +269,8 @@ protected:	/* static variable */
 	bool	m_fin_phase;
 #endif
 #if defined(_RPC_PROF)
-	UTIME		m_rpcmax, m_rpcmin, m_rpctot;
-	int		m_rpccnt;
+	static U32	m_rpcmax, m_rpcmin, m_rpctot;
+	static int	m_rpccnt;
 #endif
 	array<fiber> 	m_fibers;
 	VM 		m_vm;
@@ -295,7 +296,7 @@ public:
 	static map<thent,U64> &mmap() { return m_mmap; }
 #endif
 #if defined(_RPC_PROF)
-	void update_rpc_prof(fiber &fb);
+	static void update_rpc_prof(fiber &fb);
 #endif
 	bool check_fiber(fiber &f) {
 		int idx = nbr_array_get_index(m_fibers.get_a(), &f);

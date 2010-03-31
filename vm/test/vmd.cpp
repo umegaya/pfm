@@ -175,6 +175,11 @@ vmd::vmdmstr::recv_cmd_login(U32 msgid, const world_id &wid,
 /*-------------------------------------------------------------*/
 /* player object - session mapping */
 map<address, vmd::vmdsvnt::UUID> vmd::vmdsvnt::m_pm;
+#if defined(_RPC_PROF)
+bool vmd::vmdsvnt::m_first = false;
+UTIME vmd::vmdsvnt::m_start = 0LL;
+int vmd::vmdsvnt::m_client_finish = 0;
+#endif
 
 int
 vmd::vmdsvnt::init_player_map(int max_session)
@@ -185,6 +190,28 @@ vmd::vmdsvnt::init_player_map(int max_session)
 	}
 	return NBR_OK;
 }
+
+#if defined(_RPC_PROF)
+int
+vmd::vmdsvnt::on_open(const config &cfg)
+{
+	if (!m_first) {
+		m_first = true;
+		m_start = nbr_time();
+	}
+	return super::on_open(cfg);
+}
+
+int
+vmd::vmdsvnt::on_close(int r)
+{
+	m_client_finish++;
+	if (m_client_finish >= 1000) {
+		printf("######## total time = %lluus\n", (nbr_time() - m_start));
+	}
+	return super::on_close(r);
+}
+#endif
 
 void
 vmd::vmdsvnt::exit_init_object(vmdsvnt &sender, vmdsvnt &recver,
@@ -523,7 +550,8 @@ void vmd::vmdclnt::exit_main(vmdclnt &sender, vmdclnt &recver,
 		daemon::stop();
 	}
 	else {
-		sender.set_state(client_state_error);
+		//sender.set_state(client_state_error);
+		daemon::stop();
 	}
 }
 
@@ -612,6 +640,7 @@ vmd::create_config(config *cl[], int sz)
 			nbr_sock_rparser_bin16,
 			nbr_sock_send_bin16,
 			config::cfg_flag_server,
+			0,/* currently master no use connector */
 			"lua", "", "tc", "",
 			"./scp/mstr/", "", 
 			10000, 10, 10000, 3000,
@@ -632,6 +661,7 @@ vmd::create_config(config *cl[], int sz)
 			nbr_sock_rparser_bin16,
 			nbr_sock_send_bin16,
 			config::cfg_flag_server,
+			100000, /* max_chain */
 			"lua", "", "tc", "",
 			"./scp/svnt/", "127.0.0.1:8000", 
 			10000, 10, 10000, 3000,
@@ -653,6 +683,7 @@ vmd::create_config(config *cl[], int sz)
 			nbr_sock_rparser_bin16,
 			nbr_sock_send_bin16,
 			config::cfg_flag_not_set,
+			10,	/* client only use a few chain */
 			"lua", "", "tc", "",
 			"./scp/clnt/", "127.0.0.1:9000", 
 			100, 5, 100, 30,
