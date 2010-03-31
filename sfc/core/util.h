@@ -370,7 +370,7 @@ map<V,K>::alloc(key k)
 	if (e) {	/* already exist */
 		return e;
 	}
-	if (array<V>::use() >= array<V>::max()) {
+	if (nbr_array_full(super::m_a)) {
 		return NULL;	/* no mem */
 	}
 	if (m_lk) { nbr_rwlock_wrlock(m_lk); }

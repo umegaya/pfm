@@ -613,7 +613,7 @@ vmd::create_config(config *cl[], int sz)
 			nbr_sock_send_bin16,
 			config::cfg_flag_server,
 			"lua", "", "tc", "",
-			"./scp/mstr/",
+			"./scp/mstr/", "", 
 			10000, 10, 10000, 3000,
 			10000, vmprotocol::vnode_replicate_num
 			));
@@ -633,7 +633,7 @@ vmd::create_config(config *cl[], int sz)
 			nbr_sock_send_bin16,
 			config::cfg_flag_server,
 			"lua", "", "tc", "",
-			"./scp/svnt/",
+			"./scp/svnt/", "127.0.0.1:8000", 
 			10000, 10, 10000, 3000,
 			10000, vmprotocol::vnode_replicate_num
 			));
@@ -654,7 +654,7 @@ vmd::create_config(config *cl[], int sz)
 			nbr_sock_send_bin16,
 			config::cfg_flag_not_set,
 			"lua", "", "tc", "",
-			"./scp/clnt/",
+			"./scp/clnt/", "127.0.0.1:9000", 
 			100, 5, 100, 30,
 			100, vmprotocol::vnode_replicate_num
 			));
@@ -744,7 +744,7 @@ vmd::boot(int argc, char *argv[])
 				m_wkp[i].m_svnt_vm->set_thread(wkr[i]);
 			}
 #if defined(_TEST)
-			vmdsvnt::connector *c = svnt->backend_connect("127.0.0.1:8000");
+			vmdsvnt::connector *c = svnt->backend_connect(vc->m_be_addr);
 			if (!c) { return NBR_EEXPIRE; }
 			if (c->send_node_register(*(c->chain()->m_s), 0, svnt->ifaddr()) < 0) {
 				return NBR_ESEND;
@@ -775,7 +775,7 @@ vmd::boot(int argc, char *argv[])
 				m_wkp[i].m_clnt_vm->set_thread(wkr[i]);
 			}
 #if defined(_TEST)
-			vmdclnt::connector *c = clnt->backend_connect("127.0.0.1:9000");
+			vmdclnt::connector *c = clnt->backend_connect(vc->m_be_addr);
 			return c ? NBR_OK : NBR_EEXPIRE;
 #endif
 		}

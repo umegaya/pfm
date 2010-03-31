@@ -22,19 +22,34 @@
 using namespace sfc;
 using namespace sfc::vm;
 
-bool
-test(int argc, char *argv[])
+enum {
+	test_flag_client_only = 0x00000001,
+};
+
+int
+test(int argc, char *argv[], U32 &flag)
 {
+	flag = 0;
+	int n_cli = 10;
+	bool found = false;
 	for (int i = 0; i < argc; i++) {
-		if (strcmp("--test", argv[i]) == 0) {
-			return true;
+		if (memcmp("--test", argv[i], 6) == 0) {
+			if (*(argv[i] + 6)) {
+				SAFETY_ATOI(argv[i] + 6, n_cli, int);
+			}
+			found = true;
+			continue;
+		}
+		if (memcmp("--client-only", argv[i], 13) == 0) {
+			flag |= test_flag_client_only;
+			continue;
 		}
 	}
-	return false;
+	return found ? n_cli : NBR_ENOTFOUND;
 }
 
 int
-testmain(char *prog)
+testmain(char *prog, int n_cli, U32 flag)
 {
 	vmd d;
 	int r, sv_argc = 1;
@@ -43,22 +58,27 @@ testmain(char *prog)
 	if ((r = d.init(sv_argc,sv_argv)) < 0) {
 		return r;
 	}
-	for (int i = 0; i < 10; i++) {
+	for (int i = 0; i < n_cli; i++) {
 		if ((r = app::daemon::fork(prog, cl_argv, NULL)) < 0) {
 			ASSERT(false);
 			return r;
 		}
 	}
-	return d.run();
+	if (!(flag & test_flag_client_only)) {
+		return d.run();
+	}
+	sleep(10);
+	return NBR_OK;
 }
 
 int
 main(int argc, char *argv[])
 {
 	vmd d;
-	int r;
-	if (test(argc, argv)) {
-		return testmain(argv[0]);
+	U32 f;
+	int r = test(argc, argv, f);
+	if (r > 0) {
+		return testmain(argv[0], r, f);
 	}
 	if ((r = d.init(argc,argv)) < 0) {
 		return r;

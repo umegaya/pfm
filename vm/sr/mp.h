@@ -500,7 +500,13 @@ public:
 		while(unpack(d) > 0);	/* read all unread data */
 		m_upk.reset_zone();
 		if (l > m_upk.buffer_capacity()) {
-			l = m_upk.buffer_capacity();
+			try {
+				m_upk.reserve_buffer(l);
+			} catch (const std::bad_alloc e) {
+				ASSERT(false);
+				return;
+			}
+			TRACE("expand buffer upto %u\n", (U32)l);
 		}
 		if (l > 0) {
 			memcpy(m_upk.buffer(), p, l);

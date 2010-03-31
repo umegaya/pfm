@@ -256,6 +256,7 @@ protected:	/* static variable */
 #if defined(_DEBUG)
 	static map<thent,U64>	m_mmap;
 	static RWLOCK m_mlk;
+	bool	m_fin_phase;
 #endif
 	array<fiber> 	m_fibers;
 	VM 		m_vm;
@@ -275,6 +276,8 @@ public:
 	SR	&serializer() { return m_serializer; }
 	array<fiber> &fibers() { return m_fibers; }
 #if defined(_DEBUG)
+	void set_fin_phase(bool f) { m_fin_phase = f; }
+	bool fin_phase() const { return m_fin_phase; }
 	static map<thent,U64> &mmap() { return m_mmap; }
 #endif
 	bool check_fiber(fiber &f) {

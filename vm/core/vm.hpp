@@ -472,6 +472,7 @@ public:
 	char m_kvs[16];
 	char m_kvsopt[256];
 	char m_root_dir[256];
+	char m_be_addr[256];
 	U32	m_max_object, m_max_world,
 		m_rpc_entry, m_rpc_ongoing;
 	U32 m_max_node, m_max_replica;
@@ -482,7 +483,7 @@ public:
 	vmdconfig(BASE_CONFIG_PLIST,
 			char *lang, char *lopt,
 			char *kvs, char *kopt,
-			char *root_dir,
+			char *root_dir, char *be_addr,
 			int max_object, int max_world,
 			int rpc_entry, int rpc_ongoing,
 			int max_node, int max_replica);

@@ -191,12 +191,18 @@ int lua<SR,OF>::init(int max_rpc_entry, int max_rpc_ongoing, int n_wkr)
 	if (0 != lua_pcall(m_vm, 0, 0, 0)) {
 		return NBR_ESYSCALL;
 	}
+#if defined(_DEBUG)
+	set_fin_phase(false);
+#endif
 	return NBR_OK;
 }
 
 template <class SR, class OF>
 void lua<SR,OF>::fin()
 {
+#if defined(_DEBUG)
+	set_fin_phase(true);
+#endif
 	if (m_vm) {
 		lua_close(m_vm);
 		m_vm = NULL;
@@ -205,6 +211,9 @@ void lua<SR,OF>::fin()
 	m_fbmap.fin();
 	m_rpcs.fin();
 	m_types.fin();
+#if defined(_DEBUG)
+	m_mmap.fin();
+#endif
 }
 
 template <class SR, class OF>
@@ -344,7 +353,7 @@ void	*lua<SR,OF>::allocator(void *ud, void *ptr, size_t os, size_t ns)
 {
 #if defined(_DEBUG)
 	lua<SR,OF> *scp = (lua<SR,OF> *)ud;
-	if (scp->thread()) {
+	if (scp->thread() && !scp->fin_phase()) {
 		if (nbr_thread_get_curid() != nbr_thread_get_id(scp->thread())) {
 			TRACE("different thread gc runs %08x, %08x\n", 
 				nbr_thread_get_curid(),
@@ -354,8 +363,8 @@ void	*lua<SR,OF>::allocator(void *ud, void *ptr, size_t os, size_t ns)
 	}
 	lock lk(m_mlk, false);
 //	if (ns > (32 * 1024) || os > (32 * 1024)) {
-		TRACE("%08x,%08x: ptr=%p,os=%u,ns=%u", nbr_thread_get_curid(), 
-			scp->thread() ? nbr_thread_get_id(scp->thread()) : 0, ptr, os, ns);
+//		TRACE("%08x,%08x: ptr=%p,os=%u,ns=%u", nbr_thread_get_curid(), 
+//			scp->thread() ? nbr_thread_get_id(scp->thread()) : 0, ptr, os, ns);
 //	}
 #endif
 	if (ns == 0) {
@@ -366,18 +375,18 @@ void	*lua<SR,OF>::allocator(void *ud, void *ptr, size_t os, size_t ns)
 			ASSERT(memcmp(((char *)ptr) + os, correct, 32 * 1024) == 0);
 		}
 #if 1
-		if (scp->thread() && ptr) {
+		if (scp->thread() && !scp->fin_phase() && ptr) {
 		thent *the = scp->mmap().find(((U64)ptr));
 		THREAD th = the->th;
 		ASSERT(!th || ((th == scp->thread()) && (nbr_thread_get_id(th) == nbr_thread_get_curid())));
 		}
-		if (ptr) {
+		if (ptr && !scp->fin_phase()) {
 			scp->mmap().erase(((U64)ptr));
 		}
 #endif
 #endif
 		free(ptr);  /* ANSI define free for NULL ptr never causes any change */
-		TRACE("->free %p\n", ptr);
+		//TRACE("->free %p\n", ptr);
 		return NULL;
 	}
 	else {
@@ -392,11 +401,11 @@ void	*lua<SR,OF>::allocator(void *ud, void *ptr, size_t os, size_t ns)
 		else {
 			p = realloc(ptr, ns);
 		}
-		TRACE("->returns %p\n", p);
+		//TRACE("->returns %p\n", p);
 #if 1
 		thent the = { scp->thread() };
 		if (!ptr && os == 0) {
-			TRACE("check memory address %p,%p\n", ptr, p);
+			//TRACE("check memory address %p,%p\n", ptr, p);
 			thent *pthe = m_mmap.find(((U64)p));
 			if (pthe) {
 				void *pp = p;
@@ -406,7 +415,7 @@ void	*lua<SR,OF>::allocator(void *ud, void *ptr, size_t os, size_t ns)
 			ASSERT(m_mmap.insert(the, ((U64)p)) != m_mmap.end());
 		}
 		else if (p != ptr) {
-			TRACE("realloced: remove %p, insert %p\n", ptr, p);
+			//TRACE("realloced: remove %p, insert %p\n", ptr, p);
 			m_mmap.erase(((U64)ptr));
 			ASSERT(!m_mmap.find(((U64)ptr)));
 			ASSERT(m_mmap.insert(the, ((U64)p)) != m_mmap.end());
@@ -875,6 +884,16 @@ int      lua<SR,OF>::chunk_sr_writer(VM vm, const void *p, size_t l, void *ud)
 	if (wfc->sr->push_raw_onlydata((const char *)p, l) < 0) {
 		return -1;
 	}
+#if defined(_DEBUG)
+        if (wfc->n_write <= 12) {
+                int upto = l > 12 ? 12 : l;
+                TRACE("write pcchunk: len=%u,chnk=[%02x", upto, *(char *)p);
+		for (int i = 1; i < upto; i++) {
+			TRACE(":%02x", ((char *)p)[i]);
+		}
+		TRACE("]\n");
+        }
+#endif
 	wfc->n_write += l;
 	return 0;
 }
