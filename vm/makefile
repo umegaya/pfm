@@ -10,7 +10,7 @@ AR = ar crv
 DEFS = 
 DEFS += -D_GNU_SOURCE
 ifeq ($(DEBUG), 1)
-CFLAG = -Wall -g -fPIC -D_DEBUG
+CFLAG = -Wall -g -fPIC -D_DEBUG -D_RPC_PROF
 else 
 CFLAG = -O4 -fPIC
 endif

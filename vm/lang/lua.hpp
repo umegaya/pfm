@@ -152,6 +152,9 @@ public:	/* typedefs */
 		U32 m_msgid;
 		const world_id *m_wid;
 		lua<SR,OF> *m_scp;
+#if defined(_RPC_PROF)
+		UTIME	m_start;
+#endif
 	public:
 		/* NOTE : m_ip never destroyed after once created,  
 		memory region which is used for allocating fiber object is
@@ -169,6 +172,9 @@ public:	/* typedefs */
 		rpctype rt() const { return (rpctype)m_rpc_type; }
 		const world_id &wid() const { return *m_wid; }
 		lua<SR,OF> *scp() { return m_scp; }
+#if defined(_RPC_PROF)
+		UTIME start_time() const { return m_start; }
+#endif
 		/* only second sender is current thread domain */
 		void call_exit(int r, S &sk, rpctype rt, char *p, size_t l) {
 			m_exit_fn.s(*connection(), sk, m_ip, r, m_msgid, rt, p, l); }
@@ -189,6 +195,9 @@ public:	/* typedefs */
 				if (!m_ip) { return false; }
 				first = true;
 			}
+#if defined(_RPC_PROF)
+			m_start = nbr_time();
+#endif
 			ASSERT(((int **)m_ip)[-1]);
 			lua_pushthread(m_ip);
 			lua_getfield(m_ip, LUA_REGISTRYINDEX, *wid);
@@ -258,6 +267,10 @@ protected:	/* static variable */
 	static RWLOCK m_mlk;
 	bool	m_fin_phase;
 #endif
+#if defined(_RPC_PROF)
+	UTIME		m_rpcmax, m_rpcmin, m_rpctot;
+	int		m_rpccnt;
+#endif
 	array<fiber> 	m_fibers;
 	VM 		m_vm;
 	THREAD		m_thrd;
@@ -268,6 +281,7 @@ public:
 	/* external interfaces */
 	int 	init(int max_rpc_entry, int max_rpc_ongoing, int n_wkr);
 	void 	fin();
+	static void fin_global();
 	int  	init_world(const world_id &wid, const world_id &from, const char *srcfile);
 	int	add_global_object(CF &, const world_id &wid, char *p, size_t l);
 	void 	set_thread(THREAD th) { m_thrd = th; }
@@ -279,6 +293,9 @@ public:
 	void set_fin_phase(bool f) { m_fin_phase = f; }
 	bool fin_phase() const { return m_fin_phase; }
 	static map<thent,U64> &mmap() { return m_mmap; }
+#endif
+#if defined(_RPC_PROF)
+	void update_rpc_prof(fiber &fb);
 #endif
 	bool check_fiber(fiber &f) {
 		int idx = nbr_array_get_index(m_fibers.get_a(), &f);

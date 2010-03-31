@@ -194,6 +194,10 @@ int lua<SR,OF>::init(int max_rpc_entry, int max_rpc_ongoing, int n_wkr)
 #if defined(_DEBUG)
 	set_fin_phase(false);
 #endif
+#if defined(_RPC_PROF)
+	m_rpcmax = m_rpcmin = m_rpctot = 0LL;
+	m_rpccnt = 0;
+#endif
 	return NBR_OK;
 }
 
@@ -208,12 +212,25 @@ void lua<SR,OF>::fin()
 		m_vm = NULL;
 	}
 	m_fibers.fin();
+#if defined(_RPC_PROF)
+	if (m_rpccnt > 0) {
+		printf("max/min/tot/ave/time=%llu,%llu,%llu,%f,%u\n",
+			m_rpcmax, m_rpcmin, m_rpctot, 
+			((float)((float)m_rpctot) / ((float)m_rpccnt)), 
+			m_rpccnt);
+	}
+#endif
+}
+
+template <class SR, class OF>
+void lua<SR,OF>::fin_global()
+{
 	m_fbmap.fin();
 	m_rpcs.fin();
 	m_types.fin();
 #if defined(_DEBUG)
 	m_mmap.fin();
-#endif
+#endif	
 }
 
 template <class SR, class OF>
@@ -470,7 +487,7 @@ int 	lua<SR,OF>::get_object_value(VM vm, const object &o, const char *key)
 	lua_getfield(vm, LUA_REGISTRYINDEX, o.uuid().to_s(buf, sizeof(buf)));
 	ASSERT(lua_istable(vm, -1));
 #if defined(_DEBUG)
-	dump_table(vm, lua_gettop(vm));
+//	dump_table(vm, lua_gettop(vm));
 #endif
 	lua_getfield(vm, -1, key);
 	if (lua_isnil(vm, -1)) {	/* not exist? */
@@ -621,8 +638,31 @@ template <class SR, class OF>
 void lua<SR,OF>::fiber_delete(fiber *fb)
 {
 	ASSERT(fb->scp()->check_fiber(*fb));
+#if defined(_RPC_PROF)
+	fb->scp()->update_rpc_prof(*fb);
+#endif
 	fb->scp()->fibers().destroy(fb);
 }
+
+#if defined(_RPC_PROF)
+template <class SR, class OF>
+void lua<SR,OF>::update_rpc_prof(fiber &fb)
+{
+	TRACE("fb-attr = %u %u\n", fb.iot(), fb.rt());
+	if (fb.iot() == fiber::io_type_socket && 
+		fb.rt() == vmprotocol::rpct_method) {
+		UTIME t = nbr_time() - fb.start_time();
+		if (t > m_rpcmax) {
+			m_rpcmax = t;
+		}
+		if (m_rpcmin == 0LL || t < m_rpcmin) {
+			m_rpcmin = t;
+		}
+		m_rpctot += t;
+		m_rpccnt++;
+	}	
+}
+#endif
 
 template <class SR, class OF>
 template <class V>
@@ -757,7 +797,7 @@ bool lua<SR,OF>::unpack_lua_stack(CF &cf, const world_id &wid, SR &sr, VM vm,
 		lua<SR,OF> *scp)
 {
 	typename SR::data d;
-	TRACE("unpack_lua_stack: before: %u\n", sr.unpack_remain());
+	//TRACE("unpack_lua_stack: before: %u\n", sr.unpack_remain());
 	if (sr.unpack(d) <= 0) {
 		return false;
 	}
@@ -927,6 +967,7 @@ void lua<SR,OF>::fiber_exit_call(fiber &fb, int basestk, int r, SNDR &s,
 	rt = ((rt == vmprotocol::rpct_invalid) ? fb.rt() : rt);
 	fb.call_exit(r, s, rt, sr.p(), sr.len());
 	FINISH_PACK(sr);
+	fiber_delete(&fb);
 	return;
 }
 
@@ -958,6 +999,7 @@ int	lua<SR,OF>::reply_result(fiber &fb, int n_basestksz, rpctype rt/* rpc_invali
 		break;
 	}
 	FINISH_PACK(sr);
+	fiber_delete(&fb);
 	return r;
 }
 
@@ -988,7 +1030,6 @@ int 	lua<SR,OF>::dispatch(SNDR &c, fiber &fb,
 			else {
 				fiber_exit_call(fb, stksz, NBR_ESYSCALL, c);
 			}
-			fiber_delete(&fb);
 			return NBR_ESYSCALL;
 		}
 		else {
@@ -1002,7 +1043,6 @@ int 	lua<SR,OF>::dispatch(SNDR &c, fiber &fb,
 			}
 			TRACE("fiber end : %p\n", &fb);
 			/* whatever result is, free fiber for this function call */
-			fiber_delete(&fb);
 		}
 		return r;
 	}

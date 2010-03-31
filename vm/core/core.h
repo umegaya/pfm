@@ -738,6 +738,7 @@ template <class S,template <class OF,class SR> class L,
 	template <class S, class IDG, class KVS> class OF>
 void vm_impl<S,L,KVS,SR,IDG,OF>::fin_world()
 {
+	script::fin_global();
 	object_factory::fin();
 	IDG::fin();
 }
@@ -752,6 +753,7 @@ vm_impl<S,L,KVS,SR,IDG,OF>::init_vm(int max_rpc, int max_rpc_ongoing, int n_wkr)
 	script *scp = new script;
 	if (!scp) { return NULL; }
 	if ((r = scp->init(max_rpc, max_rpc_ongoing, n_wkr)) < 0) {
+		fin_vm(scp);
 		return NULL;
 	}
 	return scp;
