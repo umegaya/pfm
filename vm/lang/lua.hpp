@@ -249,6 +249,7 @@ public:	/* typedefs */
 public: /* constant */        
 	static const U32 max_rpc_packlen = 4 * 1024;   /* max 4kb */
 	static const U32 pack_use_heap_threshold = 4 * 1024;
+	static const size_t smblock_size = 64;	/* under 64byte allocation, use array. */
 	enum {
 		lua_rpc_nobiton = 0,
 		lua_rpc_entry = 0x1, 	/* first rpc (start point?) */
@@ -273,11 +274,12 @@ protected:	/* static variable */
 	static int	m_rpccnt;
 #endif
 	array<fiber> 	m_fibers;
+	array<char[smblock_size]>	m_smpool;
 	VM 		m_vm;
 	THREAD		m_thrd;
 	SR		m_serializer;
 public:
-	lua() : m_fibers(), m_vm(NULL), m_thrd(NULL), m_serializer() {}
+	lua() : m_fibers(), m_smpool(), m_vm(NULL), m_thrd(NULL), m_serializer() {}
 	~lua() {}
 	/* external interfaces */
 	int 	init(int max_rpc_entry, int max_rpc_ongoing, int n_wkr);
@@ -290,6 +292,7 @@ public:
 	VM	vm() const { return m_vm; }
 	SR	&serializer() { return m_serializer; }
 	array<fiber> &fibers() { return m_fibers; }
+	array<char[smblock_size]> &smpool() { return m_smpool; }
 #if defined(_DEBUG)
 	void set_fin_phase(bool f) { m_fin_phase = f; }
 	bool fin_phase() const { return m_fin_phase; }

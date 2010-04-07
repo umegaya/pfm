@@ -39,6 +39,14 @@ int vmd::vmdmstr::init_login_map(int max_user)
 	return NBR_OK;
 }
 
+void vmd::vmdmstr::_factory::fin()
+{
+        m_vmd->fin_mstr_vm();
+	vmdmstr::fin_world();
+        vmdmstr::fin_login_map();
+	vmdmstr::super::mstr_base_factory::fin();
+}
+
 int vmd::vmdmstr::recv_cmd_node_register(U32 msgid, const address &a)
 {
 	/* this node actually have node address 'a' */
@@ -189,6 +197,15 @@ vmd::vmdsvnt::init_player_map(int max_session)
 		return NBR_EMALLOC;
 	}
 	return NBR_OK;
+}
+
+void
+vmd::vmdsvnt::_factory::fin()
+{
+        m_vmd->fin_svnt_vm();
+	vmdsvnt::fin_world();
+        vmdsvnt::fin_player_map();
+	vmdsvnt::super::svnt_base_factory::fin();
 }
 
 #if defined(_RPC_PROF)
@@ -498,6 +515,15 @@ vmd::vmdsvnt::recv_cmd_node_ctrl(U32 msgid, const char *cmd,
 /* sfc::vmd::vmdclient                                         */
 /*-------------------------------------------------------------*/
 vmd::vmdclnt::client_state vmd::vmdclnt::m_cs = vmd::vmdclnt::client_state_invalid;
+
+void
+vmd::vmdclnt::_factory::fin()
+{
+        m_vmd->fin_clnt_vm();
+	vmdclnt::fin_world();
+	vmdclnt::super::clnt_base_factory::fin();
+}
+
 int
 vmd::vmdclnt::recv_code_login(querydata &q, int r, const world_id &wid, 
 		UUID &uuid, char *p, size_t l)
@@ -737,6 +763,7 @@ vmd::boot(int argc, char *argv[])
 	vmdconfig *vc;
 	vmdmstr::factory *mstr = find_factory<vmdmstr::factory>("mstr");
 	if (mstr) {
+		mstr->set_daemon(this);
 		if ((vc = find_config<vmdconfig>("mstr"))) {
 			if ((r = vmdmstr::init_world(vc->m_max_object, vc->m_max_world)) < 0) {
 				return r;
@@ -759,6 +786,7 @@ vmd::boot(int argc, char *argv[])
 	}
 	vmdsvnt::factory *svnt = find_factory<vmdsvnt::factory>("svnt");
 	if (svnt) {
+		svnt->set_daemon(this);
 		if ((vc = find_config<vmdconfig>("svnt"))) {
 			if ((r = vmdsvnt::init_world(vc->m_max_object, vc->m_max_world)) < 0) {
 				return r;
@@ -793,6 +821,7 @@ vmd::boot(int argc, char *argv[])
 	}
 	vmdclnt::factory *clnt = find_factory<vmdclnt::factory>("clnt");
 	if (clnt) {
+		clnt->set_daemon(this);
 		if ((vc = find_config<vmdconfig>("clnt"))) {
 			if ((r = vmdclnt::init_world(vc->m_max_object, vc->m_max_world)) < 0) {
 				return r;
@@ -828,8 +857,33 @@ vmd::initlib(CONFIG &c)
 }
 
 void
+vmd::fin_mstr_vm()
+{
+        for (int i = 0; i < m_wks; i++) {
+                vmdmstr::fin_vm(m_wkp[i].m_mstr_vm);
+        }
+}
+
+void
+vmd::fin_svnt_vm()
+{
+        for (int i = 0; i < m_wks; i++) {
+                vmdsvnt::fin_vm(m_wkp[i].m_svnt_vm);
+        }
+}
+
+void
+vmd::fin_clnt_vm()
+{
+        for (int i = 0; i < m_wks; i++) {
+                vmdclnt::fin_vm(m_wkp[i].m_clnt_vm);
+        }
+}
+
+void
 vmd::shutdown()
 {
+#if 0
 	for (int i = 0; i < m_wks; i++) {
 		vmdmstr::fin_vm(m_wkp[i].m_mstr_vm);
 		vmdsvnt::fin_vm(m_wkp[i].m_svnt_vm);
@@ -840,6 +894,7 @@ vmd::shutdown()
 	vmdsvnt::fin_world();
 	vmdsvnt::fin_player_map();
 	vmdclnt::fin_world();
+#endif
 }
 
 

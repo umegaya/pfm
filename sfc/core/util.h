@@ -248,6 +248,7 @@ template<class E> void
 array<E>::destroy(retval *v)
 {
 	element *e = element::to_e(v);
+	ASSERT(nbr_array_get_index(get_a(), e) < nbr_array_max(get_a()));
 	if (e) { nbr_array_free(m_a, e); }
 }
 

@@ -37,7 +37,12 @@ public:
 	class vmdmstr : public vmnode<vmdmstr> {
 	public:
 		typedef vmnode<vmdmstr> super;
-		typedef super::mstr_base_factory factory;
+		typedef class _factory : public super::mstr_base_factory {
+			class vmd *m_vmd;
+		public:
+			void set_daemon(class vmd *d) { m_vmd = d; }
+			void fin();
+		}	factory;
 		typedef super::protocol protocol;
 		typedef super::world world;
 		typedef super::proc_id proc_id;
@@ -80,7 +85,12 @@ public:
 	class vmdsvnt : public vmnode<vmdsvnt> {
 	public:
 		typedef vmnode<vmdsvnt> super;
-		typedef super::svnt_base_factory factory;
+		typedef class _factory : public super::svnt_base_factory {
+				class vmd *m_vmd;
+			public:
+				void set_daemon(class vmd *v) { m_vmd = v; }
+				void fin();
+		}	factory;
 		typedef super::loadpurpose loadpurpose;
 		typedef super::protocol protocol;
 		typedef super::world world;
@@ -143,7 +153,12 @@ public:
 	class vmdclnt : public vmnode<vmdclnt> {
 	public:
 		typedef vmnode<vmdclnt> super;
-		typedef super::clnt_base_factory factory;
+		typedef class _factory : public super::clnt_base_factory {
+			class vmd *m_vmd;
+		public:
+			void set_daemon(class vmd *v) { m_vmd = v; }
+			void fin();
+		}	factory;
 		typedef super::protocol protocol;
 		typedef super::script script;
 		typedef super::vm_msg vm_msg;
@@ -189,6 +204,9 @@ public:
 	} *m_wkp;
 	int m_wks;
 	static void on_worker_event(THREAD, THREAD, char *, size_t);
+	void fin_mstr_vm();
+	void fin_svnt_vm();
+	void fin_clnt_vm();
 public:
 	/* daemon process */
 	factory *create_factory(const char *sname);

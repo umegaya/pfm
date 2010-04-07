@@ -183,6 +183,9 @@ int lua<SR,OF>::init(int max_rpc_entry, int max_rpc_ongoing, int n_wkr)
 	if (!m_fibers.init(max_rpc_ongoing, -1, opt_threadsafe)) {
 		return NBR_EMALLOC;
 	}
+	if (!m_smpool.init(10000, -1, opt_expandable)) {
+		return NBR_EMALLOC;
+	}
 	if (!(m_vm = lua_newstate(allocator, this))) {
 		return NBR_ESYSCALL;
 	}
@@ -292,15 +295,24 @@ int lua<SR,OF>::init_world(const world_id &wid, const world_id &from, const char
 		return NBR_ESYSCALL;
 	}
 	/* init_object defined? */
-	lua_getfield(m_vm, LUA_REGISTRYINDEX, wid);
+	ASSERT(lua_istable(m_vm, -1));
 	lua_getfield(m_vm, -1, "init_object");
 	if (!lua_isfunction(m_vm, -1)) {
+		TRACE("init_object not function! dump table\n");
+#if defined(_DEBUG)
+		dump_table(m_vm, lua_gettop(m_vm) - 1);
+#endif
 		ASSERT(false);
 		return NBR_EINVAL;
 	}
+	TRACE("init_object defined -> ok\n");
 	lua_pop(m_vm, 1);
 	lua_getfield(m_vm, -1, "load_player");
 	if (!lua_isfunction(m_vm, -1)) {
+		 TRACE("load_player not function! dump table\n");  
+#if defined(_DEBUG)              
+		dump_table(m_vm, lua_gettop(m_vm) - 1);
+#endif
 		ASSERT(false);
 		return NBR_EINVAL;
 	}
@@ -342,13 +354,18 @@ bool lua<SR,OF>::load(const world_id &wid, const char *srcfile)
 {
 	/* temporary remove metatable from world env */
 	lua_getfield(m_vm, LUA_REGISTRYINDEX, wid);	/* 1:world env */
+	ASSERT(lua_istable(m_vm, -1));
 	lua_getmetatable(m_vm, -1);			/* 2:metatable of world env */
+	ASSERT(lua_istable(m_vm, -2));
 	lua_newtable(m_vm);				/* 3:{} */
 	lua_setmetatable(m_vm, -3);			/* 3->removed */
 	 /* loadfile only load file into lua stack (thus soon it loses)
 	  * so need to call this chunk. */        
 	if (luaL_loadfile(m_vm, srcfile) != 0) {	/* 3:srcfile func */
+		TRACE("luaL_loadfile : error <%s>\n", lua_tostring(m_vm, -1));
+		lua_pop(m_vm, 1);			/* remove error message */
 		lua_setmetatable(m_vm, -2);
+		ASSERT(false);
 		return NBR_ESYSCALL;
 	}
 	lua_pushvalue(m_vm, -3);			/* 4:world env */
@@ -359,7 +376,7 @@ bool lua<SR,OF>::load(const world_id &wid, const char *srcfile)
 		return NBR_ESYSCALL;
 	}
 	lua_setmetatable(m_vm, -2);			/* 2->removed */
-	ASSERT(lua_gettop(m_vm) == 1);
+	ASSERT(lua_gettop(m_vm) == 1);			/* world env table remained */
 	return NBR_OK;
 }
 
@@ -374,8 +391,8 @@ int	lua<SR,OF>::panic(VM vm)
 template <class SR, class OF>
 void	*lua<SR,OF>::allocator(void *ud, void *ptr, size_t os, size_t ns)
 {
-#if defined(_DEBUG)
 	lua<SR,OF> *scp = (lua<SR,OF> *)ud;
+#if defined(_DEBUG)
 	if (scp->thread() && !scp->fin_phase()) {
 		if (nbr_thread_get_curid() != nbr_thread_get_id(scp->thread())) {
 			TRACE("different thread gc runs %08x, %08x\n", 
@@ -384,14 +401,14 @@ void	*lua<SR,OF>::allocator(void *ud, void *ptr, size_t os, size_t ns)
 			ASSERT(false);
 		}
 	}
-	lock lk(m_mlk, false);
-//	if (ns > (32 * 1024) || os > (32 * 1024)) {
+	//lock lk(m_mlk, false);
+	//if (ns > (32 * 1024) || os > (32 * 1024)) {
 //		TRACE("%08x,%08x: ptr=%p,os=%u,ns=%u", nbr_thread_get_curid(), 
 //			scp->thread() ? nbr_thread_get_id(scp->thread()) : 0, ptr, os, ns);
-//	}
+	//}
 #endif
 	if (ns == 0) {
-#if defined(_DEBUG)
+#if 0//defined(_DEBUG)
 		if (os > (32 * 1024)) {
 			static char correct[32 * 1024];
 			memset(correct, 'a', 32 * 1024);
@@ -408,13 +425,18 @@ void	*lua<SR,OF>::allocator(void *ud, void *ptr, size_t os, size_t ns)
 		}
 #endif
 #endif
+		if (os <= smblock_size) {
+			scp->smpool().destroy((char *)ptr);
+//			TRACE("->smfree %p\n", ptr);
+			return NULL;
+		}
 		free(ptr);  /* ANSI define free for NULL ptr never causes any change */
-		//TRACE("->free %p\n", ptr);
+//		TRACE("->free %p\n", ptr);
 		return NULL;
 	}
 	else {
 		/* ANSI defines realloc(NULL,ns) == malloc(ns) */
-#if defined(_DEBUG)
+#if 0//defined(_DEBUG)
 		void *p;
 		if (ns > (32 * 1024) && os == 0) {
 			size_t nns = ns + (32 * 1024);
@@ -446,7 +468,39 @@ void	*lua<SR,OF>::allocator(void *ud, void *ptr, size_t os, size_t ns)
 #endif
 		return p;
 #else
-		return realloc(ptr, ns);
+		void *p;
+		if (ns <= smblock_size) {
+			if (!(p = scp->smpool().alloc())) {
+				ASSERT(false);
+				return NULL;
+			}
+			if (ptr) {
+				if (os <= smblock_size) {
+//					TRACE("->smreturns %p\n", ptr);
+					return ptr;
+				}
+				memcpy(p, ptr, ns);
+				free(ptr);
+			}
+//			TRACE("->smreturns %p\n", p);
+			return p;
+		}
+		else if (ptr && os <= smblock_size) {
+			if (!(p = malloc(ns))) {
+				ASSERT(false);
+				return NULL;
+			}
+			memcpy(p, ptr, ns);
+			scp->smpool().destroy((char *)ptr);
+		}
+		else {
+			ASSERT((!ptr && ns > smblock_size) || 
+				(ptr && os > smblock_size && ns > smblock_size));
+			p = realloc(ptr, ns);
+		}
+		ASSERT(p);
+//		TRACE("->returns %p\n", p);
+		return p;
 #endif
 	}
 }
@@ -1131,7 +1185,7 @@ int	lua<SR,OF>::resume_proc(SNDR &c, CF &cf, const world_id &wid,
 		if (!lua_isnil(vm, -2)) {/* if error function is defined */
 			lua_pcall(vm, 2, 0, 0);
 		}
-		return NBR_OK;
+		return dispatch(c, fb, lua_gettop(fb), true);
 	case vmprotocol::rpct_getter:
 		if (unpack_lua_stack(cf, wid, sr, fb) < 0) {
 			lua_pushnil(vm);
@@ -1468,7 +1522,9 @@ int lua<SR,OF>::gc_fiber(VM)
 }
 template <class SR, class OF>
 void lua<SR,OF>::dump_table(VM vm, int index)
-{	
+{
+	ASSERT(index > 0);	/* should give positive index(because minus index
+				changes its meaning after lua_pushnil below) */	
 	lua_pushnil(vm);        /* push first key (idiom, i think) */
 	printf("table ptr = %p\n", lua_topointer(vm, index));
 	while(lua_next(vm, index)) {     /* put next key/value on stack */
