@@ -55,11 +55,8 @@ function load_player(player)
 
 --	real test: pfm.new
 	player.item = player:new_item(100)
-	print("create object success!");
 	assert(pfm.typeof(player.item) == "ITEM")
-	print("pfm.typeof test success!!");
 	assert(player:get_item_data("attack_point") == 1000)
-	print("pfm.new test success!!");
 
 --	real test: enter world
 	player:enter_world()

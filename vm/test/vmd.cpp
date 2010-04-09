@@ -571,6 +571,17 @@ vmd::vmdclnt::recv_code_login(querydata &q, int r, const world_id &wid,
 void vmd::vmdclnt::exit_main(vmdclnt &sender, vmdclnt &recver,
 		VM vm, int r, U32 rmsgid, rpctype rt, char *p, size_t l)
 {
+#if 1
+	static int g_cnt = 0;
+	g_cnt++;
+	if (g_cnt > 100) {
+		sender.log(INFO, "iteration finish\n");
+		daemon::stop();
+	}
+	else {
+		sender.set_state(client_state_resume);
+	}
+#else
 	if (r < 0) {
 		sender.log(INFO, "error on exit_main (%d)\n", r);
 		daemon::stop();
@@ -579,13 +590,14 @@ void vmd::vmdclnt::exit_main(vmdclnt &sender, vmdclnt &recver,
 		//sender.set_state(client_state_error);
 		daemon::stop();
 	}
+#endif
 }
 
 session::pollret
 vmd::vmdclnt::poll(UTIME ut, bool from_worker)
 {
 #if defined(_TEST)
-	if (ut - last_process() < 500 * 1000/* 500ms */) {
+	if (ut - last_process() < 1/* 500us */) {
 		return super::poll(ut, from_worker);
 	}
 	switch(m_cs) {
@@ -604,6 +616,7 @@ vmd::vmdclnt::poll(UTIME ut, bool from_worker)
 	case client_state_login_attempt: {
 	}break;
 	case client_state_resume: {
+		if (!vm()->initialized(wid())) { break; }
 		object *o = object_factory::find(m_session_uuid);
 		if (!o) {
 			set_state(client_state_error);

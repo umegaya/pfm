@@ -243,6 +243,15 @@ void lua<SR,OF>::fin_global()
 }
 
 template <class SR, class OF>
+bool lua<SR,OF>::initialized(const world_id &wid)
+{
+	lua_getfield(m_vm, LUA_REGISTRYINDEX, wid);
+	bool b = lua_istable(m_vm, -1);
+	lua_pop(m_vm, 1);
+	return b;
+}
+
+template <class SR, class OF>
 int lua<SR,OF>::init_world(const world_id &wid, const world_id &from, const char *srcfile)
 {
 	TRACE("%p:%p:init VM for world(%s)\n", this, thread(), wid);
@@ -697,7 +706,7 @@ lua<SR,OF>::rpc_new(VM vm, object *o, const char *name)
 template <class SR, class OF>
 void lua<SR,OF>::fiber_delete(fiber *fb)
 {
-	ASSERT(fb->scp()->check_fiber(*fb));
+	ASSERT(!fb->scp() || fb->scp()->check_fiber(*fb));
 #if defined(_RPC_PROF)
 	update_rpc_prof(*fb);
 #endif

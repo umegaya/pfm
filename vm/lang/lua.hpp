@@ -192,7 +192,7 @@ public:	/* typedefs */
 			bool first = false;
 			if (!m_ip) {
 				m_ip = lua_newcthread(scp->vm(), 1/* use min size */);
-				if (!m_ip) { return false; }
+				if (!m_ip) { ASSERT(false); return false; }
 				first = true;
 			}
 #if defined(_RPC_PROF)
@@ -203,6 +203,7 @@ public:	/* typedefs */
 			lua_pushthread(m_ip);
 			lua_getfield(m_ip, LUA_REGISTRYINDEX, *wid);
 			if (!lua_istable(m_ip, -1)) {
+				ASSERT(false);
 				return false;
 			}
 			lua_setfenv(m_ip, -2);
@@ -286,6 +287,7 @@ public:
 	void 	fin();
 	static void fin_global();
 	int  	init_world(const world_id &wid, const world_id &from, const char *srcfile);
+	bool 	initialized(const world_id &wid);
 	int	add_global_object(CF &, const world_id &wid, char *p, size_t l);
 	void 	set_thread(THREAD th) { m_thrd = th; }
 	THREAD	thread() const { return m_thrd; }
