@@ -866,6 +866,7 @@ vmd::on_signal(int signo)
 int
 vmd::initlib(CONFIG &c) 
 {
+	//c.max_worker = 1;
 	return NBR_OK;
 }
 
@@ -891,23 +892,6 @@ vmd::fin_clnt_vm()
         for (int i = 0; i < m_wks; i++) {
                 vmdclnt::fin_vm(m_wkp[i].m_clnt_vm);
         }
-}
-
-void
-vmd::shutdown()
-{
-#if 0
-	for (int i = 0; i < m_wks; i++) {
-		vmdmstr::fin_vm(m_wkp[i].m_mstr_vm);
-		vmdsvnt::fin_vm(m_wkp[i].m_svnt_vm);
-		vmdclnt::fin_vm(m_wkp[i].m_clnt_vm);
-	}
-	vmdmstr::fin_world();
-	vmdmstr::fin_login_map();
-	vmdsvnt::fin_world();
-	vmdsvnt::fin_player_map();
-	vmdclnt::fin_world();
-#endif
 }
 
 

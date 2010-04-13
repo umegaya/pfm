@@ -214,7 +214,6 @@ public:
 	int	boot(int argc, char *argv[]);
 	int	initlib(CONFIG &c);
 	int 	on_signal(int signo);
-	void	shutdown();
 };
 
 inline vmd::vmdmstr::script *vmd::vmdmstr::fetch_vm()

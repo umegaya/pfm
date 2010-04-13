@@ -572,6 +572,15 @@ sock_set_stat(sockdata_t *skd, SOCKSTATE stat)
 	skd->stat = stat;
 }
 
+NBR_INLINE void
+sockjob_wakeup_if_sleep(sockjob_t *j)
+{
+	if (j->sleep) {
+//		TRACE("%u:%llu: wakeup!\n", getpid(), nbr_time());
+		if (nbr_thread_signal(j->thrd, 1) == NBR_OK) { j->sleep = 0; }
+	}
+}
+
 NBR_INLINE int
 sock_push_event(sockdata_t *skd, int serial, int type, char *data, int len,
 		void (*ccb)(char*, char*, int))
@@ -586,6 +595,7 @@ sock_push_event(sockdata_t *skd, int serial, int type, char *data, int len,
 	THREAD_LOCK(nbr_thread_signal_mutex(thrd), error);
 	if (skd->serial == serial) {
 		r = sockbuf_setevent(j->web, skd, serial, type, data, len, ccb);
+		sockjob_wakeup_if_sleep(j);
 	}
 	THREAD_UNLOCK(nbr_thread_singal_mutex(thrd));
 	return r;
@@ -603,6 +613,7 @@ sock_push_worker_event(THREAD from, THREAD to, char *data, int len)
 	j = nbr_thread_get_data(to);
 	THREAD_LOCK(nbr_thread_signal_mutex(to), error);
 	r = sockbuf_worker_event(j->web, from, data, len);
+	sockjob_wakeup_if_sleep(j);
 	THREAD_UNLOCK(nbr_thread_singal_mutex(to));
 	return r;
 error:
@@ -995,7 +1006,8 @@ sock_process_job(THREAD thrd)
 				if (NBR_OK != nbr_mutex_unlock(g_sock.lock)) { break; }
 			}
 		}
-		if (j->active) {}
+#if 1
+		if (j->active || j->web->blen > 0) {}
 		else {
 			n_sleep = j->exec ? g_sock.ioc.job_idle_sleep_us : -1;
 //			TRACE("%u: %llu: sleep : n_sleep = %d\n", getpid(), nbr_time(), n_sleep);
@@ -1007,6 +1019,7 @@ sock_process_job(THREAD thrd)
 			j->sleep = 0;
 			nbr_thread_setcancelstate(0);	/* non-cancelable */
 		}
+#endif
 	}
 	return thrd;
 }
@@ -2161,10 +2174,7 @@ nbr_sock_poll()
 			skd->events |= events_from(ev);
 			if (MT_MODE() && sock_readable(skd)) {
 				j = nbr_thread_get_data(skd->thrd);
-				if (j->sleep) {
-//					TRACE("%u:%llu: wakeup!\n", getpid(), nbr_time());
-					if (nbr_thread_signal(skd->thrd, 1) == NBR_OK) { j->sleep = 0; }
-				}
+				sockjob_wakeup_if_sleep(j);
 			}
 			break;
 		default:
