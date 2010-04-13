@@ -484,15 +484,29 @@ public:
 	mp() : __mp(), m_upk() {}
 	~mp() {}
 public:
-	char *p() { return __mp::m_p; }
+	char *p() { 
+		U8 u8 = (U8)__mp::m_p[0];
+		if (__mp::m_c > 0 && (u8 == BOOLEAN_TRUE || u8 == BOOLEAN_FALSE)) {
+			ASSERT(__mp::m_c == 1);
+		}
+		return __mp::m_p; 
+	}
 	size_t len() { return __mp::m_c; }
 	void pack_start(char *p, size_t l) { __mp::start(p, l); }
+	size_t unpack_remain() const { return m_upk.nonparsed_size(); }
+	size_t pack_remain() const { return (__mp::m_s - __mp::m_c); }
 	void unpack_start(const char *p, size_t l) { 
 		data d;
 		while(unpack(d) > 0);	/* read all unread data */
 		m_upk.reset_zone();
 		if (l > m_upk.buffer_capacity()) {
-			l = m_upk.buffer_capacity();
+			try {
+				m_upk.reserve_buffer(l);
+			} catch (const std::bad_alloc e) {
+				ASSERT(false);
+				return;
+			}
+			TRACE("expand buffer upto %u\n", (U32)l);
 		}
 		if (l > 0) {
 			memcpy(m_upk.buffer(), p, l);

@@ -361,6 +361,7 @@ NBR_API int		nbr_sock_set_worker_data(THREAD th, void *p,
 					void (*on_event)(THREAD, THREAD, char *, size_t));
 NBR_API int		nbr_sock_worker_event(THREAD from, THREAD to, char *p, size_t l);
 NBR_API int		nbr_sock_worker_bcast_event(THREAD from, char *p, size_t l);
+NBR_API int		nbr_sock_worker_is_current(SOCK sk);
 
 
 /* sig.c */

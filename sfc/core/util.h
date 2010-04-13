@@ -248,6 +248,7 @@ template<class E> void
 array<E>::destroy(retval *v)
 {
 	element *e = element::to_e(v);
+	ASSERT(nbr_array_get_index(get_a(), e) < nbr_array_max(get_a()));
 	if (e) { nbr_array_free(m_a, e); }
 }
 
@@ -370,7 +371,7 @@ map<V,K>::alloc(key k)
 	if (e) {	/* already exist */
 		return e;
 	}
-	if (array<V>::use() >= array<V>::max()) {
+	if (nbr_array_full(super::m_a)) {
 		return NULL;	/* no mem */
 	}
 	if (m_lk) { nbr_rwlock_wrlock(m_lk); }

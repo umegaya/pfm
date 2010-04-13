@@ -7,7 +7,11 @@ EXL = ../../exlib/
 
 # debug stuff 
 ifeq ($(DEBUG), 1)
+<<<<<<< HEAD
 CFLAGS += -g -D_DEBUG
+=======
+CFLAGS += -g
+>>>>>>> b9940129ad8b41943cc632ed6b1c135b8d91908a
 else
 CFLAGS += -O4
 endif

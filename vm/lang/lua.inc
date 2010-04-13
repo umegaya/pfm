@@ -130,6 +130,30 @@ template <class SR, class OF>
 map<typename lua<SR,OF>::type_id, char *> 	lua<SR,OF>::m_types;
 template <class SR, class OF> 
 map<typename lua<SR,OF>::fiber *, U64> 		lua<SR,OF>::m_fbmap;
+#if defined(_DEBUG)
+template <class SR, class OF>
+map<typename lua<SR,OF>::thent, U64>		lua<SR,OF>::m_mmap;
+template <class SR, class OF>
+RWLOCK						lua<SR,OF>::m_mlk = NULL;
+#endif
+#if defined(_RPC_PROF)
+template <class SR, class OF> U32 lua<SR,OF>::m_rpcmin = 0;
+template <class SR, class OF> U32 lua<SR,OF>::m_rpcmax = 0;
+template <class SR, class OF> U32 lua<SR,OF>::m_rpctot = 0;
+template <class SR, class OF> int lua<SR,OF>::m_rpccnt = 0;
+#endif
+
+/* fiber */
+template <class SR, class OF>
+void lua<SR,OF>::fiber::set_sender(VMMSG &v, typename exit_fn<VMMSG>::type f) 
+{
+	m_type = (U8)io_type_channel;
+	if (!m_sender.vmm) {
+		m_sender.vmm = new VMMSG(NULL, NULL, 0);
+	}
+	*(m_sender.vmm) = v;
+	m_exit_fn.vmm = f; 
+}
 
 /* lua */
 template <class SR, class OF>
@@ -147,11 +171,22 @@ int lua<SR,OF>::init(int max_rpc_entry, int max_rpc_ongoing, int n_wkr)
 			opt_threadsafe | opt_expandable)) {
 			return NBR_EMALLOC;
 		}
+#if defined(_DEBUG)
+		if (!m_mmap.init(10000, 100, -1, opt_threadsafe | opt_expandable)) {
+			return NBR_EMALLOC;
+		}
+		if (!(m_mlk = nbr_rwlock_create())) {
+			return NBR_EPTHREAD;
+		}
+#endif
 	}
-	if (!m_fibers.init(max_rpc_ongoing, -1, opt_threadsafe | opt_expandable)) {
+	if (!m_fibers.init(max_rpc_ongoing, -1, opt_threadsafe)) {
 		return NBR_EMALLOC;
 	}
-	if (!(m_vm = lua_newstate(allocator, NULL))) {
+	if (!m_smpool.init(10000, -1, opt_expandable)) {
+		return NBR_EMALLOC;
+	}
+	if (!(m_vm = lua_newstate(allocator, this))) {
 		return NBR_ESYSCALL;
 	}
 	lua_settop(m_vm, 0);
@@ -165,30 +200,66 @@ int lua<SR,OF>::init(int max_rpc_entry, int max_rpc_ongoing, int n_wkr)
 	if (0 != lua_pcall(m_vm, 0, 0, 0)) {
 		return NBR_ESYSCALL;
 	}
+#if defined(_DEBUG)
+	set_fin_phase(false);
+#endif
+#if defined(_RPC_PROF)
+	m_rpcmax = m_rpcmin = m_rpctot = 0LL;
+	m_rpccnt = 0;
+#endif
 	return NBR_OK;
 }
 
 template <class SR, class OF>
 void lua<SR,OF>::fin()
 {
+#if defined(_DEBUG)
+	set_fin_phase(true);
+#endif
 	if (m_vm) {
 		lua_close(m_vm);
 		m_vm = NULL;
 	}
 	m_fibers.fin();
-	m_fbmap.fin();
-	m_rpcs.fin();
-	m_types.fin();
 }
 
 template <class SR, class OF>
-int lua<SR,OF>::init_world(const world_id &wid, const world_id &from)
+void lua<SR,OF>::fin_global()
 {
-	TRACE("init VM for world(%s)\n", wid);
+	m_fbmap.fin();
+	m_rpcs.fin();
+	m_types.fin();
+#if defined(_DEBUG)
+	m_mmap.fin();
+#endif
+#if defined(_RPC_PROF)
+        if (m_rpccnt > 0) {
+                printf("max/min/tot/ave/time=%u,%u,%u,%f,%u\n",
+                        m_rpcmax, m_rpcmin, m_rpctot,
+                        ((float)((float)m_rpctot) / ((float)m_rpccnt)),
+                        m_rpccnt);
+        }
+#endif	
+}
+
+template <class SR, class OF>
+bool lua<SR,OF>::initialized(const world_id &wid)
+{
+	lua_getfield(m_vm, LUA_REGISTRYINDEX, wid);
+	bool b = lua_istable(m_vm, -1);
+	lua_pop(m_vm, 1);
+	return b;
+}
+
+template <class SR, class OF>
+int lua<SR,OF>::init_world(const world_id &wid, const world_id &from, const char *srcfile)
+{
+	TRACE("%p:%p:init VM for world(%s)\n", this, thread(), wid);
 	lua_settop(m_vm, 0);
 	lua_getfield(m_vm, LUA_REGISTRYINDEX, wid);
 	if (!lua_isnil(m_vm, -1)) {
 		lua_pop(m_vm, 1);
+		TRACE("%p:%p: already initialized\n", this, thread());
 		return NBR_OK;	/* already initialized */
 	}
 	lua_pop(m_vm, 1);
@@ -228,6 +299,32 @@ int lua<SR,OF>::init_world(const world_id &wid, const world_id &from)
 	/* register this world env */
 	ASSERT(lua_istable(m_vm, -1));
 	lua_setfield(m_vm, LUA_REGISTRYINDEX, wid);
+	/* load initial module */
+	if (load(wid, srcfile) < 0) {
+		return NBR_ESYSCALL;
+	}
+	/* init_object defined? */
+	ASSERT(lua_istable(m_vm, -1));
+	lua_getfield(m_vm, -1, "init_object");
+	if (!lua_isfunction(m_vm, -1)) {
+		TRACE("init_object not function! dump table\n");
+#if defined(_DEBUG)
+		dump_table(m_vm, lua_gettop(m_vm) - 1);
+#endif
+		ASSERT(false);
+		return NBR_EINVAL;
+	}
+	TRACE("init_object defined -> ok\n");
+	lua_pop(m_vm, 1);
+	lua_getfield(m_vm, -1, "load_player");
+	if (!lua_isfunction(m_vm, -1)) {
+		 TRACE("load_player not function! dump table\n");  
+#if defined(_DEBUG)              
+		dump_table(m_vm, lua_gettop(m_vm) - 1);
+#endif
+		ASSERT(false);
+		return NBR_EINVAL;
+	}
 	return NBR_OK;
 }
 
@@ -238,14 +335,23 @@ int	lua<SR,OF>::add_global_object(CF &cf, const world_id &wid, char *p, size_t l
 	SR &sr = serializer();
 	sr.unpack_start(p, l);
 	lua_getfield(m_vm, LUA_REGISTRYINDEX, wid); 
-	if (unpack_lua_stack(cf, wid, sr, m_vm) < 0) {
+	if (unpack_lua_stack(cf, wid, sr, m_vm, this) < 0) {
 		return NBR_EFORMAT;
 	}
 	ASSERT(lua_isstring(m_vm, -1));
-	if (unpack_lua_stack(cf, wid, sr, m_vm) < 0) {
+	if (unpack_lua_stack(cf, wid, sr, m_vm, this) < 0) {
 		return NBR_EFORMAT;
 	}
 	ASSERT(lua_isuserdata(m_vm, -1) || lua_isfunction(m_vm, -1));
+	TRACE("%p: set %u to <%s>:tbl=%p\n", thread(), 
+		lua_type(m_vm, -1), lua_tostring(m_vm, -2), lua_topointer(m_vm, -3));
+	/* if global function, its environment will be the table relate with 'wid' */
+	if (lua_isfunction(m_vm, -1)) {
+		TRACE("set world env table(%s) to global function(%s)\n", 
+			wid, lua_tostring(m_vm, -2));
+		lua_pushvalue(m_vm, -3);
+		lua_setfenv(m_vm, -2);
+	}
 	/* because if not rawset, it calls global_newindex again. */
 	lua_rawset(m_vm, -3);
 	lua_pop(m_vm, 1);	/* remove table object */
@@ -253,26 +359,34 @@ int	lua<SR,OF>::add_global_object(CF &cf, const world_id &wid, char *p, size_t l
 }
 
 template <class SR, class OF>
-template <class SNDR>
-bool lua<SR,OF>::load(SNDR &c, const world_id &wid, const char *srcfile)
+bool lua<SR,OF>::load(const world_id &wid, const char *srcfile)
 {
-	fiber *fb = fiber_new(NULL, 0, &wid, fiber::exit_noop);
-	if (!fb) {
-		return NBR_EEXPIRE;
-	}
-	/* loadfile only load file into lua stack (thus soon it loses)
-	 * so need to call this chunk. */
-	if (luaL_loadfile(*fb, srcfile) != 0) {
+	/* temporary remove metatable from world env */
+	lua_getfield(m_vm, LUA_REGISTRYINDEX, wid);	/* 1:world env */
+	ASSERT(lua_istable(m_vm, -1));
+	lua_getmetatable(m_vm, -1);			/* 2:metatable of world env */
+	ASSERT(lua_istable(m_vm, -2));
+	lua_newtable(m_vm);				/* 3:{} */
+	lua_setmetatable(m_vm, -3);			/* 3->removed */
+	 /* loadfile only load file into lua stack (thus soon it loses)
+	  * so need to call this chunk. */        
+	if (luaL_loadfile(m_vm, srcfile) != 0) {	/* 3:srcfile func */
+		TRACE("luaL_loadfile : error <%s>\n", lua_tostring(m_vm, -1));
+		lua_pop(m_vm, 1);			/* remove error message */
+		lua_setmetatable(m_vm, -2);
+		ASSERT(false);
 		return NBR_ESYSCALL;
 	}
-#if 1
-	return dispatch(c, *fb, 0, false, vmprotocol::rpct_call);
-#else
-	if (lua_pcall(m_vm, 0, 0, 0) != 0) {
+	lua_pushvalue(m_vm, -3);			/* 4:world env */
+	lua_setfenv(m_vm, -2);				/* 4->removed */
+	if (lua_pcall(m_vm, 0, 0, 0) != 0) {		/* 3->removed */
+		/* recover metatable */
+		lua_setmetatable(m_vm, -2);
 		return NBR_ESYSCALL;
 	}
+	lua_setmetatable(m_vm, -2);			/* 2->removed */
+	ASSERT(lua_gettop(m_vm) == 1);			/* world env table remained */
 	return NBR_OK;
-#endif
 }
 
 template <class SR, class OF>
@@ -283,29 +397,55 @@ int	lua<SR,OF>::panic(VM vm)
 	return 0;
 }
 
-
 template <class SR, class OF>
 void	*lua<SR,OF>::allocator(void *ud, void *ptr, size_t os, size_t ns)
 {
+	lua<SR,OF> *scp = (lua<SR,OF> *)ud;
 #if defined(_DEBUG)
-	if (ns > (32 * 1024) || os > (32 * 1024)) {
-		TRACE("ptr=%p,os=%u,ns=%u\n", ptr, os, ns);
+	if (scp->thread() && !scp->fin_phase()) {
+		if (nbr_thread_get_curid() != nbr_thread_get_id(scp->thread())) {
+			TRACE("different thread gc runs %08x, %08x\n", 
+				nbr_thread_get_curid(),
+				nbr_thread_get_id(scp->thread()));
+			ASSERT(false);
+		}
 	}
+	//lock lk(m_mlk, false);
+	//if (ns > (32 * 1024) || os > (32 * 1024)) {
+//		TRACE("%08x,%08x: ptr=%p,os=%u,ns=%u", nbr_thread_get_curid(), 
+//			scp->thread() ? nbr_thread_get_id(scp->thread()) : 0, ptr, os, ns);
+	//}
 #endif
 	if (ns == 0) {
-#if defined(_DEBUG)
+#if 0//defined(_DEBUG)
 		if (os > (32 * 1024)) {
 			static char correct[32 * 1024];
 			memset(correct, 'a', 32 * 1024);
 			ASSERT(memcmp(((char *)ptr) + os, correct, 32 * 1024) == 0);
 		}
+#if 1
+		if (scp->thread() && !scp->fin_phase() && ptr) {
+		thent *the = scp->mmap().find(((U64)ptr));
+		THREAD th = the->th;
+		ASSERT(!th || ((th == scp->thread()) && (nbr_thread_get_id(th) == nbr_thread_get_curid())));
+		}
+		if (ptr && !scp->fin_phase()) {
+			scp->mmap().erase(((U64)ptr));
+		}
 #endif
+#endif
+		if (os <= smblock_size) {
+			scp->smpool().destroy((char *)ptr);
+//			TRACE("->smfree %p\n", ptr);
+			return NULL;
+		}
 		free(ptr);  /* ANSI define free for NULL ptr never causes any change */
+//		TRACE("->free %p\n", ptr);
 		return NULL;
 	}
 	else {
 		/* ANSI defines realloc(NULL,ns) == malloc(ns) */
-#if defined(_DEBUG)
+#if 0//defined(_DEBUG)
 		void *p;
 		if (ns > (32 * 1024) && os == 0) {
 			size_t nns = ns + (32 * 1024);
@@ -315,9 +455,61 @@ void	*lua<SR,OF>::allocator(void *ud, void *ptr, size_t os, size_t ns)
 		else {
 			p = realloc(ptr, ns);
 		}
+		//TRACE("->returns %p\n", p);
+#if 1
+		thent the = { scp->thread() };
+		if (!ptr && os == 0) {
+			//TRACE("check memory address %p,%p\n", ptr, p);
+			thent *pthe = m_mmap.find(((U64)p));
+			if (pthe) {
+				void *pp = p;
+				p = realloc(NULL, ns);
+				TRACE("avoid used address: %p->%p\n", pp, p);
+			}
+			ASSERT(m_mmap.insert(the, ((U64)p)) != m_mmap.end());
+		}
+		else if (p != ptr) {
+			//TRACE("realloced: remove %p, insert %p\n", ptr, p);
+			m_mmap.erase(((U64)ptr));
+			ASSERT(!m_mmap.find(((U64)ptr)));
+			ASSERT(m_mmap.insert(the, ((U64)p)) != m_mmap.end());
+		}
+#endif
 		return p;
 #else
-		return realloc(ptr, ns);
+		void *p;
+		if (ns <= smblock_size) {
+			if (!(p = scp->smpool().alloc())) {
+				ASSERT(false);
+				return NULL;
+			}
+			if (ptr) {
+				if (os <= smblock_size) {
+//					TRACE("->smreturns %p\n", ptr);
+					return ptr;
+				}
+				memcpy(p, ptr, ns);
+				free(ptr);
+			}
+//			TRACE("->smreturns %p\n", p);
+			return p;
+		}
+		else if (ptr && os <= smblock_size) {
+			if (!(p = malloc(ns))) {
+				ASSERT(false);
+				return NULL;
+			}
+			memcpy(p, ptr, ns);
+			scp->smpool().destroy((char *)ptr);
+		}
+		else {
+			ASSERT((!ptr && ns > smblock_size) || 
+				(ptr && os > smblock_size && ns > smblock_size));
+			p = realloc(ptr, ns);
+		}
+		ASSERT(p);
+//		TRACE("->returns %p\n", p);
+		return p;
 #endif
 	}
 }
@@ -354,10 +546,18 @@ template <class SR, class OF>
 int 	lua<SR,OF>::get_object_value(VM vm, const object &o, const char *key)
 {
 	char buf[256];
+#if defined(_DEBUG)
+	fiber *f = vm_owner(vm);
+	TRACE("get object value : %p, %p, %08x, %08x, %08x, <%s:%s>\n", vm, &o, nbr_thread_get_curid(), nbr_thread_get_id(f->scp()->thread()), nbr_thread_get_id(o.thread()), o.uuid().to_s(buf, sizeof(buf)), key);
+	ASSERT(nbr_thread_is_current(f->scp()->thread()));
+#endif
 	/* push stack to registry[uuid][key] */
 	/* search object value table */
 	lua_getfield(vm, LUA_REGISTRYINDEX, o.uuid().to_s(buf, sizeof(buf)));
 	ASSERT(lua_istable(vm, -1));
+#if defined(_DEBUG)
+//	dump_table(vm, lua_gettop(vm));
+#endif
 	lua_getfield(vm, -1, key);
 	if (lua_isnil(vm, -1)) {	/* not exist? */
 		lua_pop(vm, 1);
@@ -371,8 +571,13 @@ template <class SR, class OF>
 int 	lua<SR,OF>::set_object_value(
 			VM vm, const object &o, const char *key, int index_from)
 {
-	ASSERT(index_from > 0);	/* should use lua_gettop or something */
 	char buf[256];
+#if defined(_DEBUG)
+        fiber *f = vm_owner(vm);
+        TRACE("set object value : %p, %p, %08x, %08x, %08x, <%s:%s>\n", vm, &o, nbr_thread_get_curid(), nbr_thread_get_id(f->scp()->thread()), nbr_thread_get_id(o.thread()), o.uuid().to_s(buf, sizeof(buf)), key);
+        ASSERT(nbr_thread_is_current(f->scp()->thread()));
+#endif
+	ASSERT(index_from > 0);	/* should use lua_gettop or something */
 	/* do registery[uuid][key] = value */
 	lua_getfield(vm, LUA_REGISTRYINDEX, o.uuid().to_s(buf, sizeof(buf)));
 	lua_pushvalue(vm, index_from);
@@ -413,11 +618,11 @@ int 	lua<SR,OF>::pack_object_value(VM vm, const object &o, SR &sr)
 
 template <class SR, class OF>
 int 	lua<SR,OF>::unpack_object_value(CF &cf, const world_id &wid, 
-		VM vm, const object &o, data &d)
+		VM vm, lua<SR,OF> *scp, const object &o, data &d)
 {
 	int r;
 	char buf[256];
-	if ((r = put_to_lua_stack(cf, wid, vm, d)) < 0) { return r; }
+	if ((r = put_to_lua_stack(cf, wid, vm, scp, d)) < 0) { return r; }
 	lua_setfield(vm, LUA_REGISTRYINDEX, o.uuid().to_s(buf, sizeof(buf)));
 	return NBR_OK;
 }
@@ -434,7 +639,7 @@ lua<SR,OF>::unpack_object(SR &sr)
 template <class SR, class OF>
 typename lua<SR,OF>::object *
 lua<SR,OF>::object_new(CF &cf, const world_id *w, 
-		VM vm, UUID &uuid, SR *sr, bool local)
+		VM vm, lua<SR,OF> *scp, UUID &uuid, SR *sr, bool local)
 {
 	object *o = OF::find(uuid);
 	if (o) {
@@ -443,19 +648,25 @@ lua<SR,OF>::object_new(CF &cf, const world_id *w,
 		else { ASSERT(false); return NULL; }
 	}
 	ASSERT(w && (*w)[0]);
+	ASSERT(nbr_thread_is_current(scp->thread()));
 	if (!(o = OF::create(uuid, local))) { return NULL; }
-	o->set_thread(thread());
+	o->set_thread(scp->thread());
 	o->set_wid(w);
 	TRACE("object_new : thread = %p\n", o->thread());
 	char buf[256];
 	const char *id = uuid.to_s(buf, sizeof(buf));
 	TRACE("try to new object <%s>\n", id);
-	vm = vm ? vm : m_vm;
+	vm = vm ? vm : scp->vm();
 	lua_getfield(vm, LUA_REGISTRYINDEX, id);
 	if (lua_isnil(vm, -1)) {
-		TRACE("create new table for <%s>\n", id);
+		static int cnt = 0;
+		cnt++;
 		lua_newtable(vm);
 		lua_setfield(vm, LUA_REGISTRYINDEX, id); /* 2nd table remove from stack */
+		lua_getfield(vm, LUA_REGISTRYINDEX, id);
+		const void *ptr = lua_topointer(vm, -1);
+		TRACE("create new table for <%s>:%u:%p\n", id, cnt, ptr);
+		lua_pop(vm, 1);
 	}
 	lua_pop(vm, 1);/* remove table(or nil) from lua stack */
 	if (sr) {
@@ -464,7 +675,7 @@ lua<SR,OF>::object_new(CF &cf, const world_id *w,
 			o->set_connection(NULL);	/* no unpack data specified */
 			return o;
 		}
-		if (unpack_object(cf, *w, vm, d, *o) < 0) {
+		if (unpack_object(cf, *w, vm, scp, d, *o) < 0) {
 			OF::destroy(o);
 			return NULL;
 		}
@@ -493,23 +704,63 @@ lua<SR,OF>::rpc_new(VM vm, object *o, const char *name)
 }
 
 template <class SR, class OF>
-typename lua<SR,OF>::fiber *lua<SR,OF>::fiber_new(
-		S *c, U32 msgid, const world_id *wid, typename fiber::exit_fn fn)
+void lua<SR,OF>::fiber_delete(fiber *fb)
+{
+	ASSERT(!fb->scp() || fb->scp()->check_fiber(*fb));
+#if defined(_RPC_PROF)
+	update_rpc_prof(*fb);
+#endif
+	fb->scp()->fibers().destroy(fb);
+}
+
+#if defined(_RPC_PROF)
+template <class SR, class OF>
+void lua<SR,OF>::update_rpc_prof(fiber &fb)
+{
+	TRACE("fb-attr = %u %u\n", fb.iot(), fb.rt());
+	if (fb.iot() == fiber::io_type_socket && 
+		fb.rt() == vmprotocol::rpct_method) {
+		U32 t = (U32)(nbr_time() - fb.start_time());
+		if (t > m_rpcmax) {
+			m_rpcmax = t;
+		}
+		if (m_rpcmin == 0LL || t < m_rpcmin) {
+			m_rpcmin = t;
+		}
+		m_rpctot += t;
+		m_rpccnt++;
+	}	
+}
+#endif
+
+template <class SR, class OF>
+template <class V>
+typename lua<SR,OF>::fiber *lua<SR,OF>::fiber_new(V &v, rpctype rt,  
+		U32 msgid, const world_id *wid, typename fiber::template exit_fn<V>::type fn)
 {
 	fiber *fb = m_fibers.create();
 	if (!fb) { ASSERT(false); return NULL; }
 	bool _init = !(fb->operator VM());
 	lua_settop(m_vm, 0);
-	if (fb->init_from_vm(this, wid, c, msgid, fn)) {
+	if (fb->init_from_vm(this, wid, rt, v, msgid, fn)) {
 		if (_init) {
 			TRACE("insert fbmap: %p,%llx\n", fb, fb->fbkey());
 			m_fbmap.insert(fb, fb->fbkey());
 			ASSERT(((VM)m_fbmap.find(fb->fbkey())) == (VM)fb);
+#if defined(_DEBUG)
+			lua_pushthread(*fb);
+			lua_newtable(*fb);
+			lua_pushcfunction(*fb, gc_fiber);
+			lua_setfield(*fb, -2, "__gc");
+			lua_setmetatable(*fb, -2);
+			lua_settop(*fb, 0);
+#endif
 		}
 		return fb;
 	}
 	else {
-		m_fibers.destroy(fb);
+		ASSERT(check_fiber(*fb));
+		fiber_delete(fb);
 		return NULL;
 	}
 }
@@ -559,7 +810,6 @@ int lua<SR,OF>::pack_lua_stack(SR &sr, VM vm, int index)
 		index = (index < 0 ? lua_gettop(vm) + index + 1 : index);
 		r = lua_objlen(vm, index);
 		ASSERT(index < 30);
-		TRACE("*******************lua: t(%p/%d)\n", vm,index);
 		sr.push_map_len(r);
 		r = lua_gettop(vm);	/* preserve current stack size to r */
 		lua_pushnil(vm);	/* push first key (idiom, i think) */
@@ -612,17 +862,22 @@ int lua<SR,OF>::pack_lua_stack(SR &sr, VM vm, int index)
 }
 
 template <class SR, class OF>
-bool lua<SR,OF>::unpack_lua_stack(CF &cf, const world_id &wid, SR &sr, VM vm)
+bool lua<SR,OF>::unpack_lua_stack(CF &cf, const world_id &wid, SR &sr, VM vm, 
+		lua<SR,OF> *scp)
 {
 	typename SR::data d;
+	//TRACE("unpack_lua_stack: before: %u\n", sr.unpack_remain());
 	if (sr.unpack(d) <= 0) {
 		return false;
 	}
-	put_to_lua_stack(cf, wid, vm, d);
+	TRACE("unpack_lua_stack: %p,%p: type(d)=%u,%u\n", vm, scp, type(d),
+		sr.unpack_remain());
+	put_to_lua_stack(cf, wid, vm, scp, d);
 	return true;
 }
 template <class SR, class OF>
-int lua<SR,OF>::put_to_lua_stack(CF &cf, const world_id &wid, VM vm, data &d)
+int lua<SR,OF>::put_to_lua_stack(CF &cf, const world_id &wid, VM vm, 
+			lua<SR,OF> *scp, data &d)
 {
 	switch(type(d)) {
 	case LUA_TNIL:
@@ -640,8 +895,8 @@ int lua<SR,OF>::put_to_lua_stack(CF &cf, const world_id &wid, VM vm, data &d)
 	case LUA_TTABLE:
 		lua_newtable(vm);
 		for (int i = 0; i < to_maplen(d); i++) {
-			put_to_lua_stack(cf,wid,vm,key(d,i));
-			put_to_lua_stack(cf,wid,vm,val(d,i));
+			put_to_lua_stack(cf,wid,vm,scp,key(d,i));
+			put_to_lua_stack(cf,wid,vm,scp,val(d,i));
 			lua_settable(vm, -3);
 		}
 		break;
@@ -655,10 +910,11 @@ int lua<SR,OF>::put_to_lua_stack(CF &cf, const world_id &wid, VM vm, data &d)
 			}
 		} break;
 	case LUA_TUSERDATA: {/* = array ( LUA_TUSERDATA, UUID, objectdata ) */
-		object *o = object_new(cf, &wid, vm, 
+		object *o = object_new(cf, &wid, vm, scp,  
 				*((UUID *)to_p(elem(d, 1))), NULL, false);
 		if (o) { 
-			if (o->remote() && unpack_object(cf, wid, vm, elem(d, 2), *o) < 0) {
+			if (o->remote() && 
+				unpack_object(cf, wid, vm, scp, elem(d, 2), *o) < 0) {
 				return NBR_EFORMAT;
 			}
 			push_object(vm, o); 
@@ -737,6 +993,16 @@ int      lua<SR,OF>::chunk_sr_writer(VM vm, const void *p, size_t l, void *ud)
 	if (wfc->sr->push_raw_onlydata((const char *)p, l) < 0) {
 		return -1;
 	}
+#if defined(_DEBUG)
+        if (wfc->n_write <= 12) {
+                int upto = l > 12 ? 12 : l;
+                TRACE("write pcchunk: len=%u,chnk=[%02x", upto, *(char *)p);
+		for (int i = 1; i < upto; i++) {
+			TRACE(":%02x", ((char *)p)[i]);
+		}
+		TRACE("]\n");
+        }
+#endif
 	wfc->n_write += l;
 	return 0;
 }
@@ -752,11 +1018,13 @@ lua<SR,OF>::vm_owner(VM vm)
 }
 
 template <class SR, class OF>
-void lua<SR,OF>::fiber_exit_call(fiber &fb, int basestk, int r, void *p, rpctype rt)
+template <class SNDR>
+void lua<SR,OF>::fiber_exit_call(fiber &fb, int basestk, int r, SNDR &s, 
+			rpctype rt/* rpct_invalid */)
 {
 	ASSERT(basestk >= 0);
-	S &c = *(S *)p;
-	SR &sr = serializer();
+	SR &sr = fb.scp()->serializer();
+	dump_stack(fb);
 	PREPARE_PACK(sr, max_rpc_packlen);
 	int top = lua_gettop(fb);
 	ASSERT(top <= 30);
@@ -765,21 +1033,24 @@ void lua<SR,OF>::fiber_exit_call(fiber &fb, int basestk, int r, void *p, rpctype
 			break;
 		}
 	}
+	rt = ((rt == vmprotocol::rpct_invalid) ? fb.rt() : rt);
+	fb.call_exit(r, s, rt, sr.p(), sr.len());
 	FINISH_PACK(sr);
-	fb.call_exit(r, c, rt, sr.p(), sr.len());
+	fiber_delete(&fb);
 	return;
 }
 
 
 template <class SR, class OF>
-template <class SNDR>
-int	lua<SR,OF>::reply_result(SNDR &c, fiber &fb, int n_basestksz, rpctype rt)
+int	lua<SR,OF>::reply_result(fiber &fb, int n_basestksz, rpctype rt/* rpc_invalid */)
 {
 	ASSERT(n_basestksz >= 0);
+	dump_stack(fb);
 	lua<SR,OF> *scp = fb.scp();
 	ASSERT(scp);
 	SR &sr = scp->serializer();
 	PREPARE_PACK(sr, max_rpc_packlen);
+	rt = ((rt == vmprotocol::rpct_invalid) ? fb.rt() : rt);
 	int top = lua_gettop(fb);
 	for (int i = n_basestksz, r; i <= top; i++) {
 		if ((r = pack_lua_stack(sr, fb, i)) < 0) {
@@ -787,20 +1058,32 @@ int	lua<SR,OF>::reply_result(SNDR &c, fiber &fb, int n_basestksz, rpctype rt)
 			return r;
 		}
 	}
-	int r = c.reply_rpc(*(fb.connection()), fb.rmsgid(), sr.p(), sr.len(), rt);
+	int r;
+	switch(fb.iot()) {
+	case fiber::io_type_socket:
+		r = fb.connection()->reply_rpc(*(fb.connection()),fb.rmsgid(),sr.p(),sr.len(),rt);
+		break;
+	case fiber::io_type_channel:
+		r = fb.vmmsg().reply_rpc(*(fb.connection()),fb.rmsgid(),sr.p(),sr.len(),rt);
+		break;
+	}
 	FINISH_PACK(sr);
+	fiber_delete(&fb);
 	return r;
 }
 
 template <class SR, class OF>
 template <class SNDR>
 int 	lua<SR,OF>::dispatch(SNDR &c, fiber &fb, 
-				int n_args, bool from_resume, rpctype rt)
+				int n_args, bool from_resume)
 {
 	int top = lua_gettop(fb);
 	int stksz = (from_resume ? (top - n_args + 1) : (top - n_args));
-	TRACE("stksz = %u, top,nargs=%u,%u(f=%s)\n", 
-			stksz, top, n_args, from_resume ? "resume" : "first");
+	TRACE("th=%p:%p:stksz=%u,top,nargs=%u,%u(f=%s),rt=%u\n", 
+		fb.scp()->thread(), &fb, stksz, top, n_args, 
+		from_resume ? "resume" : "first",fb.rt());
+	dump_stack(fb);
+	ASSERT(top != 0 || n_args != 0);
 	int r = lua_resume(fb, n_args);
 	if (r == LUA_YIELD) {
 		return NBR_OK /* successfully suspended */;
@@ -808,28 +1091,27 @@ int 	lua<SR,OF>::dispatch(SNDR &c, fiber &fb,
 	else {
 		if (r != 0) {
 			/* error happen */
-			TRACE("fiber execution failure %d <%s>\n", r, lua_tostring(fb, -1));
+			fprintf(stderr,"fiber failure %d <%s>\n", r, lua_tostring(fb, -1));
 			if (fb.need_reply()) {
 				/* send only remote error message to caller */
-				reply_result(c, fb, lua_gettop(fb), vmprotocol::rpct_error);
+				reply_result(fb, lua_gettop(fb), vmprotocol::rpct_error);
 			}
 			else {
-				fiber_exit_call(fb, stksz, NBR_ESYSCALL, &c, rt);
+				fiber_exit_call(fb, stksz, NBR_ESYSCALL, c);
 			}
-			m_fibers.destroy(&fb);
 			return NBR_ESYSCALL;
 		}
 		else {
 			/* sucessfully finished */
 			if (fb.need_reply()) {
-				r = reply_result(c, fb, stksz, rt);
+				r = reply_result(fb, stksz);
 			}
 			else {
-				fiber_exit_call(fb, stksz, NBR_OK, &c, rt);
+				fiber_exit_call(fb, stksz, NBR_OK, c);
 				r = NBR_OK;
 			}
+			TRACE("fiber end : %p\n", &fb);
 			/* whatever result is, free fiber for this function call */
-			m_fibers.destroy(&fb);
 		}
 		return r;
 	}
@@ -838,7 +1120,7 @@ int 	lua<SR,OF>::dispatch(SNDR &c, fiber &fb,
 template <class SR, class OF>
 int lua<SR,OF>::pack_object(VM vm, SR &sr, const object &o, bool with_val)
 {
-	/* object data = ARRAY( ARRAY(host list), [MAP(object data) (optional)] ) */
+	/* object data = ARRAY( STRING(typename), [MAP(object data) (optional)] ) */
 	sr.push_array_len(with_val ? 2 : 1);	
 	sr.push_string(o.type(), strlen(o.type()));
 	if (with_val) {
@@ -848,7 +1130,8 @@ int lua<SR,OF>::pack_object(VM vm, SR &sr, const object &o, bool with_val)
 }
 
 template <class SR, class OF>
-int lua<SR,OF>::unpack_object(CF &cf, const world_id &wid, VM vm, data &d, object &o)
+int lua<SR,OF>::unpack_object(CF &cf, const world_id &wid, VM vm, lua<SR,OF> *scp, 
+		data &d, object &o)
 {
 	if (to_alen(d) <= 0) { 
 		ASSERT(false); 
@@ -868,22 +1151,26 @@ int lua<SR,OF>::unpack_object(CF &cf, const world_id &wid, VM vm, data &d, objec
 	TRACE("object type : <%s>\n", o.type());
 	/* unpack object data */
 	if (to_alen(d) > 1) {
-		return unpack_object_value(cf, wid, vm, o, elem(d, 1));
+		return unpack_object_value(cf, wid, vm, scp, o, elem(d, 1));
 	}
 	return NBR_OK;
 }
 
 template <class SR, class OF>
-int lua<SR,OF>::resume_create(S &c, CF &cf, const world_id &wid, fiber &fb, 
+template <class SNDR>
+int lua<SR,OF>::resume_create(SNDR &c, CF &cf, int r, const world_id &wid, fiber &fb, 
 		UUID &uuid, SR &sr)
 {
+	if (r < 0) {
+		lua_pushfstring(fb, "object create fail (%d)", r);
+		return reply_result(fb, lua_gettop(fb), vmprotocol::rpct_error);
+	}
 	/* create user object (remote) */
-	object *o = object_new(cf, &wid, fb, uuid, &sr, false);
+	object *o = object_new(cf, &wid, fb, fb.scp(), uuid, &sr, false);
 	/* push to stack (with metamethod) */
 	push_object(fb, o);
-	/* yield! 
-	 * TODO : need to pass correct rpctype? */
-	return dispatch(c, fb, 1, true, vmprotocol::rpct_method);
+	/* yield! */ 
+	return dispatch(c, fb, 1, true);
 }
 
 template <class SR, class OF>
@@ -891,6 +1178,7 @@ template <class SNDR>
 int	lua<SR,OF>::resume_proc(SNDR &c, CF &cf, const world_id &wid, 
 		fiber &fb, char *args, size_t alen, rpctype rt)
 {
+	ASSERT(nbr_thread_is_current(m_thrd));
 	SR &sr = serializer();
 	sr.unpack_start(args, alen);
 	int n_args = 0;
@@ -902,15 +1190,15 @@ int	lua<SR,OF>::resume_proc(SNDR &c, CF &cf, const world_id &wid,
 		 * ENVIRONINDEX is not valid. */
 		lua_getfield(vm, LUA_GLOBALSINDEX, "remote_error");
 		lua_pushstring(vm, (const char *)c.addr());
-		unpack_lua_stack(cf, wid, sr, vm);
+		unpack_lua_stack(cf, wid, sr, fb);
 		if (!lua_isnil(vm, -2)) {/* if error function is defined */
 			lua_pcall(vm, 2, 0, 0);
 		}
-		return NBR_OK;
+		return dispatch(c, fb, lua_gettop(fb), true);
 	case vmprotocol::rpct_getter:
-		if (unpack_lua_stack(cf, wid, sr, vm) < 0) {
+		if (unpack_lua_stack(cf, wid, sr, fb) < 0) {
 			lua_pushnil(vm);
-			return dispatch(c, fb, 1, true, rt);
+			return dispatch(c, fb, 1, true);
 		}
 		/* if function type returned, return rpc object instead. */
 		if (lua_type(vm, -1) == LUA_TFUNCTION) {
@@ -918,7 +1206,7 @@ int	lua<SR,OF>::resume_proc(SNDR &c, CF &cf, const world_id &wid,
 			data proc_id, uuid;
 			if (sr.unpack(proc_id) <= 0 || sr.unpack(uuid) <= 0) {
 				lua_pushnil(vm);
-				return dispatch(c, fb, 1, lua_rpc_reply, rt);
+				return dispatch(c, fb, 1, lua_rpc_reply);
 			}
 			object *o = OF::find(*((UUID *)to_p(uuid)));
 			if (!o || !rpc_new(vm, o, to_s(proc_id))) {
@@ -932,29 +1220,37 @@ int	lua<SR,OF>::resume_proc(SNDR &c, CF &cf, const world_id &wid,
 				 * rpc object still remain. so can return rpc object to caller. */
 			}
 		}
-		return dispatch(c, fb, 1, true, rt);
+		return dispatch(c, fb, 1, true);
 	case vmprotocol::rpct_method_fw:
 	case vmprotocol::rpct_global_fw:
-		while(unpack_lua_stack(cf, wid, sr, vm)) {
+	case vmprotocol::rpct_call:
+	case vmprotocol::rpct_call_global: {
+		while(unpack_lua_stack(cf, wid, sr, fb)) {
 			n_args++;
 			if (n_args > 100) {
 				ASSERT(false);
 				return NBR_EINVAL;
 			}
 		}
-		return rt == vmprotocol::rpct_method_fw ? 
-				reply_result(c, fb, 1, vmprotocol::rpct_method) : 
-				reply_result(c, fb, 1, vmprotocol::rpct_global);
+		ASSERT(rt != fb.rt());
+		if (fb.need_reply()) {
+			return reply_result(fb, 1);
+		}
+		else {
+			fiber_exit_call(fb, 1, NBR_OK, c);
+			return NBR_OK;
+		}
+	}
 	case vmprotocol::rpct_setter:
 	default:
-		while(unpack_lua_stack(cf, wid, sr, vm)) {
+		while(unpack_lua_stack(cf, wid, sr, fb)) {
 			n_args++;
 			if (n_args > 100) {
 				ASSERT(false);
 				return NBR_EINVAL;
 			}
 		}
-		return dispatch(c, fb, n_args, true, rt);
+		return dispatch(c, fb, n_args, true);
 	}
 }
 
@@ -968,7 +1264,7 @@ int lua<SR,OF>::rpc_recver_hook(S &c, U32 rmsgid, const proc_id &pid,
 		char b[256];
 		lua_pushfstring(fb, "untrust node call protected routine <%s:%s>",
 			(const char *)c.addr(), o.uuid().to_s(b, sizeof(b)));
-		reply_result(c, fb, lua_gettop(fb), vmprotocol::rpct_error);
+		reply_result(fb, lua_gettop(fb), vmprotocol::rpct_error);
 		return NBR_OK;
 	}
 	else if (ca == CALL_CLIENT) {
@@ -976,7 +1272,7 @@ int lua<SR,OF>::rpc_recver_hook(S &c, U32 rmsgid, const proc_id &pid,
 		S *s = c.from_object(o);
 		if (!s) {
 			lua_pushstring(fb, "client rpc: player already gone");
-			reply_result(c, fb, lua_gettop(fb), vmprotocol::rpct_error);
+			reply_result(fb, lua_gettop(fb), vmprotocol::rpct_error);
 			return NBR_OK;			
 		}
 		typename S::querydata *q;
@@ -988,34 +1284,33 @@ int lua<SR,OF>::rpc_recver_hook(S &c, U32 rmsgid, const proc_id &pid,
 			rtfw = vmprotocol::rpct_global_fw; break;
 		default: ASSERT(false); 
 			lua_pushfstring(fb, "client rpc: rpctype invalid (%d)", rt);
-			reply_result(c, fb, lua_gettop(fb), vmprotocol::rpct_error);
+			reply_result(fb, lua_gettop(fb), vmprotocol::rpct_error);
 			return NBR_OK;
 		}
 		if (s->send_rpc(c, o.uuid(), (const proc_id &)*_pid, p, pl, rtfw, &q) < 0) {
 			lua_pushstring(fb, "forward rpc to client fail");
-			reply_result(c, fb, lua_gettop(fb), vmprotocol::rpct_error);
+			reply_result(fb, lua_gettop(fb), vmprotocol::rpct_error);
 			return NBR_OK;			
 		}
 		q->m_fb = &fb;
-		q->msgid = rmsgid;
+		ASSERT(fb.scp()->check_fiber(fb));
 		return NBR_OK;
 	}
 	return NBR_ENOTFOUND;
 }
 
 template <class SR, class OF>
-template <class SNDR>
-int lua<SR,OF>::local_call(SNDR &c, CF &cf, U32 rmsgid, 
+int lua<SR,OF>::local_call(VMMSG &c, CF &cf, U32 rmsgid, 
 		object &o, proc_id &pid, char *p, size_t l, rpctype rt)
 {
 	data d;
 	char b[256];
 	fiber *fb;
 	int n_args = 0, r;
+	ASSERT(nbr_thread_is_current(m_thrd));
 	SR &sr = serializer();
 	S *rsndr = NULL;
 	const world_id *wid = o.wid();
-	lua_settop(m_vm, 0);
 	sr.unpack_start(p, l);
 	switch(rt) {
 	case vmprotocol::rpct_getter: {
@@ -1045,9 +1340,9 @@ int lua<SR,OF>::local_call(SNDR &c, CF &cf, U32 rmsgid,
 			goto error;
 		}
 		TRACE("field name = %s.%s\n", o.uuid().to_s(b, sizeof(b)), to_s(d));
-		unpack_lua_stack(cf, *wid, sr, m_vm);	/* object put on stack */
+		unpack_lua_stack(cf, *wid, sr, m_vm, this);/* object put on stack */
 		set_object_value(m_vm, o, to_s(d), lua_gettop(m_vm)); /* put to object table. 
-											but above object left on stack */
+						but above object left on stack */
 		PREPARE_PACK(sr, max_rpc_packlen);
 		if ((r = pack_lua_stack(sr, m_vm, -1)) < 0) {
 			FINISH_PACK(sr);
@@ -1059,24 +1354,32 @@ int lua<SR,OF>::local_call(SNDR &c, CF &cf, U32 rmsgid,
 		return r;
 	}
 	case vmprotocol::rpct_call:
-		if (!(fb = fiber_new(NULL, rmsgid, wid, NULL))) {
+	case vmprotocol::rpct_call_global:
+		if (!(fb = fiber_new(c, rt, rmsgid, wid, NULL))) {
 			return NBR_EEXPIRE;
 		}
 		ASSERT(o.thread_current());
-		push_object(*fb, &o);			/* push obj */
-		lua_getfield(*fb, -1, pid);		/* push method */
-		lua_pushvalue(*fb, -2);			/* copy obj */
+		if (rt == vmprotocol::rpct_call) {
+			push_object(*fb, &o);		/* push obj */
+			lua_getfield(*fb, -1, pid);	/* push method */
+			lua_pushvalue(*fb, -2);		/* copy obj */
+		}
+		else {
+			lua_getfield(*fb, LUA_GLOBALSINDEX, pid);
+			push_object(*fb, &o);
+		}
+		TRACE("local_call %s:%p\n", pid, fb);
 		n_args = 1;
 		while(unpack_lua_stack(cf, *wid, sr, *fb)) {
 			n_args++;
 			if (n_args > 100) {
 				ASSERT(false);
 				lua_pushstring(*fb, "remote: too many argument");
-				return reply_result(c, *fb, 
-						lua_gettop(*fb), vmprotocol::rpct_error);
+				return reply_result(*fb, 
+					lua_gettop(*fb), vmprotocol::rpct_error);
 			}
 		}
-		return dispatch(c, *fb, n_args, true, rt);
+		return dispatch(c, *fb, n_args, false);
 	default:
 		ASSERT(false);
 		lua_pushfstring(m_vm, "remote: invalid rpc type (%d)", rt);
@@ -1092,24 +1395,45 @@ error:
 
 template <class SR, class OF>
 int lua<SR,OF>::call_proc(S &c, CF &cf, U32 rmsgid, object &o, proc_id &p,
-		char *args, size_t alen, rpctype rt, typename fiber::exit_fn fn)
+		char *args, size_t alen, rpctype rt, typename fiber::template exit_fn<S>::type fn)
 {
 	data d;
 	const world_id *wid = o.wid();
-	fiber *fb = fiber_new(&c, rmsgid, wid, fn);
+	fiber *fb = fiber_new(c, rt, rmsgid, wid, fn);
 	if (!fb) {
 		return NBR_EEXPIRE;
 	}
 	int n_args = 0;
-	lua_settop(*fb, 0);
+	if (rpc_recver_hook(c, rmsgid, p, *fb, o, args, alen, rt) >= 0) {
+		return NBR_OK;
+	}
+	/* if different thread has o, then forward to this thread */
+	if (!o.thread_current()) {
+		VMMSG vmm(this, thread(), o.thread());
+		typename S::querydata *q;
+		rpctype lrt;
+		switch(rt) {
+		case vmprotocol::rpct_method: lrt = vmprotocol::rpct_call; break;
+		case vmprotocol::rpct_global: lrt = vmprotocol::rpct_call_global; break;
+		default: ASSERT(false);
+			lua_pushfstring(*fb, "invalid local call %d", rt);
+			return reply_result(*fb, 1, vmprotocol::rpct_error);
+		}
+		if (vmm.send_rpc(c, o.uuid(), p, args, alen, lrt, &q) < 0) {
+			lua_pushstring(*fb, "forward to another thread fail");
+			return reply_result(*fb, 1, vmprotocol::rpct_error);
+		}
+		q->m_fb = fb;
+		ASSERT(fb->scp()->check_fiber(*fb));
+		//TRACE("forward rpc to another vm (%s:%p:%u)\n", p, fb, rmsgid);
+		return NBR_OK;
+	}
+	ASSERT(nbr_thread_is_current(m_thrd));
 	SR &sr = serializer();
 	sr.unpack_start(args, alen);
 	switch(rt) {
 	case vmprotocol::rpct_method:
 	case vmprotocol::rpct_method_fw:
-		if (rpc_recver_hook(c, rmsgid, p, *fb, o, args, alen, rt) >= 0) { 
-			return NBR_OK; 
-		}
 		push_object(*fb, &o);	/* push object */
 		lua_getfield(*fb, -1, p);/* push function */
 		ASSERT(lua_isfunction(*fb, -1));
@@ -1119,33 +1443,28 @@ int lua<SR,OF>::call_proc(S &c, CF &cf, U32 rmsgid, object &o, proc_id &p,
 		break;
 	case vmprotocol::rpct_global:
 	case vmprotocol::rpct_global_fw:
-		if (rpc_recver_hook(c, rmsgid, p, *fb, o, args, alen, rt) >= 0) { 
-			return NBR_OK; 
-		}
 		/* seems *fb's GLOBAL == ENVIRONMENT (but now when no function starts,
 		 * ENVIRONINDEX is not valid. */
-		else {
-			lua_getfield(*fb, LUA_GLOBALSINDEX, p);
-			ASSERT(lua_isfunction(*fb, -1));
-			push_object(*fb, &o);	/* push object */
-			n_args = 1;
-		}
+		lua_getfield(*fb, LUA_GLOBALSINDEX, p);
+		ASSERT(lua_isfunction(*fb, -1));
+		push_object(*fb, &o);	/* push object */
+		n_args = 1;
 		break;
 	default:
 		ASSERT(false);
 		lua_pushfstring(*fb, "remote: invalid rpc type (%d)", rt);
-		return reply_result(c, *fb, 1, vmprotocol::rpct_error);
+		return reply_result(*fb, 1, vmprotocol::rpct_error);
 	}
 	while(unpack_lua_stack(cf, *wid, sr, *fb)) {
 		n_args++;
 		if (n_args > 100) {
 			ASSERT(false);
 			lua_pushstring(*fb, "remote: too many argument");
-			return reply_result(c, *fb, 
+			return reply_result(*fb, 
 					lua_gettop(*fb), vmprotocol::rpct_error);
 		}
 	}
-	return dispatch(c, *fb, n_args, false, rt);
+	return dispatch(c, *fb, n_args, false);
 }
 
 template <class SR, class OF>
@@ -1210,6 +1529,27 @@ int lua<SR,OF>::gc_fiber(VM)
 {
 	ASSERT(false);
 }
+template <class SR, class OF>
+void lua<SR,OF>::dump_table(VM vm, int index)
+{
+	ASSERT(index > 0);	/* should give positive index(because minus index
+				changes its meaning after lua_pushnil below) */	
+	lua_pushnil(vm);        /* push first key (idiom, i think) */
+	printf("table ptr = %p\n", lua_topointer(vm, index));
+	while(lua_next(vm, index)) {     /* put next key/value on stack */
+		printf("table[%s]=%u\n", lua_tostring(vm, -2), lua_type(vm, -1));
+		lua_pop(vm, 1);
+	}
+}
+template <class SR, class OF>
+void lua<SR,OF>::dump_stack(VM vm)
+{
+	int top = lua_gettop(vm);
+	TRACE("stack size = %u\n",top);
+	for (int i = 1; i <= top; i++) {
+		TRACE("[%u]:%u:%p\n", i, lua_type(vm, i), lua_topointer(vm, i));
+	}
+}
 #endif
 
 template <class SR, class OF>
@@ -1243,9 +1583,8 @@ int lua<SR,OF>::create(VM vm)
 	/* send object creation request to master */
 	fiber *f = vm_owner(vm);
 	lua<SR,OF> *scp = f->scp();
-	S *c = f->connection();
-	if (!scp || !c || !c->valid()) {
-		lua_pushstring(vm, "invalid fiber : connection invalid");
+	if (!scp) {
+		lua_pushstring(vm, "invalid interpreter");
 		lua_error(vm);
 	}
 	SR &sr = scp->serializer();
@@ -1260,13 +1599,25 @@ int lua<SR,OF>::create(VM vm)
 	}
 	typename S::querydata *q;
 	UUID uuid = OF::new_id();
-	if (c->load_or_create_object(0, NULL, uuid, 
-		sr.p(), sr.len(), vmprotocol::load_purpose_create, &q) < 0) {
+	switch (f->iot()) {
+	case fiber::io_type_socket:
+		r = f->connection()->load_or_create_object(0, NULL, uuid, 
+			sr.p(), sr.len(), vmprotocol::load_purpose_create, &q);
+		break;
+	case fiber::io_type_channel:
+		r = f->vmmsg().load_or_create_object(0, &(f->wid()), uuid,
+			sr.p(), sr.len(), vmprotocol::load_purpose_create, &q);
+		break;
+	default: ASSERT(false); r = NBR_ENOTFOUND;
+		break;
+	}
+	if (r < 0) {
 		FINISH_PACK(sr);
 		lua_pushstring(vm, "send object creation fail");
 		lua_error(vm);
 	}
 	q->m_fb = f;
+	ASSERT(f->scp()->check_fiber(*f));
 	FINISH_PACK(sr);
 	return lua_yield(vm, 1);
 }
@@ -1316,6 +1667,7 @@ int lua<SR,OF>::index(VM vm)
 				lua_error(vm);
 			}
 			q->m_fb = f;
+			ASSERT(f->scp()->check_fiber(*f));
 			FINISH_PACK(sr);
 			return lua_yield(vm, 1);
 		}
@@ -1350,9 +1702,10 @@ int lua<SR,OF>::global_newindex(VM vm)
 	fiber *f = vm_owner(vm);
 	lua<SR,OF> *scp = f->scp();
 	const char *k = lua_tostring(vm, 2);
-	if (!lua_isfunction(vm, 3) && !(o = to_o(vm, 3))) {
-		lua_pushstring(vm, "only pfm object can put on envtable");
-		lua_error(vm);
+	if (!(o = to_o(vm, 3, false))) {
+		TRACE("not pfm object. set locally\n");
+		lua_rawset(vm, 1);
+		return 0;
 	}
 	SR &sr = scp->serializer();
 	PREPARE_PACK(sr, max_rpc_packlen);
@@ -1370,6 +1723,9 @@ int lua<SR,OF>::global_newindex(VM vm)
 		lua_pushstring(vm, "error send packet");
 		lua_error(vm);
 	}
+	/* first set in this vm (need to use rawset so that global_newindex 
+	will not call again) */
+	lua_rawset(vm, 1);
 	FINISH_PACK(sr);
 	return 0;
 }
@@ -1414,6 +1770,7 @@ int lua<SR,OF>::newindex(VM vm)
 				lua_error(vm);
 			}
 			q->m_fb = f;
+			ASSERT(f->scp()->check_fiber(*f));
 			FINISH_PACK(sr);
 			return lua_yield(vm, 1);
 		}
@@ -1448,6 +1805,7 @@ int lua<SR, OF>::rpc_sender_hook(SNDR &c, const proc_id &p,
 		return 1;
 	}
 	q->m_fb = &fb;
+	ASSERT(fb.scp()->check_fiber(fb));
 	return 0;
 }
 

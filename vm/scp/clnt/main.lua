@@ -1,4 +1,4 @@
-function main(player)
+function load_player(player)
 --	if not account.player[0] then
 --		print("create new player")
 --		account.player[0] = pfm.new
@@ -12,7 +12,7 @@ function main(player)
 	player:set_name("takehiro")
 	player.name = "iyatomi"
 	print("set player name!!")
-	retval = player:chat("hehehe")
+	local retval = player:chat("hehehe")
 	assert(retval == 666)
 
 --	real test: single value roundtrip
@@ -24,8 +24,8 @@ function main(player)
 	assert(false == player:echo(false))
 	assert("strstrstr" == player:echo("strstrstr"))
 	function compare_table(t1, t2) 
-		k1,v1 = next(t1)
-		k2,v2 = next(t2)
+		local k1,v1 = next(t1)
+		local k2,v2 = next(t2)
 		while k1 and k2 do
 			print("t1[" .. k1 .. "]=" .. v1 .. ",t2[" .. k2 .. "]=" .. v2)
 			if not k1 == k2 then return false end
@@ -39,7 +39,7 @@ function main(player)
 	function vfunc3(n1, n2, n3)
 		return n1 + n2 + n3
 	end
-	vfunc3_remote = player:echo(vfunc3)
+	local vfunc3_remote = player:echo(vfunc3)
 	assert(vfunc3_remote(100, 200, 300) == 600)
 	assert(vfunc3_remote(200, 400, 600) == vfunc3(200, 400, 600))
 
@@ -48,7 +48,7 @@ function main(player)
 	assert(retval == 666)
 
 --	real test: calculate all table element sum
-	list = { 123, 456, 789, "length 16 string" }
+	local list = { 123, 456, 789, "length 16 string" }
         retval = player:calc_table_element_sum(list)
 	print("calc_table_element retval = " .. retval)
 	assert(retval == 1384)
@@ -60,7 +60,7 @@ function main(player)
 
 --	real test: enter world
 	player:enter_world()
-	pos = player:get_pos()
+	local pos = player:get_pos()
 	assert(compare_table(pos, {10000, 20000, 5000}))
 
 -- 	real test: name convention
@@ -71,12 +71,16 @@ function main(player)
 		return r;
 	end
 	player:notify_chat("fuhehe")
-	retval = player:client_open_ui("index.html", "h=20", "w=100")
+	local retval = player:client_open_ui("index.html", "h=20", "w=100")
 	print("client_open_ui : retval = " .. retval)
 	assert(retval == "index.html|h=20|w=100")
 	print("name convention test 1 pass")
 	assert(player:notify_client_open_ui("index.html", "h=20", "w=100") == nil)
 	player:_protected_call()
+end
+
+function init_object(obj, t)
+	assert(false)
 end
 
 function remote_error(from, msg)
