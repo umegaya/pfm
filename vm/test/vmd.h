@@ -34,15 +34,26 @@ public:
 		vmd_session_client = 3,
 	} vmd_stype;
 	/* sessions */
-	class vmdmstr : public vmnode<vmdmstr> {
+	class vmdmstr;
+	typedef class _mstr_factory : public factory_impl<vmdmstr> {
+		class vmd *m_vmd;
 	public:
-		typedef vmnode<vmdmstr> super;
-		typedef class _factory : public super::mstr_base_factory {
-			class vmd *m_vmd;
-		public:
-			void set_daemon(class vmd *d) { m_vmd = d; }
-			void fin();
-		}	factory;
+		typedef factory_impl<vmdmstr> super;
+		void set_daemon(class vmd *v) { m_vmd = v; }
+		void fin();
+		vmdmstr *connect(const mac_idgen::UUID &, const address &a) {
+			vmdmstr *c = pool().create(a);
+			if (!c->valid() || super::connect(c, a) < 0) {
+				pool().erase(a);
+				return NULL;
+			}
+			return c;
+		}
+	}	mstr_factory;
+	class vmdmstr : public vmnode<vmdmstr,mstr_factory> {
+	public:
+		typedef vmnode<vmdmstr,mstr_factory> super;
+		typedef mstr_factory factory;
 		typedef super::protocol protocol;
 		typedef super::world world;
 		typedef super::proc_id proc_id;
@@ -129,8 +140,9 @@ public:
 		const UUID &verify_uuid(const UUID &uuid) {
 			return protocol::is_valid_id(m_session_uuid) ? m_session_uuid : uuid; }
 		bool trust() const { return !protocol::is_valid_id(m_session_uuid); }
-		int on_open(const config &);
+#if defined(_RPC_PROF)
 		int on_close(int );
+#endif
 	public:/* vmdsvnt */
 		int recv_cmd_new_object(U32 msgid, const world_id &wid,
 				UUID &uuid, char *p, size_t l);
@@ -150,15 +162,23 @@ public:
 		static void exit_load_player(vmdsvnt &sender, vmdsvnt &recver,
 			VM vm, int r, U32 rmsgid, rpctype rt, char *p, size_t l);
 	};
-	class vmdclnt : public vmnode<vmdclnt> {
+	class vmdclnt;
+	typedef class _clnt_factory : public factory_impl<vmdclnt,arraypool<vmdclnt> > {
+		class vmd *m_vmd;
 	public:
-		typedef vmnode<vmdclnt> super;
-		typedef class _factory : public super::clnt_base_factory {
-			class vmd *m_vmd;
-		public:
-			void set_daemon(class vmd *v) { m_vmd = v; }
-			void fin();
-		}	factory;
+		typedef factory_impl<vmdclnt,arraypool<vmdclnt> > super;
+		void set_daemon(class vmd *v) { m_vmd = v; }
+		void fin();
+		vmdclnt *connect(const mac_idgen::UUID &, const address &a) {
+			super::iterator i = pool().begin();
+			return &(*i);
+		}
+	}	clnt_factory;
+	class vmdclnt :
+		public vmnode<vmdclnt,clnt_factory> {
+	public:
+		typedef vmnode<vmdclnt,clnt_factory> super;
+		typedef clnt_factory factory;
 		typedef super::protocol protocol;
 		typedef super::script script;
 		typedef super::vm_msg vm_msg;
@@ -171,21 +191,24 @@ public:
 			/* invalid -> login_attempt -> state_pending <-> state_resume */
 			client_state_error,
 		};
-		static client_state m_cs;
 	protected:
 		UUID m_session_uuid;
 		UTIME m_last_process;
 		protocol::login_id m_account;
+		client_state m_cs;
+		int m_iter;
 	public:
 		vmdclnt() : super(this), m_session_uuid(protocol::invalid_id()),
-			m_last_process(0LL) {}
+			m_last_process(0LL), m_cs(client_state_invalid), m_iter(0){}
 		~vmdclnt() {}
 		static const int vmd_session_type = vmd_session_client;
 		static U32 get_msgid(factory *f) { return f->msgid(); }
 		inline script *fetch_vm();
 		static inline script *fetch_vm_from_thread(THREAD);
 		vmdclnt *from_object(object &o) { return NULL; }
-		static void set_state(client_state cs) { m_cs = cs; }
+		void set_state(client_state cs) { m_cs = cs; }
+		void inc_iter_cnt() { m_iter++; }
+		int iter_cnt() const { return m_iter; }
 	public:/* vmdclnt */
 		int recv_code_login(querydata &q, int r, const world_id &wid, 
 			UUID &uuid, char *p, size_t l);
@@ -213,7 +236,7 @@ public:
 	int	create_config(config* cl[], int size);
 	int	boot(int argc, char *argv[]);
 	int	initlib(CONFIG &c);
-	int 	on_signal(int signo);
+	int on_signal(int signo);
 };
 
 inline vmd::vmdmstr::script *vmd::vmdmstr::fetch_vm()

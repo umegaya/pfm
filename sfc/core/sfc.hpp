@@ -265,66 +265,81 @@ public:
 			return nbr_search_init_mem_engine(max, opt, hashsz, sizeof(T));
 		}
 		static int regist(SEARCH s, type t, element *v) {
-			return nbr_search_mem_regist(s, (const char *)&t, sizeof(T), v);
+			return nbr_search_mem_regist(s, kp(t), kl(t), v);
 		}
 		static void unregist(SEARCH s, type t) {
-			nbr_search_mem_unregist(s, (const char *)&t, sizeof(T));
+			nbr_search_mem_unregist(s, kp(t), kl(t));
 		}
 		static element *get(SEARCH s, type t) {
-			return (element *)nbr_search_mem_get(s, (const char *)&t, sizeof(T));
+			return (element *)nbr_search_mem_get(s, kp(t), kl(t));
 		}
+		static inline const char *kp(type t) { return 
+			reinterpret_cast<const char *>(&t); }
+		static inline int kl(type t) { return sizeof(T); }
 	};
 	template <class C>
 	struct 	kcont<C,address> {
 		typedef const address &type;
+		static inline const char *kp(type t) { 
+			return reinterpret_cast<const char *>(t.a()); }
+		static inline int kl(type t) { return t.len(); }
 		static SEARCH init(int max, int opt, int hashsz) {
 			return nbr_search_init_mem_engine(max, opt, hashsz, address::SIZE);
 		}
 		static int regist(SEARCH s, type t, element *v) {
-			return nbr_search_mem_regist(s, t, t.len(), v);
+			return nbr_search_mem_regist(s, kp(t), kl(t), v);
 		}
 		static void unregist(SEARCH s, type t) {
-			nbr_search_mem_unregist(s, t, t.len());
+			nbr_search_mem_unregist(s, kp(t), kl(t));
 		}
 		static element *get(SEARCH s, type t) {
-			return (element *)nbr_search_mem_get(s, t, t.len());
+			return (element *)nbr_search_mem_get(s, kp(t), kl(t));
 		}
 	};
 	template <class C, typename T, size_t N>
 	struct 	kcont<C,T[N]> {
 		typedef const T type[N];
+		static inline const void *kp(type t) { 
+			return reinterpret_cast<const void *>(t); }
+		static inline int kl(type t) { return sizeof(T) * N; }
 		static SEARCH init(int max, int opt, int hashsz) {
 			return nbr_search_init_mem_engine(max, opt, hashsz, sizeof(T) * N);
 		}
 		static int regist(SEARCH s, type t, element *v) {
-			return nbr_search_mem_regist(s, (const char *)t, sizeof(T) * N, v);
+			return nbr_search_mem_regist(s, kp(t), kl(t), v);
 		}
 		static void unregist(SEARCH s, type t) {
-			nbr_search_mem_unregist(s, (const char *)t, sizeof(T) * N);
+			nbr_search_mem_unregist(s, kp(t), kl(t));
 		}
 		static element *get(SEARCH s, type t) {
-			return (element *)nbr_search_mem_get(s, (const char *)t, sizeof(T) * N);
+			return (element *)nbr_search_mem_get(s, kp(t), kl(t));
 		}
 	};
 	template <class C, typename T>
 	struct 	kcont<C,T*> {
 		typedef const T *type;
+		static inline const char *kp(type t) { 
+			return reinterpret_cast<const char *>(t); }
+		static inline int kl(type t) { return sizeof(T); }
 		static SEARCH init(int max, int opt, int hashsz) {
 			return nbr_search_init_mem_engine(max, opt, hashsz, sizeof(T));
 		}
 		static int regist(SEARCH s, type t, element *v) {
-			return nbr_search_mem_regist(s, (const char *)t, sizeof(T), v);
+			return nbr_search_mem_regist(s, kp(t), kl(t), v);
 		}
 		static void unregist(SEARCH s, type t) {
-			nbr_search_mem_unregist(s, (const char *)t, sizeof(T));
+			nbr_search_mem_unregist(s, kp(t), kl(t));
 		}
 		static element *get(SEARCH s, type t) {
-			return (element *)nbr_search_mem_get(s, (const char *)t, sizeof(T));
+			return (element *)nbr_search_mem_get(s, kp(t), kl(t));
 		}
 	};
 	template <class C>
 	struct	kcont<C,U32> {
 		typedef U32 type;
+		static inline const void *kp(type t) { 
+			return reinterpret_cast<const void *>(&t); }
+		static int kl(type t) { return sizeof(U32); }
 		static SEARCH init(int max, int opt, int hashsz) {
 			return nbr_search_init_int_engine(max, opt, hashsz);
 		}
@@ -341,6 +356,9 @@ public:
 	template <class C, size_t N>
 	struct	kcont<C,char[N]> {
 		typedef const char *type;
+		static inline const void *kp(type t) { 
+			return reinterpret_cast<const void *>(t); }
+		static inline int kl(type t) { return strlen(t); }
 		static SEARCH init(int max, int opt, int hashsz) {
 			return nbr_search_init_str_engine(max, opt, hashsz, N);
 		}
@@ -355,6 +373,7 @@ public:
 		}
 	};
 	typedef typename kcont<V,K>::type key;
+	typedef kcont<V,K> key_traits;
 protected:
 	SEARCH	m_s;
 	RWLOCK 	m_lk;
@@ -376,6 +395,7 @@ public:
 protected:
 	inline element	*findelem(key k) const;
 	inline element	*alloc(key k);
+	inline element 	*rawalloc(key k);
 private:
 	map(const map &m);
 };
@@ -574,12 +594,12 @@ public:
 	int event(int t, const char *p, int l) {
 		return nbr_sockmgr_event(m_skm, t, (char *)p, l); }
 	inline U32 msgid() {
-		if (m_msgid_seed >= MSGID_LIMIT) { m_msgid_seed = 0; }
-		return ++m_msgid_seed;
+		__sync_val_compare_and_swap(&m_msgid_seed, MSGID_LIMIT, 0);
+		return __sync_add_and_fetch(&m_msgid_seed, 1);
 	}
 	inline U16 compact_msgid() {
-		if (m_msgid_seed >= MSGID_COMPACT_LIMIT) { m_msgid_seed = 0; }
-		return ++m_msgid_seed;
+		__sync_val_compare_and_swap(&m_msgid_seed, MSGID_COMPACT_LIMIT, 0);
+		return __sync_add_and_fetch(&m_msgid_seed, 1);
 	}
 	/* 1: msgid1 > msgid2, -1: msgid1 < msgid2, 0: equal */
 	static inline U32 next_msgid(U32 msgid) {
@@ -778,8 +798,13 @@ public: /* operation */
 	}
 	int writable() const			{ return nbr_sock_writable(m_sk); }
 	U32 msgid()						{ return f()->msgid(); }
+#if defined(_DEBUG)
+	int send(const char *p, int l) const	{ int r = cfg().m_fns(m_sk, (char *)p, l); ASSERT(r > 0); return r; }
+	int event(const char *p, int l) const	{ int r = nbr_sock_event(m_sk, (char *)p, l); ASSERT(r > 0); return r; }
+#else
 	int send(const char *p, int l) const	{ return cfg().m_fns(m_sk, (char *)p, l); }
 	int event(const char *p, int l) const	{ return nbr_sock_event(m_sk, (char *)p, l); }
+#endif
 public: /* callback */
 	pollret poll(UTIME ut, bool from_worker) { return pr_server_stop_client_continue; }
 	void fin()						{}

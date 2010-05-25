@@ -18,6 +18,7 @@
  ****************************************************************/
 #include "httpd.h"
 #include "shell.h"
+#include "echo.h"
 #include "typedef.h"
 #include "macro.h"
 #include "str.h"
@@ -40,6 +41,7 @@ init_daemon(char *dname, int argc, char *argv[])
 	daemon *p;
 	DAEMON_ENTRY(shelld);
 	DAEMON_ENTRY(testhttpd);
+	DAEMON_ENTRY(echod);
 	return NULL;
 }
 

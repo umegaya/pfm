@@ -34,12 +34,12 @@ vmdconfig::set(const char *k, const char *v)
 		strncpy(m_langopt, v, MAX_VALUE_STR);
 		return NBR_OK;
 	}
-	else if (cmp("kvs", k)) {
-		strncpy(m_kvs, v, MAX_VALUE_STR);
+	else if (cmp("dbm", k)) {
+		strncpy(m_dbm, v, MAX_VALUE_STR);
 		return NBR_OK;
 	}
-	else if (cmp("kvsopt", k)) {
-		strncpy(m_kvsopt, v, MAX_VALUE_STR);
+	else if (cmp("dbmopt", k)) {
+		strncpy(m_dbmopt, v, MAX_VALUE_STR);
 		return NBR_OK;
 	}
 	else if (cmp("rootdir", k)) {
@@ -68,7 +68,7 @@ vmdconfig::set(const char *k, const char *v)
 vmdconfig::vmdconfig(BASE_CONFIG_PLIST,
 		int max_chain,
 		char *lang, char *lopt,
-		char *kvs, char *kopt,
+		char *dbm, char *dbmopt,
 		char *root_dir, char *be_addr,
 		int max_object, int max_world,
 		int rpc_entry, int rpc_ongoing,
@@ -80,8 +80,8 @@ vmdconfig::vmdconfig(BASE_CONFIG_PLIST,
 {
 	strcpy(m_lang, lang);
 	strcpy(m_langopt, lopt);
-	strcpy(m_kvs, kvs);
-	strcpy(m_kvsopt, kopt);
+	strcpy(m_dbm, dbm);
+	strcpy(m_dbmopt, dbmopt);
 	strcpy(m_root_dir, root_dir);
 	strcpy(m_be_addr, be_addr);
 }

@@ -96,8 +96,13 @@ typedef struct thread
 
 typedef struct mutex
 {
-	pthread_mutex_t	mtx;
+	pthread_mutex_t mtx;
 }	mutex_t;
+
+typedef struct spinlock
+{
+	U32 lk;
+} 	spinlock_t;
 
 typedef struct rwlock
 {
@@ -726,6 +731,39 @@ nbr_mutex_unlock(MUTEX mx)
 		return LASTERR;
 	}
 	return NBR_OK;
+}
+
+NBR_API SPINLK
+nbr_spinlock_create()
+{
+	spinlock_t *slk = nbr_mem_alloc(sizeof(spinlock_t));
+	if (!slk) { return slk; }
+	slk->lk = 0;
+	return (SPINLK)slk;
+}
+
+NBR_API int
+nbr_spinlock_destroy(SPINLK slk)
+{
+	nbr_mem_free(slk);
+	return NBR_OK;
+}
+
+NBR_API int
+nbr_spinlock_lock(SPINLK s)
+{
+	spinlock_t *slk = (spinlock_t *)s;
+	while(__sync_bool_compare_and_swap(&(slk->lk), 0, 1)) {
+//		sched_yield();
+	}
+	return NBR_OK;
+}
+
+NBR_API void
+nbr_spinlock_unlock(SPINLK s)
+{
+	spinlock_t *slk = (spinlock_t *)s;
+	__sync_lock_test_and_set(&(slk->lk), 0);
 }
 
 NBR_API RWLOCK

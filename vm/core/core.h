@@ -20,19 +20,20 @@
 /*-------------------------------------------------------------*/
 /* sfc::vm::object_factory_impl				       */
 /*-------------------------------------------------------------*/
-template <class S, class IDG, class KVS>
-map<typename object_factory_impl<S,IDG,KVS>::object, 
-	typename object_factory_impl<S,IDG,KVS>::UUID>
-object_factory_impl<S,IDG,KVS>::m_om;
+template <class S, class IDG, class DBM, class CF, class VMMSG>
+map<typename object_factory_impl<S,IDG,DBM,CF,VMMSG>::object,
+	typename object_factory_impl<S,IDG,DBM,CF,VMMSG>::UUID>
+object_factory_impl<S,IDG,DBM,CF,VMMSG>::m_om;
 
-template <class S, class IDG, class KVS>
-map<typename object_factory_impl<S,IDG,KVS>::world,
-	typename object_factory_impl<S,IDG,KVS>::world_id>
-object_factory_impl<S,IDG,KVS>::m_wl;
+template <class S, class IDG, class DBM, class CF, class VMMSG>
+map<typename object_factory_impl<S,IDG,DBM,CF,VMMSG>::world,
+	typename object_factory_impl<S,IDG,DBM,CF,VMMSG>::world_id>
+object_factory_impl<S,IDG,DBM,CF,VMMSG>::m_wl;
 
 /* object_factory_impl */
-template <class S, class IDG, class KVS>
-int object_factory_impl<S,IDG,KVS>::init(int max_object, int max_world)
+template <class S, class IDG, class DBM, class CF, class VMMSG>
+int object_factory_impl<S,IDG,DBM,CF,VMMSG>::init(
+		int max_object, int max_world, const char *dbmopt)
 {
 	if (!m_om.init(max_object, max_object, -1,
 		opt_threadsafe | opt_expandable)) {
@@ -43,24 +44,24 @@ int object_factory_impl<S,IDG,KVS>::init(int max_object, int max_world)
 		return NBR_EMALLOC;
 	}
 	int r;
-	if ((r = KVS::init(max_object)) < 0) {
+	if ((r = DBM::init(dbmopt)) < 0) {
 		return r;
 	}
 	return NBR_OK;
 }
 
-template <class S, class IDG, class KVS>
-void object_factory_impl<S,IDG,KVS>::fin()
+template <class S, class IDG, class DBM, class CF, class VMMSG>
+void object_factory_impl<S,IDG,DBM,CF,VMMSG>::fin()
 {
 	m_om.fin();
 	m_wl.fin();
-	KVS::fin();
+	DBM::fin();
 }
 
 /* world_impl */
-template <class S, class IDG, class KVS>
+template <class S, class IDG, class DBM, class CF, class VMMSG>
 template <class C>
-int object_factory_impl<S,IDG,KVS>::world_impl<C>::init(
+int object_factory_impl<S,IDG,DBM,CF,VMMSG>::world_impl<C>::init(
 		int max_node, int max_replica)
 {
 	if (!(m_ch = nbr_conhash_init(NULL, max_node, max_replica))) {
@@ -73,10 +74,10 @@ int object_factory_impl<S,IDG,KVS>::world_impl<C>::init(
 	return NBR_OK;
 }
 
-template <class S, class IDG, class KVS>
+template <class S, class IDG, class DBM, class CF, class VMMSG>
 template <class C>
-typename object_factory_impl<S,IDG,KVS>::conn *
-object_factory_impl<S,IDG,KVS>::world_impl<C>::
+typename object_factory_impl<S,IDG,DBM,CF,VMMSG>::conn *
+object_factory_impl<S,IDG,DBM,CF,VMMSG>::world_impl<C>::
 	connect_assigned_node(connector_factory &cf, const UUID &uuid)
 {
 	conn *c = NULL;
@@ -105,9 +106,9 @@ retry:
 }
 
 
-template <class S, class IDG, class KVS>
+template <class S, class IDG, class DBM, class CF, class VMMSG>
 template <class C>
-int object_factory_impl<S,IDG,KVS>::world_impl<C>::add_node(const C &s)
+int object_factory_impl<S,IDG,DBM,CF,VMMSG>::world_impl<C>::add_node(const C &s)
 {
 	int r = add_node(*s.chnode());
 	if (r < 0) {
@@ -119,9 +120,9 @@ int object_factory_impl<S,IDG,KVS>::world_impl<C>::add_node(const C &s)
 	del_node(s);
 	return NBR_EEXPIRE;
 }
-template <class S, class IDG, class KVS>
+template <class S, class IDG, class DBM, class CF, class VMMSG>
 template <class C>
-int object_factory_impl<S,IDG,KVS>::world_impl<C>::del_node(const C &s)
+int object_factory_impl<S,IDG,DBM,CF,VMMSG>::world_impl<C>::del_node(const C &s)
 {
 	m_nodes.erase(s.chnode()->iden);
 	return del_node(*s.chnode());
@@ -317,6 +318,7 @@ int vmprotocol_impl<S,IDG,SNDR>::send_rpc(
 	Q *q = (Q *)_this().senddata(s, msgid, buf, PUSH_LEN());
 	if (q) {
 		if (pq) { *pq = q; }
+		ASSERT(!(&s) || nbr_sock_valid(s.sk()));
 		return PUSH_LEN();
 	}
 	return NBR_EEXPIRE;
@@ -357,6 +359,7 @@ int vmprotocol_impl<S,IDG,SNDR>::send_new_object(SNDR &s, U32 rmsgid,
 	if (q) {
 		if (pq) { *pq = q; }
 		q->msgid = rmsgid;
+		ASSERT(!(&s) || nbr_sock_valid(s.sk()));
 		return PUSH_LEN();
 	}
 	return  NBR_EEXPIRE;
@@ -528,7 +531,7 @@ int vmprotocol_impl<S,IDG,SNDR>::notify_init_world(
 
 template <class S,class IDG,class SNDR>
 int vmprotocol_impl<S,IDG,SNDR>::notify_add_global_object(
-		SNDR &s, const world_id &nw, char *p, size_t pl)
+		const world_id &nw, char *p, size_t pl)
 {
 	size_t sz =
 		2 * (1 + sizeof(U32) + sizeof(world_id) + pl);
@@ -672,7 +675,8 @@ int vm_message_protocol_impl<S,CP>::recv_cmd_rpc(
 	typename S::object *o = S::object_factory::find(uuid);
 	if (!o) {
 		char buf[256];
-		log(kernel::ERROR, "object not found (%s)\n", uuid.to_s(buf, sizeof(buf)));
+		S::vmmodule::cf().log(kernel::ERROR,
+				"object not found (%s)\n", uuid.to_s(buf, sizeof(buf)));
 		ASSERT(false);
 		return NBR_ENOTFOUND;
 	}
@@ -717,26 +721,37 @@ int vm_message_protocol_impl<S,CP>::recv_notify_load_module(
 /* sfc::vm::vmnode											   */
 /*-------------------------------------------------------------*/
 template <class S,template <class OF,class SR> class L,
-	class KVS,class SR,class IDG,
-	template <class S, class IDG, class KVS> class OF>
-typename vm_impl<S,L,KVS,SR,IDG,OF>::connector_factory *
-	vm_impl<S,L,KVS,SR,IDG,OF>::m_cf = NULL;
+	class DBM,class SR,class IDG,class CF,class VMMSG,
+	template <class S, class IDG, class DBM, class CF, class VMMSG> class OF>
+CF *vm_impl<S,L,DBM,SR,IDG,CF,VMMSG,OF>::m_cf = NULL;
 
 template <class S,template <class OF,class SR> class L,
-	class KVS,class SR,class IDG,
-	template <class S, class IDG, class KVS> class OF>
-int vm_impl<S,L,KVS,SR,IDG,OF>::init_world(int max_object, int max_world)
+	class DBM,class SR,class IDG,class CF,class VMMSG,
+	template <class S, class IDG, class DBM, class CF, class VMMSG> class OF>
+THPOOL vm_impl<S,L,DBM,SR,IDG,CF,VMMSG,OF>::m_thp = NULL;
+
+template <class S,template <class OF,class SR> class L,
+	class DBM,class SR,class IDG,class CF,class VMMSG,
+	template <class S, class IDG, class DBM, class CF, class VMMSG> class OF>
+int vm_impl<S,L,DBM,SR,IDG,CF,VMMSG,OF>::init_world(
+		int max_object, int max_world, const char *dbmopt)
 {
 	int r;
 	if ((r = IDG::init()) < 0) { return r; }
-	if ((r = object_factory::init(max_object, max_world)) < 0) { return r; }
+	if ((r = object_factory::init(max_object, max_world, dbmopt)) < 0) {
+		return r;
+	}
+//	if (!(m_thp = nbr_thpool_create(3)) ||
+//		(nbr_thpool_init_jobqueue(m_thp, 10000) < 0)) {
+//		return NBR_EEXPIRE;
+//	}
 	return r;
 }
 
 template <class S,template <class OF,class SR> class L,
-	class KVS,class SR,class IDG,
-	template <class S, class IDG, class KVS> class OF>
-void vm_impl<S,L,KVS,SR,IDG,OF>::fin_world()
+	class DBM,class SR,class IDG,class CF,class VMMSG,
+	template <class S, class IDG, class DBM, class CF, class VMMSG> class OF>
+void vm_impl<S,L,DBM,SR,IDG,CF,VMMSG,OF>::fin_world()
 {
 	script::fin_global();
 	object_factory::fin();
@@ -744,10 +759,10 @@ void vm_impl<S,L,KVS,SR,IDG,OF>::fin_world()
 }
 
 template <class S,template <class OF,class SR> class L,
-	class KVS,class SR,class IDG,
-	template <class S, class IDG, class KVS> class OF>
-typename vm_impl<S,L,KVS,SR,IDG,OF>::script *
-vm_impl<S,L,KVS,SR,IDG,OF>::init_vm(int max_rpc, int max_rpc_ongoing, int n_wkr)
+	class DBM,class SR,class IDG,class CF,class VMMSG,
+	template <class S, class IDG, class DBM, class CF, class VMMSG> class OF>
+typename vm_impl<S,L,DBM,SR,IDG,CF,VMMSG,OF>::script *
+vm_impl<S,L,DBM,SR,IDG,CF,VMMSG,OF>::init_vm(int max_rpc, int max_rpc_ongoing, int n_wkr)
 {
 	int r;
 	script *scp = new script;
@@ -760,14 +775,14 @@ vm_impl<S,L,KVS,SR,IDG,OF>::init_vm(int max_rpc, int max_rpc_ongoing, int n_wkr)
 }
 
 template <class S,template <class OF,class SR> class L,
-	class KVS,class SR,class IDG,
-	template <class S, class IDG, class KVS> class OF>
-void vm_impl<S,L,KVS,SR,IDG,OF>::fin_vm(script *vm)
+	class DBM,class SR,class IDG,class CF,class VMMSG,
+	template <class S, class IDG, class DBM, class CF, class VMMSG> class OF>
+void vm_impl<S,L,DBM,SR,IDG,CF,VMMSG,OF>::fin_vm(script *vm)
 {
 	if (vm) {
 		vm->fin();
+		delete vm;
 	}
-	delete vm;
 }
 
 
@@ -775,24 +790,64 @@ void vm_impl<S,L,KVS,SR,IDG,OF>::fin_vm(script *vm)
 /* sfc::vm::vmnode											   */
 /*-------------------------------------------------------------*/
 /* vmnode */
-template <class S>
-int vmnode<S>::recv_cmd_rpc(U32 msgid, UUID &uuid, proc_id &pid, 
+template <class S, class CF, class VMMSG>
+int vmnode<S,CF,VMMSG>::save_object(object &o)
+{
+//	return nbr_thpool_addjob(vmmodule::thp(), &o, task_save_object);
+	task_save_object(&o);
+	return NBR_OK;
+}
+
+template <class S, class CF, class VMMSG>
+void *vmnode<S,CF,VMMSG>::task_save_object(void *p)
+{
+	object *o = (object *)p;
+	script *scp = S::fetch_vm_from_thread(o->thread());
+	if (!scp) {
+		ASSERT(false);
+		return NULL;
+	}
+	char buffer[65536];
+	scp->serializer().pack_start(buffer, sizeof(buffer));
+	if (scp->pack_object(scp->vm(), scp->serializer(), *o, true) < 0) {
+		return p;
+	}
+	if (vmmodule::dbm::put(&(o->uuid()), sizeof(UUID),
+			scp->serializer().p(), scp->serializer().len())) {
+		char buf[256];
+		app::daemon::log(ERROR,
+			"save fail (%s)\n", o->uuid().to_s(buf, sizeof(buf)));
+		return p;
+	}
+	o->saved();
+	if (o->collected()) {
+		object_factory::destroy(o);
+	}
+	return NULL;
+}
+
+template <class S, class CF, class VMMSG>
+int vmnode<S,CF,VMMSG>::recv_cmd_rpc(U32 msgid, UUID &uuid, proc_id &pid,
 		char *p, int l, rpctype rt)
 {
 	const UUID &vuuid = protocol::_this().verify_uuid(uuid);
-	object *o = object_factory::find(vuuid);
+	/* rpc target object (non-local object also can be available) */
+	object *o = vm()->object_new(
+			protocol::_this().cf(), &(wid()), NULL, vm(),
+			vuuid, NULL, false);
 	if (!o) {
 		char buf[256];
 		log(ERROR, "object not found (%s)\n", vuuid.to_s(buf, sizeof(buf)));
 		return NBR_ENOTFOUND;
 	}
+	ASSERT(S::vmd_session_type != 3 || ((void *)o->connection()) == ((void *)this));
 	/* execute fiber */
 	return vm()->call_proc(protocol::_this(), protocol::_this().cf(),
 			msgid, *o, pid, p, (size_t)l, rt, NULL);
 }
 
-template <class S>
-int vmnode<S>::recv_code_rpc(querydata &q, char *p, size_t l, rpctype rt)
+template <class S, class CF, class VMMSG>
+int vmnode<S,CF,VMMSG>::recv_code_rpc(querydata &q, char *p, size_t l, rpctype rt)
 {
 	/* resume fiber */
 	if (q.valid_fb()) {
@@ -805,9 +860,9 @@ int vmnode<S>::recv_code_rpc(querydata &q, char *p, size_t l, rpctype rt)
 	}
 }
 
-template <class S>
+template <class S, class CF, class VMMSG>
 template <class Q>
-int vmnode<S>::create_object_with_type(const world_id *id,
+int vmnode<S,CF,VMMSG>::create_object_with_type(const world_id *id,
 		const char *type, size_t tlen, U32 msgid, loadpurpose lp, Q **pq)
 {
 	char b[tlen + sizeof(U32)];
@@ -818,9 +873,9 @@ int vmnode<S>::create_object_with_type(const world_id *id,
 	return load_or_create_object(msgid, id, uuid, sr.p(), sr.len(), lp, pq);
 }
 
-template <class S>
+template <class S, class CF, class VMMSG>
 template <class Q>
-int vmnode<S>::load_or_create_object(U32 msgid, const world_id *id,
+int vmnode<S,CF,VMMSG>::load_or_create_object(U32 msgid, const world_id *id,
 		UUID &uuid, char *p, size_t l, loadpurpose lp, Q **pq)
 {
 	world *w = object_factory::find_world(id ? *id : wid());
@@ -840,9 +895,9 @@ int vmnode<S>::load_or_create_object(U32 msgid, const world_id *id,
 	return NBR_EEXPIRE;
 }
 
-template <class S>
-typename vmnode<S>::world *vmnode<S>::create_world(
-		vm_msg &vmm, const world_id &wid)
+template <class S, class CF, class VMMSG>
+typename vmnode<S,CF,VMMSG>::world *vmnode<S,CF,VMMSG>::create_world(
+		VMMSG &vmm, const world_id &wid)
 {
 	ASSERT(0 != vmm.type());
 	world *w = object_factory::find_world(wid);
@@ -868,14 +923,14 @@ typename vmnode<S>::world *vmnode<S>::create_world(
 	return w;
 }
 
-template <class S>
-int vmnode<S>::on_open(const config &cfg)	{
+template <class S, class CF, class VMMSG>
+int vmnode<S,CF,VMMSG>::on_open(const config &cfg)	{
 	m_vm = protocol::_this().fetch_vm();
 	return super::on_open(cfg);
 }
 
-template <class S> typename vmnode<S>::querydata *
-vmnode<S>::senddata(S &s, U32 msgid, char *p, int l)
+template <class S, class CF, class VMMSG> typename vmnode<S,CF,VMMSG>::querydata *
+vmnode<S,CF,VMMSG>::senddata(S &s, U32 msgid, char *p, int l)
 {
 	querydata *q = (querydata *)sf(*((S *)this))->insert_query(msgid);
 	if (!q) {

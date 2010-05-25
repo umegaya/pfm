@@ -9,9 +9,9 @@ AR = ar crv
 DEFS = -DHAVE_CONFIG_H
 DEFS += -D_GNU_SOURCE
 ifeq ($(DEBUG), 1)
-CFLAG = -Wall -g -fPIC -D_DEBUG -D_TEST
+CFLAG = -Wall -g -march=i686 -fPIC -D_DEBUG -D_TEST
 else 
-CFLAG = -O4 -fPIC
+CFLAG = -O4 -march=i686 -fPIC
 endif
 ifeq ($(VALGRIND), 1)
 CFLAG += -D_VALGRIND

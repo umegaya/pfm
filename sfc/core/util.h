@@ -371,6 +371,11 @@ map<V,K>::alloc(key k)
 	if (e) {	/* already exist */
 		return e;
 	}
+	return rawalloc(k);
+}
+template<class V, typename K> typename map<V,K>::element *
+map<V,K>::rawalloc(key k)
+{
 	if (nbr_array_full(super::m_a)) {
 		return NULL;	/* no mem */
 	}

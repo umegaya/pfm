@@ -19,9 +19,10 @@
 #if !defined(__OSDEP_H__)
 #define __OSDEP_H__
 
-#if defined(WIN32)
+#include "nbr.h"
+
+#if defined(__NBR_WINDOWS__)
 	//windows
-#define	__NBR_WINDOWS__
 	#include	<sys/types.h>
 	#include	<sys/stat.h>
 	#include	<sys/socket.h>
@@ -34,9 +35,8 @@
 	#include	<netdb.h>
 	#include	<arpa/inet.h>
 	#include	<fcntl.h>
-#elif defined(linux)
+#elif defined(__NBR_LINUX__)
 	//linux
-#define	__NBR_LINUX__
 	#include	<sys/types.h>
 	#include	<sys/stat.h>
 	#include	<sys/socket.h>
@@ -51,6 +51,8 @@
 	#include	<arpa/inet.h>
 	#include	<fcntl.h>
 	#include 	<time.h>
+#else
+	#error not supported os
 #endif
 
 /* TCP related */

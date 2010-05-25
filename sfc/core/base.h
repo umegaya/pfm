@@ -237,20 +237,21 @@ char *factory_impl<S,P>::senddata(S &via, class session &sender,
 template <class S, class P>
 char *factory_impl<S,P>::insert_query(U32 msgid)
 {
-#if defined(_DEBUG)
-	log(INFO, "insert query %u %p\n", msgid, this);
-#endif
+	ASSERT(!find_query(msgid));
 	query *q = querymap().create(msgid);
+#if defined(_DEBUG)
+	log(INFO, "insert query %u %p %p\n", msgid, this, q);
+#endif
 	return q ? q->data : NULL;
 }
 
 template <class S, class P>
 char *factory_impl<S,P>::find_query(U32 msgid)
 {
-#if defined(_DEBUG)
-	log(INFO, "find query %u %p\n", msgid, this);
-#endif
 	query *q = querymap().find(msgid);
+#if defined(_DEBUG)
+	log(INFO, "find query %u %p %p\n", msgid, this, q);
+#endif
 	return q ? q->data : NULL;
 }
 
@@ -258,7 +259,8 @@ template <class S, class P>
 void factory_impl<S,P>::remove_query(U32 msgid)
 {
 #if defined(_DEBUG)
-	log(INFO, "remove query %u %p\n", msgid, this);
+	query *q = querymap().find(msgid);
+	log(INFO, "remove query %u %p %p\n", msgid, this, q);
 #endif
 	querymap().erase(msgid);
 }

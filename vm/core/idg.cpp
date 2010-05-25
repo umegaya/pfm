@@ -40,12 +40,11 @@ const mac_idgen::UUID &
 mac_idgen::new_id()
 {
 	/* TODO: use atomic instruction */
-	if (UUID_SEED.id2 == 0xFFFFFFFF) {
+	if (__sync_bool_compare_and_swap(&(UUID_SEED.id2), 0xFFFFFFFF, 0)) {
 		UUID_SEED.id1++;
-		UUID_SEED.id2 = 0;
 		return UUID_SEED;
 	}
-	UUID_SEED.id2++;
+	__sync_add_and_fetch(&(UUID_SEED.id2), 1);
 	return UUID_SEED;
 }
 

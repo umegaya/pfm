@@ -22,10 +22,24 @@
 
 /* include */
 #include <stdio.h>
+#include <stdlib.h>
 
 
 /* macro */
-#define NBR_API	extern
+#if defined(WIN32)
+	//windows
+	#define	__NBR_WINDOWS__
+	#define NBR_API	__declspec(dllexport)
+	#define NBR_TLS __declspec(thread) static
+#elif defined(linux)
+	//linux
+	#define	__NBR_LINUX__
+	#define NBR_API extern
+	#define NBR_TLS static __thread
+#else
+	#define NBR_API extern
+	#define NBR_TLS static __thread
+#endif
 #define MTSAFE
 
 
@@ -109,6 +123,7 @@ typedef void				*THREAD;
 typedef void				*THPOOL;
 typedef void				*MUTEX;
 typedef void				*RWLOCK;
+typedef void				*SPINLK;
 typedef void				*CONHASH;
 typedef void				*NODE;
 typedef U32					THRID;
@@ -117,7 +132,7 @@ typedef U64					UTIME;
 /* system struct */
 typedef struct  node_s 
 {
-	char iden[32]; /* node name or some thing identifies the node */    
+	char iden[28]; /* node name or some thing identifies the node */
 	U16 replicas; /* number of replica virtual nodes */
 	U16 flag;
 }					CHNODE;
@@ -229,6 +244,11 @@ NBR_API int		nbr_osdep_fork(char *cmd, char *argv[], char *envp[]);
 NBR_API int		nbr_osdep_sleep(U64 nanosec);
 NBR_API UTIME	nbr_clock();
 NBR_API UTIME	nbr_time();
+
+
+/* mem.c */
+static inline void *nbr_malloc(size_t s) { return malloc(s); }
+static inline void nbr_free(void *p) { free(p); }
 
 
 /* rand.c */
@@ -399,6 +419,10 @@ NBR_API int 	nbr_rwlock_destroy(RWLOCK rw)	MTSAFE;
 NBR_API	int		nbr_rwlock_rdlock(RWLOCK rw)	MTSAFE;
 NBR_API	int		nbr_rwlock_wrlock(RWLOCK rw)	MTSAFE;
 NBR_API	int		nbr_rwlock_unlock(RWLOCK rw)	MTSAFE;
+NBR_API SPINLK		nbr_spinlock_create()	MTSAFE;
+NBR_API int		nbr_spinlock_destroy(SPINLK s)	MTSAFE;
+NBR_API int		nbr_spinlock_lock(SPINLK s)	MTSAFE;
+NBR_API void		nbr_spinlock_unlock(SPINLK s)	MTSAFE;
 
 
 /* exlib/libconhash */

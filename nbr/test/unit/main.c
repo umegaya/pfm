@@ -37,7 +37,7 @@ extern BOOL nbr_sock_test();
 int main(int argc, char *argv[])
 {
 	RUNTEST(udp, nbr_sock_test(3, 1000, 10, 256000, "UDP"), -1);
-	RUNTEST(tcp, nbr_sock_test(2, 1000, 10, 256000, "TCP"), -2);
+	RUNTEST(tcp, nbr_sock_test(2, 1, 10, 256000, "TCP"), -2);
 	if (argv[2]) {
 		RUNTEST(plugin, nbr_sock_test(3, 1000, 60, 128000, argv[2]), -100);
 	}

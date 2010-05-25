@@ -39,12 +39,12 @@ int vmd::vmdmstr::init_login_map(int max_user)
 	return NBR_OK;
 }
 
-void vmd::vmdmstr::_factory::fin()
+void vmd::_mstr_factory::fin()
 {
-        m_vmd->fin_mstr_vm();
+	m_vmd->fin_mstr_vm();
 	vmdmstr::fin_world();
-        vmdmstr::fin_login_map();
-	vmdmstr::super::mstr_base_factory::fin();
+	vmdmstr::fin_login_map();
+	super::fin();
 }
 
 int vmd::vmdmstr::recv_cmd_node_register(U32 msgid, const address &a)
@@ -210,21 +210,13 @@ vmd::vmdsvnt::_factory::fin()
 
 #if defined(_RPC_PROF)
 int
-vmd::vmdsvnt::on_open(const config &cfg)
-{
-	if (!m_first) {
-		m_first = true;
-		m_start = nbr_time();
-	}
-	return super::on_open(cfg);
-}
-
-int
 vmd::vmdsvnt::on_close(int r)
 {
 	m_client_finish++;
-	if (m_client_finish >= 1000) {
+	if (m_client_finish >= 128) {
 		printf("######## total time = %lluus\n", (nbr_time() - m_start));
+		m_client_finish = 0;
+		m_start = nbr_time();
 	}
 	return super::on_close(r);
 }
@@ -268,7 +260,7 @@ vmd::vmdsvnt::recv_cmd_new_object(U32 msgid, const world_id &wid,
 		UUID &uuid, char *p, size_t l)
 {
 	/* this function should be executed connector session.
-	 * so m_session_uuid & m_wid is invalid basically. */
+	 * so m_session_uuid & m_wid is invalid. */
 	int r;
 #if defined(_DEBUG)
 	char b[256];
@@ -295,7 +287,20 @@ vmd::vmdsvnt::recv_cmd_new_object(U32 msgid, const world_id &wid,
 				rpct_global, exit_init_object)) < 0) {
 			return reply_new_object(*this, msgid, r, uuid, NULL, 0);
 		}
+		o->set_flag(object::object_flag_new, false);
+		return NBR_OK;
 	}
+	/* restart pack */
+	char buffer[64 * 1024];
+	serializer &sr = vm()->serializer();
+	sr.pack_start(buffer, sizeof(buffer));
+	/* pack with object value */
+	if ((r = vm()->pack_object(vm()->vm(), sr, *o, true)) < 0) {
+		reply_new_object(*this, msgid, r, protocol::invalid_id(), "", 0);
+		return r;
+	}
+	/* TODO: send this object information to replicate host. */
+	reply_new_object(*this, msgid, NBR_OK, o->uuid(), sr.p(), sr.len());
 	return NBR_OK;
 }
 
@@ -352,6 +357,12 @@ vmd::vmdsvnt::recv_code_new_object(
 			return q.sender()->reply_login(*this, q.msgid, r,
 				super::wid(), uuid, p, l);
 		}
+#if defined(_RPC_PROF)
+		if (!m_first) {
+			m_first = true;
+			m_start = nbr_time();
+		}
+#endif
 		sr.unpack_start(p, l);
 		/* when login, create local object */
 		if ((o = vm()->object_new(cf(), &(super::wid()),
@@ -408,24 +419,15 @@ vmd::vmdsvnt::recv_code_login(querydata &q, int r, const world_id &wid,
 	if (r < 0) {
 		return q.sender()->reply_login(*this, q.msgid, r, wid, uuid, "", 0);
 	}
+	querydata *dq;
 	if (protocol::is_valid_id(uuid)) {
-		serializer &sr = vm()->serializer();
-		sr.unpack_start(p, l);
-		world *w = object_factory::find_world(wid);
-		if (!w) {
-			return q.sender()->reply_login(*this,
-					q.msgid, NBR_ENOTFOUND, wid, uuid, "", 0);
+		if ((r = load_or_create_object(q.msgid, &wid, uuid, "", 0,
+				vmprotocol::load_purpose_login, &dq)) < 0) {
+			return q.sender()->reply_login(*this, q.msgid, r, wid, uuid, "", 0);
 		}
-		object *o = vm()->object_new(cf(), &(w->id()), NULL, vm()/*use main VM*/,
-				uuid, &sr, false);
-		if (!o) {
-			return q.sender()->reply_login(*this,
-					q.msgid, NBR_EINVAL, wid, uuid, "", 0);
-		}
-		return q.sender()->reply_login(*this, q.msgid, NBR_OK, wid, uuid, p, l);
+		return NBR_OK;
 	}
 	else {
-		querydata *dq;
 		if ((r = create_object_with_type(&wid, "Player", sizeof("Player"),
 			q.msgid, vmprotocol::load_purpose_login, &dq)) < 0) {
 			return q.sender()->reply_login(*this, q.msgid, r, wid, uuid, "", 0);
@@ -514,14 +516,12 @@ vmd::vmdsvnt::recv_cmd_node_ctrl(U32 msgid, const char *cmd,
 /*-------------------------------------------------------------*/
 /* sfc::vmd::vmdclient                                         */
 /*-------------------------------------------------------------*/
-vmd::vmdclnt::client_state vmd::vmdclnt::m_cs = vmd::vmdclnt::client_state_invalid;
-
 void
-vmd::vmdclnt::_factory::fin()
+vmd::_clnt_factory::fin()
 {
-        m_vmd->fin_clnt_vm();
+	m_vmd->fin_clnt_vm();
 	vmdclnt::fin_world();
-	vmdclnt::super::clnt_base_factory::fin();
+	super::fin();
 }
 
 int
@@ -551,17 +551,11 @@ vmd::vmdclnt::recv_code_login(querydata &q, int r, const world_id &wid,
 	object *o = vm()->object_new(cf(), &(w->id()), NULL, vm()/*use main VM*/,
 			uuid, NULL, false);
 	if (o) {
-		connector *c = w->connect_assigned_node(cf(), o->uuid());
-		if (c) {
-			o->set_connection(c);
-			m_session_uuid = o->uuid();
-			set_state(client_state_resume);
-			log(INFO, "login>R:0,A:%s,UUID:%s,W:%s\n", 
-				m_account,uuid.to_s(b, sizeof(b)), wid);
-		}
-		else {
-			set_state(client_state_error);
-		}
+		o->set_connection(this);
+		m_session_uuid = o->uuid();
+		set_state(client_state_resume);
+		log(INFO, "login>R:0,A:%s,UUID:%s,W:%s\n",
+			m_account,uuid.to_s(b, sizeof(b)), wid);
 		return NBR_OK;
 	}
 	ASSERT(false);
@@ -572,11 +566,18 @@ void vmd::vmdclnt::exit_main(vmdclnt &sender, vmdclnt &recver,
 		VM vm, int r, U32 rmsgid, rpctype rt, char *p, size_t l)
 {
 #if 1
-	static int g_cnt = 0;
-	g_cnt++;
-	if (g_cnt > 100) {
+	static int g_finish_cnt = 0;
+	sender.inc_iter_cnt();
+	ASSERT(sender.iter_cnt() <= 100);
+	ASSERT(sender.last_msgid() > 6);
+	if (sender.iter_cnt() >= 100) {
 		sender.log(INFO, "iteration finish\n");
-		daemon::stop();
+		//sender.close();
+		g_finish_cnt++;
+		if (g_finish_cnt >= sender.cfg().m_max_connection) {
+			sender.log(INFO, "all client finish\n");
+			daemon::stop();
+		}
 	}
 	else {
 		sender.set_state(client_state_resume);
@@ -602,13 +603,13 @@ vmd::vmdclnt::poll(UTIME ut, bool from_worker)
 	}
 	switch(m_cs) {
 	case client_state_invalid: {
-		connector *c = backend_conn();
-		if (!c) {
-			set_state(client_state_error);
-			break;
-		}
-		snprintf(m_account, sizeof(m_account), "umegaya%04x", daemon::pid());
-		if (c->send_login(*this, 0, test_wid,
+//		connector *c = backend_conn();
+//		if (!c) {
+//			set_state(client_state_error);
+//			break;
+//		}
+		snprintf(m_account, sizeof(m_account), "umegaya%p", this);
+		if (send_login(*this, 0, test_wid,
 			m_account, "iyatomi", sizeof("iyatomi")) >= 0) {
 			set_state(client_state_login_attempt);
 		}
@@ -622,8 +623,10 @@ vmd::vmdclnt::poll(UTIME ut, bool from_worker)
 			set_state(client_state_error);
 			break;
 		}
+		ASSERT(o->connection() == this);
 		proc_id pid = "load_player";
 		/* pid, "", 0 means no argument */
+		TRACE("call proc %p\n", this);
 		if (vm()->call_proc(*this, cf(), 0, *o, pid, 
 			"", 0, rpct_global, exit_main) >= 0) {
 			set_state(client_state_pending);
@@ -680,7 +683,7 @@ vmd::create_config(config *cl[], int sz)
 			nbr_sock_send_bin16,
 			config::cfg_flag_server,
 			0,/* currently master no use connector */
-			"lua", "", "tc", "",
+			"lua", "", "tc", "mstr.tch#bnum=100000000",
 			"./scp/mstr/", "", 
 			10000, 10, 10000, 3000,
 			10000, vmprotocol::vnode_replicate_num
@@ -701,9 +704,9 @@ vmd::create_config(config *cl[], int sz)
 			nbr_sock_send_bin16,
 			config::cfg_flag_server,
 			100000, /* max_chain */
-			"lua", "", "tc", "",
+			"lua", "", "tc", "svnt.tch#bnum=10000000",
 			"./scp/svnt/", "127.0.0.1:8000", 
-			10000, 10, 10000, 3000,
+			10000, 10, 10000, 10000,
 			10000, vmprotocol::vnode_replicate_num
 			));
 	CONF_ADD(vmdconfig, (
@@ -714,18 +717,22 @@ vmd::create_config(config *cl[], int sz)
 			64 * 1024, 64 * 1024,
 			1000 * 1000 * 1000, 3 * 1000 * 1000,
 			100,
-			sizeof(vmdclnt::factory::connector::querydata),
+#if 1
+			sizeof(vmdclnt::querydata),
+#else
+			sizeof(vmdclnt::_factory::connector::querydata),
+#endif
 			"TCP", "eth0",
 			1 * 10 * 1000/* 10msec task span */,
-			1/* after 1us, again try to connect */,
+			-1/* after 1us, again try to connect */,
 			kernel::INFO,
 			nbr_sock_rparser_bin16,
 			nbr_sock_send_bin16,
 			config::cfg_flag_not_set,
 			10,	/* client only use a few chain */
-			"lua", "", "tc", "",
+			"lua", "", "tc", "clnt.tch#bnum=10000",
 			"./scp/clnt/", "127.0.0.1:9000", 
-			100, 5, 100, 30,
+			100, 5, 10000, 10000,
 			100, vmprotocol::vnode_replicate_num
 			));
 	CONF_END();
@@ -777,8 +784,10 @@ vmd::boot(int argc, char *argv[])
 	vmdmstr::factory *mstr = find_factory<vmdmstr::factory>("mstr");
 	if (mstr) {
 		mstr->set_daemon(this);
+		vmdmstr::set_cf(mstr);
 		if ((vc = find_config<vmdconfig>("mstr"))) {
-			if ((r = vmdmstr::init_world(vc->m_max_object, vc->m_max_world)) < 0) {
+			if ((r = vmdmstr::init_world(
+				vc->m_max_object, vc->m_max_world, vc->m_dbmopt)) < 0) {
 				return r;
 			}
 			if ((r = vmdmstr::init_login_map(10000)) < 0) {
@@ -800,8 +809,10 @@ vmd::boot(int argc, char *argv[])
 	vmdsvnt::factory *svnt = find_factory<vmdsvnt::factory>("svnt");
 	if (svnt) {
 		svnt->set_daemon(this);
+		vmdsvnt::set_cf(svnt->cf());
 		if ((vc = find_config<vmdconfig>("svnt"))) {
-			if ((r = vmdsvnt::init_world(vc->m_max_object, vc->m_max_world)) < 0) {
+			if ((r = vmdsvnt::init_world(
+				vc->m_max_object, vc->m_max_world, vc->m_dbmopt)) < 0) {
 				return r;
 			}
 			if ((r = vmdsvnt::init_player_map(vc->m_max_connection)) < 0) {
@@ -835,8 +846,10 @@ vmd::boot(int argc, char *argv[])
 	vmdclnt::factory *clnt = find_factory<vmdclnt::factory>("clnt");
 	if (clnt) {
 		clnt->set_daemon(this);
+		vmdclnt::set_cf(clnt);
 		if ((vc = find_config<vmdconfig>("clnt"))) {
-			if ((r = vmdclnt::init_world(vc->m_max_object, vc->m_max_world)) < 0) {
+			if ((r = vmdclnt::init_world(
+				vc->m_max_object, vc->m_max_world, vc->m_dbmopt)) < 0) {
 				return r;
 			}
 			vmdclnt::vm_msg::set_factory(clnt);
@@ -848,8 +861,19 @@ vmd::boot(int argc, char *argv[])
 				m_wkp[i].m_clnt_vm->set_thread(wkr[i]);
 			}
 #if defined(_TEST)
+#if 1
+			vmdclnt::factory::super *fc = (vmdclnt::factory::super *)clnt;
+			for (int i = 0; i < clnt->cfg().m_max_connection; i++) {
+				vmdclnt *c = fc->pool().create();
+				if (!c || (r = fc->connect(c, vc->m_be_addr)) < 0) {
+					return c ? r : NBR_EEXPIRE;
+				}
+			}
+			return NBR_OK;
+#else
 			vmdclnt::connector *c = clnt->backend_connect(vc->m_be_addr);
 			return c ? NBR_OK : NBR_EEXPIRE;
+#endif
 #endif
 		}
 		return NBR_EINVAL;
@@ -866,7 +890,7 @@ vmd::on_signal(int signo)
 int
 vmd::initlib(CONFIG &c) 
 {
-	//c.max_worker = 1;
+	c.sockbuf_size = 24 * 1024 * 1024;
 	return NBR_OK;
 }
 

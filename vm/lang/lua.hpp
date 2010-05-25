@@ -37,7 +37,6 @@ typedef enum {
 	OT_INVALID,
 	OT_PFM,
 	OT_RPC,
-	OT_SESSION,
 } 	OBJTYPE;
 typedef struct {
         OBJTYPE type;
@@ -124,6 +123,7 @@ public:	/* typedefs */
 			m_uuid = o->uuid(); 
 			snprintf(m_p, sizeof(m_p) - 1, "%s", id);
 		}
+		void set_objid(object *o) { m_uuid = o->uuid(); }
 		object *obj() { return OF::find(m_uuid); }
 		const proc_id &proc() const { return m_p; }
 		UUID uuid() const { return m_uuid; }
@@ -135,8 +135,8 @@ public:	/* typedefs */
 			io_type_channel,/* rpc over memory (inter thread) */
 		};
 		template <class V> struct exit_fn {
-                typedef void (*type)(V &, V &, VM, int, U32, rpctype, char *, size_t);
-                };
+			typedef void (*type)(V &, V &, VM, int, U32, rpctype, char *, size_t);
+		};
 	protected:
 		VM m_ip;
 		struct {
@@ -191,7 +191,7 @@ public:	/* typedefs */
 			ASSERT(wid);
 			bool first = false;
 			if (!m_ip) {
-				m_ip = lua_newcthread(scp->vm(), 1/* use min size */);
+				m_ip = lua_newcthread(scp->vm(), 1);
 				if (!m_ip) { ASSERT(false); return false; }
 				first = true;
 			}
@@ -208,12 +208,19 @@ public:	/* typedefs */
 			}
 			lua_setfenv(m_ip, -2);
 			if (first) {
-				/* add this thread to registroy index so that 
+				/* add this thread into this local cache so that
 				thread is never garbage collected.*/
-				lua_pushinteger(m_ip, (lua_Integer)m_ip);
-				lua_pushvalue(m_ip, -2);
-				lua_settable(m_ip, LUA_REGISTRYINDEX);
+				lua_pushvalue(m_ip, -1);
+				char buf[256];
+				snprintf(buf, sizeof(buf) - 1, "fb%08x", (U32)this);
+				/* add local cache to registry index */
+				lua_setfield(m_ip, LUA_REGISTRYINDEX, buf);
 			}
+			/* setup fiber local cache */
+			lua_pushinteger(m_ip, (lua_Integer)m_ip);
+			lua_newtable(m_ip);
+			lua_settable(m_ip, LUA_REGISTRYINDEX);
+			/* reset stack height */
 			lua_settop(m_ip, 0);
 			m_scp = scp;
 			m_msgid = msgid;
@@ -288,7 +295,7 @@ public:
 	static void fin_global();
 	int  	init_world(const world_id &wid, const world_id &from, const char *srcfile);
 	bool 	initialized(const world_id &wid);
-	int	add_global_object(CF &, const world_id &wid, char *p, size_t l);
+	int		add_global_object(CF &, const world_id &wid, char *p, size_t l);
 	void 	set_thread(THREAD th) { m_thrd = th; }
 	THREAD	thread() const { return m_thrd; }
 	VM	vm() const { return m_vm; }
@@ -310,7 +317,7 @@ public:
 		return (nbr_array_max(m_fibers.get_a()) > idx && idx >= 0); 
 	}
 	static object 	*object_new(CF &cf, const world_id *w,
-			VM vm, lua<SR,OF> *scp, UUID &uuid, SR *sr, bool local);
+			VM vm, lua<SR,OF> *scp, const UUID &uuid, SR *sr, bool local);
 	int	call_proc(S &, CF &, U32, object &, proc_id &, char *, size_t, rpctype,
 			typename fiber::template exit_fn<S>::type);
 	template <class SNDR>
@@ -345,10 +352,10 @@ protected: 	/* lua methods */
 	#define dump_stack(VM)
 #endif
 protected:	/* rpc hook */
-	template <class SNDR> static int
+	template <class SNDR> static inline int
 			rpc_sender_hook(SNDR &, const proc_id &p,
 					fiber &fb, object &o, SR &, rpctype rt);
-	static int 	rpc_recver_hook(S &c, U32 rmsgid, const proc_id &p,
+	static inline int 	rpc_recver_hook(S &c, U32 rmsgid, const proc_id &p,
 					fiber &fb, object &o, char *p, size_t l, rpctype rt);
 protected: 	/* helpers */
 	static rpc 	*rpc_new(VM, object *, const char *);
@@ -376,8 +383,14 @@ protected: 	/* helpers */
 	static int 	unpack_object(CF &, const world_id &, VM, lua<SR,OF> *, data &, object &);
 
 	static int	copy_table(VM, int index_from, int index_to, int type);
+	static int	commit_local_cache(VM);
 
-	static const char *add_type(VM, const world_id *, const char *typestr);
+	static inline void load_object_value_table(VM, const object &);
+	static inline void load_object_value_table_from_id(VM, const UUID &);
+	static inline void load_fiber_local_cache(VM);
+	static inline void load_fiber_local_cache_from_object(VM, const object &);
+
+	static const char *add_type(VM, const char *typestr, object *o);
 
 	template <class SNDR> static int dispatch(SNDR &, fiber &, int, bool);
 	static int 	reply_result(fiber &, int, rpctype rt = vmprotocol::rpct_invalid);

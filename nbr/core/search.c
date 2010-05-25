@@ -178,6 +178,13 @@ search_get_elem_size(enum HUSH_KEY_TYPE type, int size)
 	}
 }
 
+NBR_INLINE int
+search_get_keybuf_size(SEARCH s)
+{
+	ASSERT(((search_t *)s)->elemsize > ((sizeof(hushelm_t*) * 2) + sizeof(void *)));
+	return ((search_t *)s)->elemsize - ((sizeof(hushelm_t*) * 2) + sizeof(void *));
+}
+
 
 NBR_INLINE int
 search_init(search_t *m, enum HUSH_KEY_TYPE type, int size, int param)
@@ -559,7 +566,8 @@ nbr_search_int_get(SEARCH sd, int key)
 NBR_API int
 nbr_search_str_regist(SEARCH sd, const char *key, void *data)
 {
-	int es = ((search_t *)sd)->elemsize;
+	int es = search_get_keybuf_size(sd);
+	ASSERT(strlen(key) < es);
 	SEARCH_REGISTER(nbr_str_copy(tmp->key.string.k, es, key, es),
 			nbr_str_cmp(tmp->key.string.k, es, key, es) == 0,
 			search_get_str_hush(m, key));
@@ -591,7 +599,7 @@ nbr_search_str_get(SEARCH sd, const char *key)
 NBR_API int
 nbr_search_mem_regist(SEARCH sd, const char *key, int kl, void *data)
 {
-	ASSERT(((search_t *)sd)->elemsize >= kl);
+	ASSERT(search_get_keybuf_size(sd) >= kl);
 	SEARCH_REGISTER(nbr_mem_copy(tmp->key.mem.k, key, kl),
 			nbr_mem_cmp(tmp->key.mem.k, key, kl) == 0,
 			search_get_mem_hush(m, key, kl));

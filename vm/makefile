@@ -10,9 +10,9 @@ AR = ar crv
 DEFS = 
 DEFS += -D_GNU_SOURCE
 ifeq ($(DEBUG), 1)
-CFLAG = -Wall -g -fPIC -D_DEBUG -D_RPC_PROF
+CFLAG = -Wall -g -march=i686 -fPIC -D_DEBUG -D_RPC_PROF
 else 
-CFLAG = -O4 -fPIC -D_RPC_PROF
+CFLAG = -O4 -march=i686 -fPIC -D_RPC_PROF
 endif
 ifeq ($(VERBOSE_BUILD), 1)
 CFLAG += -v
@@ -56,7 +56,7 @@ TESTDIR = test
 TESTSRCS = $(shell find $(TESTDIR) -regex .*\\.cpp$$ -printf %f\\n)
 TESTOBJS = $(TESTSRCS:%.cpp=$(OBJS)/$(TESTDIR)/%.o)
 TESTDEPS = $(TESTSRCS:%.cpp=$(DEPS)/$(TESTDIR)/%.d)
-TESTREQLIBS = z bz2 rt m ssl crypto $(LUA) msgpack
+TESTREQLIBS = tokyocabinet z bz2 rt m ssl crypto $(LUA) msgpack
 TESTLIBS = $(foreach lib,$(TESTREQLIBS),$(shell echo "-l$(lib)"))
 UNITTEST = ut
 RUNTEST = any
@@ -80,6 +80,7 @@ KVS = $(KVS_SRCS:%.cpp=$(KVS_DIR)/lib$(LIBNAME)_%.a)
 KVS_LIBS += $(KVS_SRCS:%.cpp=-l$(LIBNAME)_%)
 KVS_DEPS = $(KVS_SRCS:%.cpp=$(DEPS)/$(KVS_DIR)/%.d)
 INCS += -I$(KVS_DIR)
+LIBS += -L$(KVS_DIR)
 
 
 #-----------------------------------------------------------------------
@@ -132,7 +133,7 @@ $(KVS_DIR)/lib$(LIBNAME)_%.a: $(KVS_DIR)/%.cpp
 #-----------------------------------------------------------------------
 #	make target
 #-----------------------------------------------------------------------
-all: $(LIBRARY) $(UNITTEST)
+all: $(LIBRARY) $(KVS) $(UNITTEST)
 
 test: all
 	./$(TESTDIR)/$(UNITTEST) $(RUNTEST)

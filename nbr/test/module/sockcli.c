@@ -376,41 +376,45 @@ main(int argc, char *argv[], char *envp[])
 	PROTOCOL *prt;
 	void *prt_p;
 	struct rlimit rl;
+	int startidx = 0;
 	if (argc < 4) {
 		TRACE("argc = %u\n", argc);
-		TRACE("usage: sockcli {addr} {max thread} {exec duration} "
+		TRACE("usage: sockcli.elf {addr} {max thread} {exec duration} "
 				"{query type} {proto} {max client} {max query}\n");
 		return -1;
 	}
+	if (nbr_str_cmp_tail(argv[0], ".elf", 4, 256) == 0) {
+		startidx++;	/* skip application name */
+	}
 	nbr_get_default(&c);
-	c.sockbuf_size = 16 * 1024 * 1024;
+	c.sockbuf_size = 24 * 1024 * 1024;
 	c.ndc.mcast_port = 9999;
-	if (nbr_str_atoi(argv[1], &(c.max_worker), 256) < 0) {
+	if (nbr_str_atoi(argv[startidx + 1], &(c.max_worker), 256) < 0) {
 		TRACE("get args1 fail %s\n", argv[1]);
 		return -3;
 	}
-	if (nbr_str_atoi(argv[2], &span, 256) < 0) {
+	if (nbr_str_atoi(argv[startidx + 2], &span, 256) < 0) {
 		TRACE("get args2 fail %s\n", argv[2]);
 		return -4;
 	}
-	if (nbr_str_atoi(argv[3], &type, 256) < 0) {
+	if (nbr_str_atoi(argv[startidx + 3], &type, 256) < 0) {
 		TRACE("get args3 fail %s\n", argv[3]);
 		return -5;
 	}
-	if (strcmp("UDP", argv[4]) == 0) {
+	if (strcmp("UDP", argv[startidx + 4]) == 0) {
 		f_udp = 1;
 	}
-	if (nbr_str_atoi(argv[5], &N_CLIENT, 256) < 0) {
+	if (nbr_str_atoi(argv[startidx + 5], &N_CLIENT, 256) < 0) {
 		TRACE("get args5 fail %s\n", argv[5]);
 		return -6;
 	}
-	if (nbr_str_atoi(argv[6], &max_query, 256) < 0) {
+	if (nbr_str_atoi(argv[startidx + 6], &max_query, 256) < 0) {
 		TRACE("get args6 fail %s\n", argv[6]);
 		return -7;
 	}
 	N_CLIENT_GROUP = (int)((N_CLIENT / N_CLIENT_GROUP_SIZE) + 1);
 	printf("sockcli: param: %s %d %d %d %s %d %d\n",
-			argv[0], c.max_thread, span, type, argv[4], N_CLIENT, max_query);
+			argv[startidx], c.max_thread, span, type, argv[startidx + 4], N_CLIENT, max_query);
 	if (nbr_init(&c) != NBR_OK) {
 		return -2;
 	}
@@ -423,9 +427,9 @@ main(int argc, char *argv[], char *envp[])
 		TRACE("alloc fail2: N_CLIENT=%d\n", N_CLIENT);
 		return -10;
 	}
-	prt = proto_regist_by_name(argv[4], &prt_p);
+	prt = proto_regist_by_name(argv[startidx + 4], &prt_p);
 	if (!prt) {
-		TRACE("protocol registration fail %s\n", argv[4]);
+		TRACE("protocol registration fail %s\n", argv[startidx + 4]);
 		return -10;
 	}
 
@@ -468,7 +472,7 @@ main(int argc, char *argv[], char *envp[])
 	tm_start = time(NULL);
 	while(alive) {
 		nbr_poll();
-		if (create_connection(skm, argv[0], (U8)type) < 0) {
+		if (create_connection(skm, argv[startidx], (U8)type) < 0) {
 			emerg = NBR_ESHORT;
 			break;
 		}
@@ -499,7 +503,7 @@ main(int argc, char *argv[], char *envp[])
 		}
 	}
 	printf("###### sending last result...\n");
-	last = nbr_sockmgr_connect(skm, argv[0], NULL, NULL);
+	last = nbr_sockmgr_connect(skm, argv[startidx], NULL, NULL);
 	tm_last_send_start = time(NULL);
 	while(1) {
 		if (nbr_sock_writable(last) > 0) {

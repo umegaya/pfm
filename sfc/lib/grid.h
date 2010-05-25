@@ -246,11 +246,6 @@ public:
 			-1, opt_expandable)) {
 			return NBR_EMALLOC;
 		}
-		/* TODO: better way? it is too personal */
-		S::set_cf(this);
-		if (&(S::cf()) != this) {
-			return NBR_EINVAL;
-		}
 		return super::init(cfg);
 	}
 	void fin() {
@@ -364,7 +359,7 @@ public:
 		querydata *q = find_query(msgid);
 		if (q) {
 			if (q->m_p) { 
-				free(q->m_p); 
+				nbr_free(q->m_p);
 				q->m_p = NULL;
 			}
 			if (q->m_c) { 
@@ -483,7 +478,7 @@ connector_impl<S,K,CP>::connector::sendlow(
 		q->m_sent_msgid = msgid;
 		q->m_is_query = 0;
 		ASSERT(!q->m_p);
-		if (!(q->m_p = (char *)malloc(l))) { goto error; }
+		if (!(q->m_p = (char *)nbr_malloc(l))) { goto error; }
 		memcpy(q->m_p, p, l);
 		fq = q;
 		if (r < 0) { goto senderror; }

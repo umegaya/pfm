@@ -155,6 +155,7 @@ typedef struct 	sockevent
 typedef struct 	sockjob
 {
 	THREAD		thrd;		/* thread object to process this queue */
+	MUTEX		lk;		/* inter thread data exchange */
 	void		*p;			/* application defined parameter to worker */
 	void		(*on_event)(THREAD, THREAD, char *, size_t);/* thread event cb */
 	int			active,sleep;/* thread need to active/now sleep? */
@@ -184,7 +185,7 @@ static struct {
 					NULL,
 					NULL, NULL,
 					NULL,
-					NULL, { NULL, NULL, NULL, 0, 0, NULL, NULL, {}, NULL, NULL },
+					NULL, { NULL, NULL, NULL, NULL, 0, 0, NULL, NULL, {}, NULL, NULL },
 					0, 0, 0, 0,
 					{ NULL, 0, 0 },
 					INVALID_FD,
@@ -384,6 +385,9 @@ sockjob_init(sockjob_t *j, int skbsz)
 	int i;
 	j->exec = j->free = NULL;
 	j->active = j->sleep = 0;
+	if (!(j->lk = nbr_mutex_create())) {
+		return NBR_EPTHREAD;
+	}
 	for (i = 0; i < 2; i++) {
 		if (!sockbuf_alloc(&(j->eb[i]), skbsz)) {
 			return NBR_EMALLOC;
@@ -441,7 +445,7 @@ sockbuf_setevent(sockbuf_t *skb, sockdata_t *skd, int serial,
 	else { nbr_mem_copy(e->data, data, len); }
 	skb->blen += dlen;
 	ASSERT(e->sk.p && e->sk.s != 0);
-	return NBR_OK;
+	return dlen;
 }
 
 NBR_INLINE int
@@ -458,7 +462,7 @@ sockbuf_set_mgrevent(sockbuf_t *skb, SOCKMGR skm, int type, char *data, int len)
 	e->type = type;
 	nbr_mem_copy(e->data, data, len);
 	skb->blen += dlen;
-	return NBR_OK;
+	return dlen;
 }
 
 NBR_INLINE int
@@ -478,7 +482,7 @@ sockbuf_worker_event(sockbuf_t *skb, THREAD from, char *data, int len)
 	e->len = dlen;
 	nbr_mem_copy(e->data, data, len);
 	skb->blen += dlen;
-	return NBR_OK;
+	return dlen;
 }
 
 /* sockdata_t */
@@ -592,12 +596,14 @@ sock_push_event(sockdata_t *skd, int serial, int type, char *data, int len,
 	ASSERT((data && len > 0) || (!data && len <= 0));
 	if (!thrd) { return NBR_EINVAL; }
 	j = nbr_thread_get_data(thrd);
-	THREAD_LOCK(nbr_thread_signal_mutex(thrd), error);
+	THREAD_LOCK(j->lk, error);
+//	nbr_mutex_lock(j->lk);
 	if (skd->serial == serial) {
 		r = sockbuf_setevent(j->web, skd, serial, type, data, len, ccb);
 		sockjob_wakeup_if_sleep(j);
 	}
-	THREAD_UNLOCK(nbr_thread_singal_mutex(thrd));
+	THREAD_UNLOCK(j->lk);
+//	nbr_mutex_unlock(j->lk);
 	return r;
 error:
 	return NBR_EPTHREAD;
@@ -611,10 +617,12 @@ sock_push_worker_event(THREAD from, THREAD to, char *data, int len)
 	ASSERT((data && len > 0) || (!data && len <= 0));
 	if (!to && !from) { return NBR_EINVAL; }
 	j = nbr_thread_get_data(to);
-	THREAD_LOCK(nbr_thread_signal_mutex(to), error);
+	THREAD_LOCK(j->lk, error);
+//	nbr_mutex_lock(j->lk);
 	r = sockbuf_worker_event(j->web, from, data, len);
 	sockjob_wakeup_if_sleep(j);
-	THREAD_UNLOCK(nbr_thread_singal_mutex(to));
+	THREAD_UNLOCK(j->lk);
+//	nbr_mutex_unlock(j->lk);
 	return r;
 error:
 	return NBR_EPTHREAD;
@@ -635,11 +643,7 @@ sock_addjob(sockdata_t *skd)
 			SOCK_EVENT_ADDSOCK, NULL, 0, NULL)) == NBR_OK) {
 			/* because if assign->exec, then sock_process_job keep on running
 			 * and execute event handle loop, so no need to wake up. */
-			if (assign->sleep) {
-				if (nbr_thread_signal(assign->thrd, 1) == NBR_OK) {
-					assign->sleep = 0;
-				}
-			}
+			sockjob_wakeup_if_sleep(assign);
 		}
 		return r;
 	}
@@ -962,14 +966,12 @@ sock_process_job(THREAD thrd)
 //		}
 		if (j->web->blen <= 0) {
 		}
-		else if (NBR_OK == nbr_mutex_lock(nbr_thread_signal_mutex(thrd))) {
+		else if (NBR_OK == nbr_mutex_lock(j->lk/* nbr_thread_signal_mutex(thrd) */)) {
 			/* flip double buffer */
 			skb = j->reb;
 			j->reb = j->web;
 			j->web = skb;
-			if (NBR_OK != nbr_mutex_unlock(nbr_thread_signal_mutex(thrd))) {
-				break;
-			}
+			nbr_mutex_unlock(j->lk/* nbr_thread_signal_mutex(thrd) */);
 			/* process event */
 			e = (sockevent_t *)j->reb->buf;
 			le = (sockevent_t *)(j->reb->buf + j->reb->blen);
@@ -1003,7 +1005,7 @@ sock_process_job(THREAD thrd)
 				last->next = g_sock.free;
 				g_sock.free = j->free;
 				j->free = NULL;
-				if (NBR_OK != nbr_mutex_unlock(g_sock.lock)) { break; }
+				nbr_mutex_unlock(g_sock.lock);
 			}
 		}
 #if 1
@@ -1148,6 +1150,7 @@ nbr_sock_fin()
 			for (ii = 0; ii < 2; ii++) {
 				sockbuf_free(&(j->eb[ii]));
 			}
+			nbr_mutex_destroy(j->lk);
 		}
 		nbr_mem_free(g_sock.jobs);
 		g_sock.jobs = NULL;
@@ -1493,8 +1496,10 @@ nbr_sockmgr_event(SOCKMGR s, int type, char *p, int len)
 		return NBR_ENOTSUPPORT;
 	}
 	THREAD_LOCK(g_sock.evlk, error);
+	//nbr_mutex_lock(g_sock.evlk);
 	r = sockbuf_set_mgrevent(g_sock.main.web, s, type, p, len);
 	THREAD_UNLOCK(g_sock.evlk);
+	//nbr_mutex_unlock(g_sock.evlk);
 error:
 	return r;
 }
@@ -1898,7 +1903,7 @@ sock_rw(void *ptr, int rf, int wf, int dg)
 	}
 	if (wf && skd->nwb > 0) {
 		//TRACE("%u: time = %llu %s(%u) %u\n", nbr_osdep_getpid(), nbr_time(), __FILE__, __LINE__, skd->nwb);
-		ssz = ifp->send(skd->fd, skd->wb, skd->nwb, 0, skd->addr, skd->alen);
+		ssz = ifp->send(skd->fd, skd->wb, skd->nwb, MSG_DONTWAIT, skd->addr, skd->alen);
 		switch(ssz) {
 		case -1:
 			//TRACE("%u: sock_io(%p) write: errno=%d\n", getpid(), skd, errno);
@@ -2104,7 +2109,7 @@ skmevent:
 			skb = j->reb;
 			j->reb = j->web;
 			j->web = skb;
-			if (NBR_OK != nbr_mutex_unlock(g_sock.evlk)) { return; }
+			nbr_mutex_unlock(g_sock.evlk);
 			/* process event */
 			e = (sockevent_t *)j->reb->buf;
 			le = (sockevent_t *)(j->reb->buf + j->reb->blen);

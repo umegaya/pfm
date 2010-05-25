@@ -39,9 +39,9 @@ void	*nbr_mem_move(void *dst, const void *src, size_t s);
 #else
 #include <stdlib.h>
 #include <memory.h>
-#define nbr_mem_alloc	malloc
+#define nbr_mem_alloc	nbr_malloc
 #define nbr_mem_calloc	calloc
-#define nbr_mem_free	free
+#define nbr_mem_free	nbr_free
 #define nbr_mem_zero	bzero
 #define nbr_mem_copy	memcpy
 #define nbr_mem_cmp		memcmp
