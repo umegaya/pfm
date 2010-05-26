@@ -40,15 +40,15 @@ public:
 		coroutine() : m_msgid(0), m_scr(NULL), m_wid(NULL) {}
 		TEST_VIRTUAL ~coroutine() {}
 		int init(class lua *scr, world_id wid);
-		int call(rpc::ll_request &req);
+		int call(rpc::ll_exec_request &req);
 		int call(rpc::create_object_request &req);
-		int resume(rpc::ll_response &res);
+		int resume(rpc::ll_exec_response &res);
 		static int pack_object(serializer &sr, class object &o);
 	protected:
 		TEST_VIRTUAL int respond(bool err, serializer &sr);
 		int dispatch(int argc);
-		int to_stack(rpc::ll_request &req);
-		int to_stack(rpc::ll_response &res); 
+		int to_stack(rpc::ll_exec_request &req);
+		int to_stack(rpc::ll_exec_response &res); 
 		int to_stack(rpc::create_object_request &res);
 		int to_stack(const rpc::data &d);
 		int to_func(const rpc::data &d);
@@ -77,14 +77,16 @@ public:
 	};
 protected:
 	VM m_vm;
-	serializer m_sr;
+	serializer &m_sr;
+	msgid_generator &m_seed;
 	class object_factory &m_of;/* weakref */
 	class world_factory &m_wf;/* weakref2 */
 	array<coroutine> m_copool;
 	array<char[smblock_size]> m_smpool;
 public:
-	lua(class object_factory &of, class world_factory &wf) :
-		m_vm(NULL), m_sr(), m_of(of), m_wf(wf), m_smpool() {}
+	lua(class object_factory &of, class world_factory &wf,
+		serializer &sr, msgid_generator &seed) :
+		m_vm(NULL), m_sr(sr), m_seed(seed), m_of(of), m_wf(wf), m_smpool() {}
 	~lua() { fin(); }
 	int init(int max_rpc_ongoing);
 	void fin();
@@ -93,8 +95,10 @@ public:
 	class world_factory &wf() { return m_wf; }
 	operator serializer &() { return m_sr; }
 	operator VM() { return m_vm; }
+	coroutine *co_new() { return m_copool.create(); }
 protected:
 	array<char[smblock_size]> &smpool() { return m_smpool; }
+	MSGID new_msgid() { return m_seed.new_id(); }
 	int load_module(world_id wid, const char *srcfile);
 	/* metamethod */
 	static int class_index(VM vm);

@@ -129,11 +129,4 @@ int		nbr_epoll_wait(int epfd, struct EVENT *events,
 int		nbr_epoll_destroy(int epfd);
 #endif
 
-/* TLS related */
-#if defined(__NBR_LINUX__)
-#define NBR_TLS	static __thread
-#elif defined(__NBR_WINDOWS__)
-#define NBR_TLS __declspec(thread) static
-#endif
-
 #endif//__OSDEP_H__

@@ -13,7 +13,7 @@ public:
 	int respond(bool err, serializer &sr) {
 		if (err) { return NBR_EINVAL; }
 		sr.unpack_start(sr.p(), sr.len());
-		rpc::ll_response d;
+		rpc::ll_exec_response d;
 		if (sr.unpack(d) < 0) {
 			return NBR_ESHORT;
 		}
@@ -25,9 +25,10 @@ public:
 	}
 };
 
-static void push_rpc_context(serializer &sr, object *o, world_id wid, size_t wlen)
+static void push_rpc_context(serializer &sr, msgid_generator &seed, 
+				object *o, world_id wid, size_t wlen)
 {
-	ll_request::pack_header(sr, fiber::new_msgid(), *o, "test_function",
+	ll_exec_request::pack_header(sr, seed.new_id(), *o, "test_function",
 			sizeof("test_function") - 1, wid, wlen, 4);
 	sr.push_map_len(3);
 	PUSHSTR(sr,key_a);
@@ -53,10 +54,11 @@ static int ll_resume_test(int argc, char *argv[]);
 int ll_test(int argc, char *argv[])
 {
 	int r;
-	world_factory wf;
-	ll scr(g_getkvs(), wf);
-	test_fiber fb;
 	serializer sr;
+	world_factory wf;
+	msgid_generator seed;
+	ll scr(g_getkvs(), wf, sr, seed);
+	test_fiber fb;
 	char b[1024], path[1024];
 	object *o1, *o2;
 	world *w1, *w2;
@@ -113,15 +115,15 @@ int ll_test(int argc, char *argv[])
 
 	/* test_world : test_function call */
 	sr.pack_start(b, sizeof(b));
-	push_rpc_context(sr, o1, "test_world", sizeof("test_world") - 1);
-	/* create ll_request object */
+	push_rpc_context(sr, seed, o1, "test_world", sizeof("test_world") - 1);
+	/* create ll_exec_request object */
 	sr.unpack_start(sr.p(), sr.len());/* eat my shit */
 	serializer::data d;
 	if ((r = sr.unpack(d)) < 0) {
-		TTRACE("create ll_request fail (%d)\n", r);
+		TTRACE("create ll_exec_request fail (%d)\n", r);
 		return r;
 	}
-	rpc::ll_request &rq = (rpc::ll_request &)d;
+	rpc::ll_exec_request &rq = (rpc::ll_exec_request &)d;
 
 	if ((r = fb.init(&scr, rq.wid())) < 0) {
 		TTRACE("fiber init fail (%d)\n", r);
@@ -131,11 +133,11 @@ int ll_test(int argc, char *argv[])
 
 	/* test_world2 : test_function call */
 	sr.pack_start(b, sizeof(b));
-	push_rpc_context(sr, o2, "test_world2", sizeof("test_world2") - 1);
-	/* create ll_request object */
+	push_rpc_context(sr, seed, o2, "test_world2", sizeof("test_world2") - 1);
+	/* create ll_exec_request object */
 	sr.unpack_start(sr.p(), sr.len());/* eat my shit */
 	if ((r = sr.unpack(d)) < 0) {
-		TTRACE("create ll_request fail (%d)\n", r);
+		TTRACE("create ll_exec_request fail (%d)\n", r);
 		return r;
 	}	
 	if ((r = fb.init(&scr, rq.wid())) < 0) {
@@ -154,10 +156,10 @@ int ll_test(int argc, char *argv[])
 class testfiber : public ll::coroutine
 {
 public:
-	rpc::ll_response m_d;
+	rpc::ll_exec_response m_d;
 public:
 	testfiber() { ll::coroutine::m_exec = NULL; }
-	rpc::ll_response &result() { return m_d; }
+	rpc::ll_exec_response &result() { return m_d; }
 	int respond(bool err, serializer &sr) {
 		sr.unpack_start(sr.p(), sr.len());
 		return sr.unpack(m_d);
@@ -169,9 +171,9 @@ public:
 	test_object() : object() {}
 	int save(char *&p, int &l) { return l; }
 	int load(const char *p, int l) { return NBR_OK; }
-	rpc::ll_request &reqbuff() {
-		ASSERT(sizeof(rpc::ll_request) <= sizeof(object::m_buffer));
-		return *(rpc::ll_request *)buffer(); }
+	rpc::ll_exec_request &reqbuff() {
+		ASSERT(sizeof(rpc::ll_exec_request) <= sizeof(object::m_buffer));
+		return *(rpc::ll_exec_request *)buffer(); }
 	int request(class serializer &sr) {
 		sr.unpack_start(sr.p(), sr.len());
 		return sr.unpack(reqbuff());
@@ -200,11 +202,12 @@ int ll_resume_test(int argc, char *argv[])
 {
 	test_object_factory of;
 	world_factory wf;
-	ll scr1(of, wf), scr2(of, wf);
-	rpc::ll_request req;
-	rpc::ll_response res;
-	testfiber fb1, fb2;
 	serializer sr;
+	msgid_generator seed;
+	ll scr1(of, wf, sr, seed), scr2(of, wf, sr, seed);
+	rpc::ll_exec_request req;
+	rpc::ll_exec_response res;
+	testfiber fb1, fb2;
 	int r; char path[1024], buf[65536];
 	object *o1, *o2;
 	test_object *to;

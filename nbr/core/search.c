@@ -567,7 +567,7 @@ NBR_API int
 nbr_search_str_regist(SEARCH sd, const char *key, void *data)
 {
 	int es = search_get_keybuf_size(sd);
-	ASSERT(strlen(key) < es);
+	ASSERT(nbr_str_length(key, es * 2) < es);
 	SEARCH_REGISTER(nbr_str_copy(tmp->key.string.k, es, key, es),
 			nbr_str_cmp(tmp->key.string.k, es, key, es) == 0,
 			search_get_str_hush(m, key));

@@ -53,7 +53,7 @@ int lua::coroutine::call(create_object_request &req)
 	return dispatch(r);
 }
 
-int lua::coroutine::call(ll_request &req)
+int lua::coroutine::call(ll_exec_request &req)
 {
 	int r;
 	if ((r = to_stack(req)) < 0) { return r; }
@@ -70,7 +70,7 @@ int lua::coroutine::dispatch(int argc)
 		fprintf(stderr,"fiber failure %d <%s>\n", r, lua_tostring(m_exec, -1));
 		serializer &sr = *m_scr;
 		PREPARE_PACK(sr);
-		ll_response::pack_header(sr, m_msgid);
+		ll_exec_response::pack_header(sr, m_msgid);
 		sr.pushnil();
 		if ((r = from_stack(lua_gettop(m_exec), sr)) < 0) { 
 			ASSERT(false); return r; 
@@ -80,22 +80,22 @@ int lua::coroutine::dispatch(int argc)
 	else {	/* successfully finished */
 		serializer &sr = *m_scr;
 		PREPARE_PACK(sr);
-		ll_response::pack_header(sr, m_msgid);
-		if ((r = from_stack(1, *m_scr)) < 0) { 
+		ll_exec_response::pack_header(sr, m_msgid);
+		if ((r = from_stack(1, sr)) < 0) {
 			ASSERT(false); return r; 
 		}
 		sr.pushnil();
-		return respond(false, *m_scr);
+		return respond(false, sr);
 	}
 }
 
-int lua::coroutine::resume(ll_response &res)
+int lua::coroutine::resume(ll_exec_response &res)
 {
 	int r;
 	if (res.err().type() != datatype::NIL) {
 		serializer &sr = *m_scr;
 		PREPARE_PACK(sr);
-		ll_response::pack_header(sr, m_msgid);
+		ll_exec_response::pack_header(sr, m_msgid);
 		sr.pushnil();
 		/* TODO : need support except string type? */
 		if ((r = sr.push_string(res.err(), res.err().len())) < 0) { 
@@ -290,7 +290,7 @@ int lua::coroutine::to_stack(const rpc::data &d)
 	return NBR_OK;
 }
 
-int lua::coroutine::to_stack(ll_request &req)
+int lua::coroutine::to_stack(ll_exec_request &req)
 {
 	int r, i, an;
 	if ((r = to_stack(req.rcvr())) < 0) { return r; }
@@ -330,7 +330,7 @@ int lua::coroutine::to_stack(create_object_request &req)
 }
 
 
-int lua::coroutine::to_stack(rpc::ll_response &res)
+int lua::coroutine::to_stack(rpc::ll_exec_response &res)
 {
 	int r;
 	if ((r = to_stack(res.ret())) < 0) { return r; }
@@ -503,7 +503,7 @@ int lua::coroutine::method_call(VM vm)
 	else {
 		/* rpc */
 		PREPARE_PACK(co->scr());
-		ll_request::pack_header(co->scr(), fiber::new_msgid(), *o,
+		ll_exec_request::pack_header(co->scr(), co->scr().new_msgid(), *o,
 			m->name(), strlen(m->name()),
 			o->belong()->id(), strlen(o->belong()->id()),
 			top - 2);
@@ -537,7 +537,7 @@ int lua::coroutine::ctor_call(VM vm)
 	lua::method *m = co->to_m(1);
 	int top = lua_gettop(vm), r;
 	PREPARE_PACK(co->scr());
-	create_object_request::pack_header(co->scr(), fiber::new_msgid(), uuid, 
+	create_object_request::pack_header(co->scr(), co->scr().new_msgid(), uuid, 
 		m->name(), strlen(m->name()), co->wid(), strlen(co->wid()), top - 2);
 	/* arguments are starts from index 3 (1:method object,2:Klass or object)*/
 	for (int i = 3; i <= top; i++) {

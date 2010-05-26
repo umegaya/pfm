@@ -6,11 +6,6 @@
 #include "serializer.h"
 
 namespace pfm {
-/* typedefs */
-typedef U32 MSGID;
-typedef U16 CMSGID;
-typedef const char *world_id;
-typedef class object pfmobj;
 namespace rpc {
 /* message types */
 enum {
@@ -19,15 +14,48 @@ enum {
 };
 /* request types */
 enum {
-	req_ll = 1,
-	req_create_object = 2,
-	req_replicate = 3,
-	req_login = 4,
-	req_create_world = 5,
+	ll_exec = 1,
+	create_object = 2,
+	replicate = 3,
+	login = 4,
+	create_world = 5,
 };
+} /* namespace rpc */
 
 /* classes */
 /* base */
+class msgid_generator {
+protected:
+	U32 m_msgid_seed;
+	static const U32 MSGID_NORMAL_LIMIT = 2000000000;
+	static const U32 MSGID_COMPACT_LIMIT = 60000;
+public:
+	typedef U32 NMSGID;
+	typedef U16 CMSGID;
+	msgid_generator() : m_msgid_seed(0) {}
+	inline NMSGID normal_new_id() {
+		__sync_val_compare_and_swap(&m_msgid_seed, MSGID_NORMAL_LIMIT, 0);
+		return __sync_add_and_fetch(&m_msgid_seed, 1);
+	}
+	inline CMSGID compact_new_id() {
+		__sync_val_compare_and_swap(&m_msgid_seed, MSGID_COMPACT_LIMIT, 0);
+		return __sync_add_and_fetch(&m_msgid_seed, 1);
+	}
+#if !defined(_USE_COMPACT_MSGID)
+	typedef NMSGID MSGID;
+	inline MSGID new_id() { return normal_new_id(); }
+#else
+	typedef CMSGID MSGID;
+	inline CMSGID new_id() { return compact_new_id(); }
+#endif
+};
+/* typedefs */
+typedef msgid_generator::MSGID MSGID;
+typedef const char *world_id;
+typedef class object pfmobj;
+
+namespace rpc {
+/* protocol class base */
 class data : public serializer::data {
 public:
 	operator const UUID & () const { 
@@ -61,8 +89,8 @@ public:
 	static inline int pack_header(serializer &sr, MSGID msgid);
 };
 
-/* req_ll */
-class ll_request : public request {
+/* ll_exec */
+class ll_exec_request : public request {
 public:
 	int argc() const { return request::argc() - 3; }
 	const data &method() const { return request::argv(0); }
@@ -73,10 +101,10 @@ public:
 			pfmobj &o, const char *method, size_t mlen,
 			world_id wid, size_t wlen, int n_arg);
 };
-class ll_response : public response {
+class ll_exec_response : public response {
 };
 
-/* req_create_object */
+/* create_object */
 class create_object_request : public request {
 public:
 	const data &klass() const { return request::argv(0); }
@@ -112,11 +140,11 @@ inline int response::pack_header(serializer &sr, MSGID msgid)
 	return sr.len();
 }
 
-inline int ll_request::pack_header(serializer &sr, MSGID msgid,
+inline int ll_exec_request::pack_header(serializer &sr, MSGID msgid,
 		pfmobj &o, const char *method, size_t mlen,
 		world_id wid, size_t wlen, int n_arg)
 {
-	request::pack_header(sr, msgid, req_ll, n_arg + 3);
+	request::pack_header(sr, msgid, ll_exec, n_arg + 3);
 	sr.push_string(method, mlen);
 	sr.push_string(wid, wlen);
 	request::pack_object(sr, o);
@@ -128,7 +156,7 @@ inline int create_object_request::pack_header(
 		const char *klass, size_t klen,
 		world_id wid, size_t wlen, int n_arg)
 {
-	request::pack_header(sr, msgid, req_create_object, n_arg + 3);
+	request::pack_header(sr, msgid, create_object, n_arg + 3);
 	sr.push_string(klass, klen);
 	sr.push_string(wid, wlen);
 	sr.push_raw(reinterpret_cast<const char *>(&uuid), sizeof(UUID));
@@ -145,7 +173,7 @@ inline int create_object_response::pack_header(
 	return sr.len();
 }
 
-}
+} /* namespace rpc */
 }
 
 #endif

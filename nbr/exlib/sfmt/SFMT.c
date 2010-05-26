@@ -69,7 +69,7 @@ typedef struct W128_T w128_t;
   internal state, index counter and flag
   --------------------------------------*/
 /** the 128-bit internal state array */
-NBR_TLS w128_t *sfmt = NULL;
+NBR_STLS w128_t *sfmt = NULL;
 #define psfmt32 ((uint32_t *)&(sfmt[0].u[0]))
 #define psfmt64 ((uint64_t *)psfmt32)
 /** the 32bit integer pointer to the 128-bit internal state array */

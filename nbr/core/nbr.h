@@ -30,15 +30,18 @@
 	//windows
 	#define	__NBR_WINDOWS__
 	#define NBR_API	__declspec(dllexport)
-	#define NBR_TLS __declspec(thread) static
+	#define NBR_TLS __declspec(thread)
+	#define NBR_STLS NBR_TLS static
 #elif defined(linux)
 	//linux
 	#define	__NBR_LINUX__
 	#define NBR_API extern
-	#define NBR_TLS static __thread
+	#define NBR_TLS __thread
+	#define NBR_STLS static NBR_TLS
 #else
 	#define NBR_API extern
-	#define NBR_TLS static __thread
+	#define NBR_TLS __thread
+	#define NBR_STLS static NBR_TLS
 #endif
 #define MTSAFE
 
