@@ -37,6 +37,28 @@ endif
 
 
 #-----------------------------------------------------------------------
+#	master
+#-----------------------------------------------------------------------
+MDIR = mstr
+MSRCS = $(shell find $(MDIR) -regex .*\\.cpp$$)
+MOBJS = $(MSRCS:%.cpp=$(OBJS)/%.o)
+MDEPS = $(MSRCS:%.cpp=$(DEPS)/%.d)
+MREQLIBS = tokyocabinet z bz2 pthread rt m ssl crypto $(LUA) msgpack
+MLIBS = $(foreach lib,$(MREQLIBS),$(shell echo "-l$(lib)"))
+MASTER = pfmm
+
+#-----------------------------------------------------------------------
+#	servant
+#-----------------------------------------------------------------------
+SDIR = svnt
+SSRCS = $(shell find $(SDIR) -regex .*\\.cpp$$)
+SOBJS = $(SSRCS:%.cpp=$(OBJS)/%.o)
+SDEPS = $(SSRCS:%.cpp=$(DEPS)/%.d)
+SREQLIBS = tokyocabinet z bz2 pthread rt m ssl crypto $(LUA) msgpack
+SLIBS = $(foreach lib,$(SREQLIBS),$(shell echo "-l$(lib)"))
+SERVANT = pfms
+
+#-----------------------------------------------------------------------
 #	test
 #-----------------------------------------------------------------------
 TESTDIR = test
@@ -76,6 +98,14 @@ TMPDIR =
 #-----------------------------------------------------------------------
 .SUFFIXES: .cpp .o .a .d
 
+$(OBJS)/$(MDIR)/%.o: $(MDIR)/%.cpp
+	@mkdir -p $(OBJS)/$(MDIR)
+	$(CC) $(CFLAG) $(INCS) -c -o $@ $<
+
+$(OBJS)/$(SDIR)/%.o: $(SDIR)/%.cpp
+	@mkdir -p $(OBJS)/$(SDIR)
+	$(CC) $(CFLAG) $(INCS) -c -o $@ $<
+
 $(OBJS)/%.o:
 	@mkdir -p $(OBJS)/$(dir $<)
 	$(CC) $(CFLAG) $(INCS) -c -o $@ $<
@@ -90,9 +120,19 @@ $(DEPS)/$(COREDIR)/%.d: $(COREDIR)/%.cpp
 	@$(CC) $(CFLAG) $(INCS) $< -M |         \
 		sed 's:.*\.o:${OBJS}/${COREDIR}/\0:' > $@
 
+$(DEPS)/$(SDIR)/%.d: $(SDIR)/%.cpp
+	@mkdir -p $(DEPS)/$(SDIR)
+	@$(CC) $(CFLAG) $(INCS) $< -M |         \
+		sed 's:.*\.o:${OBJS}/${SDIR}/\0:' > $@
+
+$(DEPS)/$(MDIR)/%.d: $(MDIR)/%.cpp
+	@mkdir -p $(DEPS)/$(MDIR)
+	@$(CC) $(CFLAG) $(INCS) $< -M |         \
+		sed 's:.*\.o:${OBJS}/${MDIR}/\0:' > $@
+
 $(OBJS)/%.a: 
 	@mkdir -p $(OBJS)/$(dir $<)
-	@$(CC) $(CFLAG) $(DEFS) $(INCS) -c -o $@.o $<
+	@$(CC) $(CFLAG) $(INCS) -c -o $@.o $<
 	@$(AR) $@ $@.o
 	@rm $@.o
 
@@ -105,10 +145,16 @@ $(DEPS)/%.d: $(dir %)/$(notdir %).cpp
 #-----------------------------------------------------------------------
 #	make target
 #-----------------------------------------------------------------------
-all: module $(UNITTEST)
+all: module $(UNITTEST) mstr svnt
 
 test: all
 	./$(TESTDIR)/$(UNITTEST) $(RUNTEST)
+
+mstr: $(COREOBJS) $(MOBJS)
+	$(CC) -o $(MDIR)/$(MASTER) $(CFLAG) $(LNKOPT) $(INCS) $(COREOBJS) $(MOBJS) $(MODULES) $(LIBS) $(MLIBS)
+
+svnt: $(COREOBJS) $(SOBJS)
+	$(CC) -o $(SDIR)/$(SERVANT) $(CFLAG) $(LNKOPT) $(INCS) $(COREOBJS) $(SOBJS) $(MODULES) $(LIBS) $(SLIBS)
 
 module: $(MODULES)
 
@@ -116,7 +162,7 @@ $(UNITTEST) : $(TESTOBJS) $(COREOBJS)
 	$(CC) -o $(TESTDIR)/$(UNITTEST) $(CFLAG) $(LNKOPT) $(INCS) $(TESTOBJS) $(COREOBJS) $(MODULES) $(LIBS) $(TESTLIBS)
 
 clean:
-	rm -f $(TESTOBJS) $(TESTDIR)/$(UNITTEST) $(MODULES) $(COREFILE)
+	rm -f $(TESTOBJS) $(TESTDIR)/$(UNITTEST) $(MODULES) $(COREFILE) $(MOBJS) $(SOBJS) $(MDIR)/$(MASTER) $(SDIR)/$(SERVANT)
 	
 cleanup: clean
 	rm -rf $(OBJS) $(DEPS)

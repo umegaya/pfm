@@ -23,6 +23,7 @@ enum {
 	replicate = 3,
 	login = 4,
 	create_world = 5,
+	register_node = 6,
 };
 } /* namespace rpc */
 
@@ -187,6 +188,42 @@ public:
 	RESPONSE_CASTER(create_world);
 };
 
+/* login */
+class login_request : public world_request {
+public:
+	static const U32 max_account = 256;
+	typedef world_request super;
+	const data &account() const { return super::argv(0); }
+	const data &authdata() const { return super::argv(1); }
+	static inline int pack_header(serializer &sr, MSGID msgid,
+			world_id wid, size_t wlen,
+			const char *account, const char *authdata, size_t dlen);
+	REQUEST_CASTER(login);
+};
+
+class login_response : public response
+{
+public:
+	RESPONSE_CASTER(login);
+};
+
+/* register node */
+class register_node_request : public request {
+public:
+	typedef request super;
+	const data &node_addr() const { return super::argv(0); }
+	static inline int pack_header(serializer &sr, MSGID msgid,
+			const char *address);
+	REQUEST_CASTER(register_node);
+};
+
+class register_node_response : public response
+{
+public:
+	RESPONSE_CASTER(register_node);
+};
+
+
 inline int request::pack_header(serializer &sr, MSGID msgid, U8 reqtype, int n_arg)
 {
 	sr.push_array_len(4);
@@ -269,6 +306,24 @@ inline int create_world_response::pack_header(serializer &sr, MSGID msgid,
 	sr.pushnil();
 	return sr.len();
 
+}
+
+inline int login_request::pack_header(serializer &sr, MSGID msgid,
+		world_id wid, size_t wlen,
+		const char *account, const char *authdata, size_t dlen)
+{
+	super::pack_header(sr, msgid, login, wid, wlen, 2);
+	sr.push_string(account, nbr_str_length(account, max_account));
+	sr.push_raw(authdata, dlen);
+	return sr.len();
+}
+
+inline int register_node_request::pack_header(serializer &sr, MSGID msgid,
+		const char * address)
+{
+	super::pack_header(sr, msgid, register_node, 1);
+	sr.push_string(address, nbr_str_length(address, 256));
+	return sr.len();
 }
 
 
