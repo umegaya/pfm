@@ -6,7 +6,8 @@ namespace pfm {
 typedef mac_uuid UUID_impl;
 class UUID : public UUID_impl {
 public:
-	void assign() { UUID::new_id(*this); }
+	void assign() { UUID_impl::new_id(*this); }
+	bool valid() const { return UUID_impl::valid(*(UUID_impl *)this); }
 };
 }
 

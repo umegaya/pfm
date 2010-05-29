@@ -3,6 +3,7 @@
 
 #include "sfc.hpp"
 #include "uuid.h"
+#include "proto.h"
 
 namespace pfm {
 using namespace sfc;
@@ -14,7 +15,6 @@ protected:
 	UUID m_world_object;
 	map<CHNODE, char*> m_nodes;
 	static const U32 vnode_replicate_num = 30;
-	static const U32 max_wid = 256;
 public:
 	typedef map<CHNODE, char*>::iterator iterator;
 	world() : m_ch(NULL), m_wid(NULL), m_world_object(), m_nodes() {}

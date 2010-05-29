@@ -11,4 +11,14 @@
 #define TEST_VIRTUAL
 #endif
 
+#define LOG TRACE	/* kari */
+
+#define PREPARE_PACK(scr)		\
+		char __b[4 * 1024];	\
+		((serializer &)(scr)).pack_start(__b, sizeof(__b));
+
+#define PREPARE_UNPACK(scr)		\
+		((serializer &)(scr)).unpack_start(((serializer &)(scr)).p(),	\
+						((serializer &)(scr)).len());
+
 #endif

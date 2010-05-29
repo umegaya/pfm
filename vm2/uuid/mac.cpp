@@ -35,6 +35,7 @@ mac_uuid::new_id(mac_uuid &uuid)
 	if (0 == (uuid.id2 = __sync_add_and_fetch(&(UUID_SEED.id2), 1))) {
 		uuid.id1 = UUID_SEED.id1++;
 	}
+	UUID_SEED.set_macid_part(uuid);
 }
 
 int

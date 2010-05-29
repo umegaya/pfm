@@ -23,6 +23,11 @@ public:
 	static const char ctor_string[];
 	static const char klass_method_table[];
 	static const char klass_name_key[];
+	static const char world_klass_name[]; /* World */
+	static const U32 world_klass_name_len = 5;
+	static const char player_klass_name[];/* Player */
+	static const U32 player_klass_name_len = 6;
+	static const char world_object_name[];
 public:
 	struct method {
 		const char *m_name;
@@ -33,21 +38,21 @@ public:
 	friend class lua;
 	protected:
 		VM m_exec;
-		MSGID m_msgid;
+		class fiber *m_fb;
 		class lua *m_scr;
-		world_id m_wid;
 	public:
-		coroutine() : m_msgid(0), m_scr(NULL), m_wid(NULL) {}
-		TEST_VIRTUAL ~coroutine() {}
-		int init(class lua *scr, world_id wid);
-		int call(rpc::ll_exec_request &req);
+		coroutine() : m_fb(NULL), m_scr(NULL) {}
+		~coroutine() {}
+		int init(class fiber *f, class lua *scr);
+		int call(rpc::ll_exec_request &req, bool trusted);
 		int call(rpc::create_object_request &req);
 		int resume(rpc::ll_exec_response &res);
+		int push_world_object(class object *o);
 		static int pack_object(serializer &sr, class object &o);
 	protected:
-		TEST_VIRTUAL int respond(bool err, serializer &sr);
+		int respond(bool err, serializer &sr);
 		int dispatch(int argc);
-		int to_stack(rpc::ll_exec_request &req);
+		int to_stack(rpc::ll_exec_request &req, bool trusted);
 		int to_stack(rpc::ll_exec_response &res); 
 		int to_stack(rpc::create_object_request &res);
 		int to_stack(const rpc::data &d);
@@ -60,7 +65,7 @@ public:
 		method *to_m(int stkid);
 		static class coroutine *to_co(VM vm);
 		class lua &scr() { return *m_scr; }
-		world_id wid() const { return m_wid; }
+		class fiber &fb() { return *m_fb; }
 	protected:/* metamethods */
 		static int object_index(VM vm);
 		static int object_newindex(VM vm);
@@ -91,11 +96,13 @@ public:
 	int init(int max_rpc_ongoing);
 	void fin();
 	int init_world(world_id wid, world_id from, const char *srcfile);
+	void fin_world(world_id wid);
 	class object_factory &of() { return m_of; }
 	class world_factory &wf() { return m_wf; }
 	operator serializer &() { return m_sr; }
 	operator VM() { return m_vm; }
 	coroutine *co_new() { return m_copool.create(); }
+	void co_destroy(coroutine *co) { m_copool.destroy(co); }
 protected:
 	array<char[smblock_size]> &smpool() { return m_smpool; }
 	MSGID new_msgid() { return m_seed.new_id(); }

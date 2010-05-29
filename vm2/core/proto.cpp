@@ -4,7 +4,8 @@
 #include "ll.h"
 
 
-int pfm::rpc::request::pack_object(pfm::serializer &sr, pfm::object &o)
+int pfm::rpc::world_request::pack_object(
+		pfm::serializer &sr, pfm::object &o)
 {
 	return pfm::ll::coroutine::pack_object(sr, o); 
 }

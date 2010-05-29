@@ -495,8 +495,11 @@ public:
 		const data &key(int n) const { ASSERT(CHECK(MAP)); return (const data &)via.map.ptr[n].key; }
 		data &val(int n) { ASSERT(CHECK(MAP)); return (data &)via.map.ptr[n].val; }
 		const data &val(int n) const { ASSERT(CHECK(MAP)); return (const data &)via.map.ptr[n].val; }
+		/* FIXME: now via.array == via.map (same structure) so its ok. */
 		U32 size() const { ASSERT(CHECK(MAP)||CHECK(ARRAY)); return via.array.size; }
 		U32 len() const { ASSERT(CHECK(BLOB)); return via.raw.size; }
+		/* FIXME : black magic... */
+		void set_ptr(const void *p) { ASSERT(CHECK(BLOB)); via.raw.ptr = (const char *)p; }
 		inline __mp::datatype type() const;
 		class data &operator = (const msgpack::object &o) { 
 			msgpack::object::type = o.type; via = o.via; return *this; }

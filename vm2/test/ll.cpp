@@ -7,9 +7,11 @@
 using namespace pfm;
 using namespace pfm::rpc;
 
-class test_fiber : public ll::coroutine {
+class test_fiber : public fiber {
 public:
-	test_fiber() { ll::coroutine::m_exec = NULL; }
+	int m_result;
+public:
+	test_fiber(world_id wid) { fiber::m_wid = wid; }
 	int respond(bool err, serializer &sr) {
 		if (err) { return NBR_EINVAL; }
 		sr.unpack_start(sr.p(), sr.len());
@@ -20,9 +22,14 @@ public:
 		if (d.err().type() != rpc::datatype::NIL) {
 			return NBR_ECBFAIL;
 		}
-		int result = (int)(ll::num)(d.ret());
-		return result;
+		m_result = (int)(ll::num)(d.ret());
+		return m_result;
 	}
+};
+
+class test_coroutine : public ll::coroutine {
+public:
+	test_coroutine() { ll::coroutine::m_exec = NULL; }
 };
 
 static void push_rpc_context(serializer &sr, msgid_generator &seed, 
@@ -58,7 +65,8 @@ int ll_test(int argc, char *argv[])
 	world_factory wf;
 	msgid_generator seed;
 	ll scr(g_getkvs(), wf, sr, seed);
-	test_fiber fb;
+	test_fiber fb("test_world"), fb2("test_world2");
+	test_coroutine co;
 	char b[1024], path[1024];
 	object *o1, *o2;
 	world *w1, *w2;
@@ -125,11 +133,12 @@ int ll_test(int argc, char *argv[])
 	}
 	rpc::ll_exec_request &rq = (rpc::ll_exec_request &)d;
 
-	if ((r = fb.init(&scr, rq.wid())) < 0) {
+	if ((r = co.init(&fb, &scr)) < 0) {
 		TTRACE("fiber init fail (%d)\n", r);
 		return r;
 	}
-	ASSERT(1346 == fb.call(rq));
+	TEST((r = co.call(rq, true)) < 0, "execute coroutine fails (%d)\n", r);
+	ASSERT(1346 == fb.m_result);
 
 	/* test_world2 : test_function call */
 	sr.pack_start(b, sizeof(b));
@@ -140,11 +149,12 @@ int ll_test(int argc, char *argv[])
 		TTRACE("create ll_exec_request fail (%d)\n", r);
 		return r;
 	}	
-	if ((r = fb.init(&scr, rq.wid())) < 0) {
+	if ((r = co.init(&fb2, &scr)) < 0) {
 		TTRACE("fiber init fail (%d)\n", r);
 		return r;
 	}
-	ASSERT(1568 == fb.call(rq));
+	TEST((r = co.call(rq, true)) < 0, "execute coroutine fails (%d)\n", r);
+	ASSERT(1568 == fb2.m_result);
 
 	scr.fin();
 	fin_object_factory();
@@ -153,12 +163,12 @@ int ll_test(int argc, char *argv[])
 }
 
 
-class testfiber : public ll::coroutine
+class testfiber : public fiber
 {
 public:
 	rpc::ll_exec_response m_d;
 public:
-	testfiber() { ll::coroutine::m_exec = NULL; }
+	testfiber(world_id wid) { fiber::m_wid = wid; }
 	rpc::ll_exec_response &result() { return m_d; }
 	int respond(bool err, serializer &sr) {
 		sr.unpack_start(sr.p(), sr.len());
@@ -207,7 +217,8 @@ int ll_resume_test(int argc, char *argv[])
 	ll scr1(of, wf, sr, seed), scr2(of, wf, sr, seed);
 	rpc::ll_exec_request req;
 	rpc::ll_exec_response res;
-	testfiber fb1, fb2;
+	testfiber fb1("test_world"), fb2("test_world");
+	test_coroutine co1, co2;
 	int r; char path[1024], buf[65536];
 	object *o1, *o2;
 	test_object *to;
@@ -237,17 +248,17 @@ int ll_resume_test(int argc, char *argv[])
 	sr.unpack_start(sr.p(), sr.len());
 	TEST((r = sr.unpack(req)) < 0, "unpack packed buf fails (%d)\n", r);
 	/* Player:new should be yielding */
-	TEST((r = fb1.init(&scr1, req.wid())) < 0, "fb1 init fails (%d)\n", r);
-	TEST((r = fb1.call(req)) < 0, "fb1 call fails (%d)\n", r);/* should be yield */
-	/* invoke fiber for creating Item object (fb2) */
-	TEST((r = fb2.init(&scr2, of.m_d.wid())) < 0, "fb2 init fails (%d)\n", r);
-	TEST((r = fb2.call(of.m_d)) < 0, "fb2 call fails (%d)\n", r);
+	TEST((r = co1.init(&fb1, &scr1)) < 0, "fb1 init fails (%d)\n", r);
+	TEST((r = co1.call(req, true)) < 0, "fb1 call fails (%d)\n", r);/* should be yield */
+	/* invoke fiber for creating Item object (co2) */
+	TEST((r = co2.init(&fb2, &scr2)) < 0, "fb2 init fails (%d)\n", r);
+	TEST((r = co2.call(of.m_d)) < 0, "fb2 call fails (%d)\n", r);
 	/* HACK: force change o2 to remote object (to emulate RPC) */
 	TEST((!(o2 = of.find(of.m_uuid)) || (o1 == o2)), "item object not created (%p:%p)", o1, o2);
 	o2->set_flag(object::flag_local, false);
 	to = (test_object *)o2;
-	/* get retval of fb2 and resume fb1 */
-	TEST((r = fb1.resume(fb2.m_d)) < 0, "fb1 resume fails (%d)\n", r);
+	/* get retval of co2 and resume co1 */
+	TEST((r = co1.resume(fb2.m_d)) < 0, "fb1 resume fails (%d)\n", r);
 	/* it will finish! */
 	TEST((fb1.result().ret().type() != rpc::datatype::ARRAY), "retval invalid (%d)\n",
 		fb1.result().ret().type());
@@ -262,25 +273,25 @@ int ll_resume_test(int argc, char *argv[])
 	sr.unpack_start(sr.p(), sr.len());
 	TEST((r = sr.unpack(req)) < 0, "unpack packed buf fails (%d)\n", r);
 	/* it also should be yielding */
-	TEST((r = fb1.init(&scr1, req.wid())) < 0, "fb1 init fails (%d)\n", r);
-	TEST((r = fb1.call(req)) < 0, "fb1 call fails (%d)\n", r);
+	TEST((r = co1.init(&fb1, &scr1)) < 0, "fb1 init fails (%d)\n", r);
+	TEST((r = co1.call(req, true)) < 0, "fb1 call fails (%d)\n", r);
 	/* HACK : to execute remote function, o2 should be back to local object */
 	o2->set_flag(object::flag_local, true);
 	/* execute Item:get_damage in scr2 (rpc request should be stored into o2) */
-	TEST((r = fb2.init(&scr2, to->reqbuff().wid())) < 0, "fb2 init fails (%d)\n", r);
-	TEST((r = fb2.call(to->reqbuff())) < 0, "fb2 call fails (%d)\n", r);
+	TEST((r = co2.init(&fb2, &scr2)) < 0, "fb2 init fails (%d)\n", r);
+	TEST((r = co2.call(to->reqbuff(), true)) < 0, "fb2 call fails (%d)\n", r);
 	/* HACK : o2 again get back to remote */
 	o2->set_flag(object::flag_local, false);
 	/* scr2::m_sr should contains return value of get_damage.
 	resume fiber with this return value. */
-	TEST((r = fb1.resume(fb2.m_d)) < 0, "fb1 resume fails (%d)\n", r);
+	TEST((r = co1.resume(fb2.m_d)) < 0, "fb1 resume fails (%d)\n", r);
 	/* execute Item:calc_value in scr2 */
 	o2->set_flag(object::flag_local, true);
-	TEST((r = fb2.init(&scr2, to->reqbuff().wid())) < 0, "fb2 init fails (%d)\n", r);
-	TEST((r = fb2.call(to->reqbuff())) < 0, "fb2 call fails (%d)\n", r);
-	/* fb1 resume again */
+	TEST((r = co2.init(&fb2, &scr2)) < 0, "fb2 init fails (%d)\n", r);
+	TEST((r = co2.call(to->reqbuff(), true)) < 0, "fb2 call fails (%d)\n", r);
+	/* co1 resume again */
 	o2->set_flag(object::flag_local, false);
-	TEST((r = fb1.resume(fb2.m_d)) < 0, "fb1 resume fails (%d)\n", r);
+	TEST((r = co1.resume(fb2.m_d)) < 0, "fb1 resume fails (%d)\n", r);
 	/* it will finish! */
 	ll::num rv = fb1.result().ret();
 	TEST((rv != ll::num(318)), "retval invalid (%d)\n", (int)rv);

@@ -82,7 +82,7 @@ nbr_str_length(const char *str, size_t max)
 	while(*w) {
 		w++;
 		if ((size_t)(w - str) > max) {
-			ASSERT(FALSE);
+			ASSERT(0);
 			return max;
 		}
 	}

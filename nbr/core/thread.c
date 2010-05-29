@@ -192,17 +192,17 @@ thread_terminate(thread_t *th)
 {
 	void *r;
 	int err = 0;
-	THREAD_LOG(INFO, "thread_terminate (%08x)\n", (U32)th->id);
+	/* THREAD_LOG(INFO, "thread_terminate (%08x)\n", (U32)th->id); */
 	if (th->id == INVALID_PTHREAD) {
 		THREAD_ERROUT(ERROR,PTHREAD,"thread not running");
 		return 0;
 	}
-	if (pthread_cancel(th->id) != 0) {
-		THREAD_ERROUT(ERROR,PTHREAD,"err cancel: %d", th->id);
+	if ((err = pthread_cancel(th->id)) != 0) {
+		THREAD_ERROUT(ERROR,PTHREAD,"err cancel: %08x,%d", th->id,err);
 		err = -1;
 	}
-	if (pthread_join(th->id, &r) != 0) {
-		THREAD_ERROUT(ERROR,PTHREAD,"err join: %d", th->id);
+	if ((err = pthread_join(th->id, &r)) != 0) {
+		THREAD_ERROUT(ERROR,PTHREAD,"err join: %08x,%d", th->id,err);
 		err = -2;
 	}
 	if(r && r != PTHREAD_CANCELED) {
@@ -274,9 +274,10 @@ cond_timedwait(cond_t *c, MUTEX m, int timeout)
 }
 
 NBR_INLINE int
-cond_signal(cond_t *c)
+cond_signal(cond_t *c, int bcast)
 {
-	return pthread_cond_signal(&(c->cnd));
+	return bcast ? pthread_cond_broadcast(&(c->cnd)) :
+			pthread_cond_signal(&(c->cnd));
 }
 
 static void *
@@ -489,7 +490,7 @@ nbr_thpool_addjob(THPOOL thp, void *p, void *(*fn)(void *))
 		goto bad;
 	}
 	THREAD_UNLOCK(thpl->event.mtx);
-	cond_signal(&(thpl->event));
+	cond_signal(&(thpl->event), 0);
 	return NBR_OK;
 bad:
 	THREAD_UNLOCK_ONEXCEPTION(thpl->event.mtx);
@@ -521,7 +522,7 @@ nbr_thread_create(THPOOL thp, void *p, void *(*fn)(void *))
 			THREAD_ERROUT(ERROR,PTHREAD,"err create thread: %d", r);
 			goto bad;
 		}
-		THREAD_LOG(INFO, "new thread(%08x) create\n", (int)th->id);
+		/* THREAD_LOG(INFO, "new thread(%08x) create\n", (int)th->id); */
 	}
 	else {
 		THREAD_ERROUT(ERROR,PTHREAD,"err create thread obj: %d",
@@ -560,7 +561,7 @@ nbr_thread_wait_signal(THREAD th, int mine, int ms)
 	COND_WAIT(*c, ms, ret);
 //	TRACE("%u:%llu: wait singal: ret=%u\n", getpid(), nbr_time(), ret);
 	COND_UNLOCK(c->mtx, ret != 0 && ret != EBUSY);
-	return ret;
+	return ret ? NBR_EPTHREAD : NBR_OK;
 }
 
 NBR_API int
@@ -568,7 +569,26 @@ nbr_thread_signal(THREAD th, int mine)
 {
 	thread_t *thrd = th;
 	cond_t *c = mine ? &(thrd->event) : &(thrd->belong->event);
-	return cond_signal(c) == 0 ? NBR_OK : NBR_EPTHREAD;
+	return cond_signal(c, 0) == 0 ? NBR_OK : NBR_EPTHREAD;
+}
+
+NBR_API int
+nbr_thread_join(THREAD th, int force, void **p)
+{
+	thread_t *thrd = th;
+	int r = force ? 
+		thread_terminate(thrd) : 
+		pthread_join(thrd->id, p) ? NBR_EPTHREAD : NBR_OK;
+	thrd->id = INVALID_PTHREAD;
+	return r;
+}
+
+NBR_API int
+nbr_thread_signal_bcast(THPOOL thp)
+{
+	thpool_t *thpl = thp;
+	cond_t *c = &(thpl->event);
+	return cond_signal(c, 1) == 0 ? NBR_OK : NBR_EPTHREAD;
 }
 
 NBR_API void*

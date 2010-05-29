@@ -101,11 +101,13 @@ public:
 	inline record insert(value v, key k) { /* insert new record with initialization */
 		util::lock lk(m_lk, true);
 		element *e;
+		if ((e = super::findelem(k))) { return record(NULL); }
 		if (!(e = super::rawalloc(k))) { return record(NULL); }
 		e->set(v);
 		record r(e);
 		if (!save(r, k, true)) {
 			super::erase(k);
+			ASSERT(false);
 			return record(NULL);
 		}
 		return r;
@@ -113,16 +115,18 @@ public:
 	inline record create(key k) {	/* create record (if already exists, return NULL) */
 		util::lock lk(m_lk, true);
 		element *e;
+		if ((e = super::findelem(k))) { return record(NULL); }
 		if (!(e = super::rawalloc(k))) { return record(NULL); }
 		record r(e);
 		if (!save(r, k, true)) {
 			super::erase(k);
+			ASSERT(false);
 			return record(NULL);
 		}
 		return r;
 	}
 	inline void destroy(key k) {	/* destroy record */
-		super::del(key_traits::kp(k), key_traits::kl(k));
+		m_db.del(key_traits::kp(k), key_traits::kl(k));
 		super::erase(k);
 	}
 	inline void unload(key k) {	/* remove record from memory (still exist on disk) */

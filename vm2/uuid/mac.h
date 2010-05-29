@@ -39,6 +39,14 @@ public:
 	static inline const mac_uuid invalid_id();
 	static inline bool valid(const mac_uuid &uuid) {
 		return uuid.id1 != 0 || uuid.id2 != 0; }
+	void set_macid_part(mac_uuid &uuid) {
+		U32 *p = (U32 *)this;
+		U32 *q = (U32 *)&uuid;
+		q[0] = p[0];
+		U16 *pw = (U16 *)this;
+		U16 *qw = (U16 *)&uuid;
+		qw[2] = pw[2];
+	}
 };
 
 inline const mac_uuid
