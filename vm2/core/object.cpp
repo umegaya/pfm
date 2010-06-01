@@ -1,26 +1,32 @@
 #include "object.h"
+#include "connector.h"
+#include "world.h"
+#include "ll.h"
 
 using namespace pfm;
 
-object_factory pfm::g_kvs;
 #if defined(_TEST)
 int (*object::m_test_save)(class object *, char *&, int &) = NULL;
 int (*object::m_test_load)(class object *, const char *, int) = NULL;
-int (*object::m_test_request)(class object *, class serializer &) = NULL;
+int (*object::m_test_request)
+	(class object *, MSGID, ll *, class serializer &) = NULL;
 #endif
 
-int
-pfm::init_object_factory(int max, const char *opt)
-{
-	return g_kvs.init(max, max, opt_threadsafe | opt_expandable, opt) ? 
-		NBR_OK : NBR_ESYSCALL;
-}
-
-void
-pfm::fin_object_factory()
-{
-	g_kvs.fin();
-}
-
 /* object */
-
+int object::request(MSGID msgid, ll *vm, serializer &sr)
+{
+#if defined(_TEST)
+	if (m_test_request) {
+		return m_test_request(this, msgid, vm, sr);
+	}
+#endif
+	if (local()) {
+		if (thread_current(vm)) {
+			ASSERT(false);
+			return NBR_EINVAL;
+		}
+		return nbr_sock_worker_event(
+			vm->thrd(), m_vm->thrd(), sr.p(), sr.len());
+	}
+	return m_wld->request(msgid, uuid(), sr);
+}

@@ -63,8 +63,9 @@ int ll_test(int argc, char *argv[])
 	int r;
 	serializer sr;
 	world_factory wf;
+	object_factory of;
 	msgid_generator seed;
-	ll scr(g_getkvs(), wf, sr, seed);
+	ll scr(of, wf, sr, NULL);
 	test_fiber fb("test_world"), fb2("test_world2");
 	test_coroutine co;
 	char b[1024], path[1024];
@@ -74,8 +75,8 @@ int ll_test(int argc, char *argv[])
 
 	TEST(!(w1 = wf.create("test_world", 10, 10)), "world1 create fail (%p)\n", w1);
 	TEST(!(w2 = wf.create("test_world2", 10, 10)), "world2 create fail (%p)\n", w2);
-	if ((r = init_object_factory(1000000, get_rcpath(path, sizeof(path),
-			argv[0], "rc/ll/of.tch#bnum=1000000"))) < 0) {
+	if ((r = of.init(1000000, 100000, opt_expandable | opt_threadsafe, 
+		MAKEPATH(path, "rc/ll/of.tch#bnum=1000000"))) < 0) {
 		TTRACE("init_object_factory fail (%d)\n", r);
 		return r;
 	}
@@ -83,14 +84,14 @@ int ll_test(int argc, char *argv[])
 		TTRACE("lua::init fail (%d)\n", r);
 		return r;
 	}
-	g_getkvs().clear();
+	of.clear();
 	uuid1.assign();
-	if (!(o1 = g_getkvs().create(uuid1, w1, &scr, "World"))) {
+	if (!(o1 = of.create(uuid1, w1, &scr, "World"))) {
 		TTRACE("create world object for test_world fails (%p)\n", o1);
 		return NBR_EEXPIRE;
 	}
 	uuid2.assign();
-	if (!(o2 = g_getkvs().create(uuid2, w2, &scr, "World"))) {
+	if (!(o2 = of.create(uuid2, w2, &scr, "World"))) {
 		TTRACE("create world object for test_world2 fails (%p)\n", o2);
 		return NBR_EEXPIRE;
 	}
@@ -157,7 +158,6 @@ int ll_test(int argc, char *argv[])
 	ASSERT(1568 == fb2.m_result);
 
 	scr.fin();
-	fin_object_factory();
 
 	return ll_resume_test(argc, argv);
 }
@@ -188,18 +188,18 @@ public:
 		sr.unpack_start(sr.p(), sr.len());
 		return sr.unpack(reqbuff());
 	}
-	static int test_request(object *p, serializer &sr) {
+	static int test_request(object *p, MSGID, ll *, serializer &sr) {
 		return ((test_object *)p)->request(sr);
 	}
 };
 
-class test_object_factory : public object_factory {
+class test_world : public world {
 public:
-	create_object_request m_d;
-	UUID m_uuid;
+	static create_object_request m_d;
+	static UUID m_uuid;
 public:
-	typedef object_factory super;
-	int request_create(const UUID &uuid, serializer &sr) {
+	static int test_request(world *, MSGID msgid,
+			const UUID &uuid, serializer &sr) {
 		sr.unpack_start(sr.p(), sr.len());
 		int r;
 		TEST((r = sr.unpack(m_d)) < 0, "of:request invalid (%d)", r);
@@ -207,14 +207,17 @@ public:
 		return r;
 	}
 };
+create_object_request test_world::m_d;
+UUID test_world::m_uuid;
 
 int ll_resume_test(int argc, char *argv[])
 {
-	test_object_factory of;
+	object_factory of;
 	world_factory wf;
+	fiber_factory<testfiber> ff(of, wf);
 	serializer sr;
 	msgid_generator seed;
-	ll scr1(of, wf, sr, seed), scr2(of, wf, sr, seed);
+	ll scr1(of, wf, sr, NULL), scr2(of, wf, sr, NULL);
 	rpc::ll_exec_request req;
 	rpc::ll_exec_response res;
 	testfiber fb1("test_world"), fb2("test_world");
@@ -226,6 +229,7 @@ int ll_resume_test(int argc, char *argv[])
 	world *w;
 
 	object::m_test_request = test_object::test_request;
+	world::m_test_request = test_world::test_request;
 	TEST(!(w = wf.create("test_world", 10, 10)), "world create fail (%p)\n", w);
 	TEST((r = scr1.init(10000)) < 0, "scr1 init fail (%d)\n", r);
 	TEST((r = scr2.init(10000)) < 0, "scr2 init fail (%d)\n", r);
@@ -238,6 +242,9 @@ int ll_resume_test(int argc, char *argv[])
 	TEST((r = scr2.init_world("test_world", NULL,
 		MAKEPATH(path, "rc/ll/test_world/main.lua"))) < 0,
 		"scr2 init world fail (%d)\n", r);
+	TEST((r = ff.init(10000, 100, 10)) < 0, "fiber initialize fail (%d)\n", r);
+	fb1.set_ff(&ff);
+	fb2.set_ff(&ff);
 	uuid1.assign();
 	TEST(!(o1 = of.create(uuid1,w,&scr1,"Player")), "create o1 fail (%p)\n", o1);
 	/* call Player:new */
@@ -252,9 +259,9 @@ int ll_resume_test(int argc, char *argv[])
 	TEST((r = co1.call(req, true)) < 0, "fb1 call fails (%d)\n", r);/* should be yield */
 	/* invoke fiber for creating Item object (co2) */
 	TEST((r = co2.init(&fb2, &scr2)) < 0, "fb2 init fails (%d)\n", r);
-	TEST((r = co2.call(of.m_d)) < 0, "fb2 call fails (%d)\n", r);
+	TEST((r = co2.call(test_world::m_d)) < 0, "fb2 call fails (%d)\n", r);
 	/* HACK: force change o2 to remote object (to emulate RPC) */
-	TEST((!(o2 = of.find(of.m_uuid)) || (o1 == o2)), "item object not created (%p:%p)", o1, o2);
+	TEST((!(o2 = of.find(test_world::m_uuid)) || (o1 == o2)), "item object not created (%p:%p)", o1, o2);
 	o2->set_flag(object::flag_local, false);
 	to = (test_object *)o2;
 	/* get retval of co2 and resume co1 */

@@ -413,6 +413,7 @@ NBR_API int		nbr_thread_setcancelstate(int enable) 	MTSAFE;
 NBR_API void	nbr_thread_testcancel()					MTSAFE;
 NBR_API THRID	nbr_thread_get_id(THREAD th) 			MTSAFE;
 NBR_API THRID	nbr_thread_get_curid()					MTSAFE;
+NBR_API THREAD	nbr_thread_get_current()				MTSAFE;
 NBR_API int		nbr_thread_is_current(THREAD th)		MTSAFE;
 NBR_API void	*nbr_thread_get_data(THREAD th)			MTSAFE;
 NBR_API	MUTEX	nbr_mutex_create()				MTSAFE;

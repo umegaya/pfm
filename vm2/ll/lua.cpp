@@ -7,7 +7,7 @@
 using namespace pfm;
 using namespace pfm::rpc;
 
-#define CAN_PROCESS(co, o) (o->can_process_with(ll::to_ll(&(co->scr()))))
+#define CAN_PROCESS(co, o) (o->can_process_with(ll::cast(&(co->scr()))))
 
 /* lua::coroutine */
 int lua::coroutine::init(class fiber *fb, class lua *scr) {
@@ -265,7 +265,7 @@ int lua::coroutine::to_stack(const rpc::data &d)
 				world *w = m_scr->wf().find(m_fb->wid());
 				if (!w) { ASSERT(false); return NBR_ENOTFOUND; }
 				object *o = m_scr->of().load(d.elem(2), w, 
-					ll::to_ll(m_scr), d.elem(1));
+					ll::cast(m_scr), d.elem(1));
 				if (!o) { ASSERT(false); return NBR_EINVAL; }
 				if ((r = push_object(o)) < 0) { return r; }	
 			}
@@ -334,10 +334,10 @@ int lua::coroutine::to_stack(create_object_request &req)
 	if (!w) { return NBR_ENOTFOUND; }
 	TRACE("object create uuid = <%s>\n", req.object_id().to_s(buf, sizeof(buf)));
 	object *o = m_scr->of().create(req.object_id(), w, 
-		ll::to_ll(m_scr), req.klass());
+		ll::cast(m_scr), req.klass());
 	ASSERT(!o || o == m_scr->of().find(req.object_id()));
 	if (!o) { 
-		o = m_scr->of().load(req.object_id(), w, ll::to_ll(m_scr), req.klass());
+		o = m_scr->of().load(req.object_id(), w, ll::cast(m_scr), req.klass());
 		if (o && o->local()) {
 			/* always created! */
 #if defined(_DEBUG)
@@ -411,7 +411,7 @@ int lua::coroutine::push_object(object *o)
 #if defined(_DEBUG)
 			TRACE("metatable %p:%p:%p:%s\n", &(m_scr->of()), 
 				m_scr,lua_topointer(m_exec, -1), o->klass());
-			dump_table(m_exec, lua_gettop(m_exec));
+			//dump_table(m_exec, lua_gettop(m_exec));
 #endif
 			lua_settable(m_exec, LUA_GLOBALSINDEX);
 			/* not created yet: */
@@ -422,7 +422,7 @@ int lua::coroutine::push_object(object *o)
 		if (!o->loaded()) {
 			TRACE("metatable %p:%p:%p:%s(reuse)\n", &(m_scr->of()), 
 				m_scr,lua_topointer(m_exec, -1), o->klass());
-			dump_table(m_exec, lua_gettop(m_exec));
+			//dump_table(m_exec, lua_gettop(m_exec));
 		}
 #endif
 	}
@@ -559,7 +559,7 @@ int lua::coroutine::method_call(VM vm)
 				lua_error(vm);
 			}
 		}
-		if ((r = o->request(co->scr())) < 0) {
+		if ((r = o->request(msgid, ll::cast(&(co->scr())), co->scr())) < 0) {
 			lua_pushfstring(vm, "send request to object fail (%d)", r);
 			lua_error(vm);
 		}
@@ -582,14 +582,15 @@ int lua::coroutine::ctor_call(VM vm)
 	uuid.assign();
 	lua::method *m = co->to_m(1);
 	int top = lua_gettop(vm), r;
+	world_id wid = co->fb().wid();
 	PREPARE_PACK(co->scr());
 	MSGID msgid = co->fb().new_msgid();
 	if (msgid == INVALID_MSGID) {
 		lua_pushstring(vm, "cannot register fiber");
 		lua_error(vm);
 	}
-	create_object_request::pack_header(co->scr(), msgid, uuid, m->name(), strlen(m->name()), 
-		co->fb().wid(), strlen(co->fb().wid()), top - 2);
+	create_object_request::pack_header(co->scr(), msgid, uuid,
+		m->name(), strlen(m->name()), wid, strlen(wid), top - 2);
 	/* arguments are starts from index 3 (1:method object,2:Klass or object)*/
 	for (int i = 3; i <= top; i++) {
 		if ((r = co->from_stack(co->scr(), i)) < 0) {
@@ -597,7 +598,7 @@ int lua::coroutine::ctor_call(VM vm)
 			lua_error(vm);
 		}
 	}
-	if (co->scr().of().request_create(uuid, co->scr()) < 0) {
+	if (co->scr().wf().request(wid, msgid, uuid, co->scr()) < 0) {
 		lua_pushfstring(vm, "send request object creation fail (%d)", r);
 		lua_error(vm);
 	}

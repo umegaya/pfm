@@ -1,8 +1,13 @@
 #include "common.h"
 #include "proto.h"
 #include "world.h"
+#include "connector.h"
 
 using namespace pfm;
+
+#if defined(_TEST)
+int (*world::m_test_request)(world *, MSGID, const UUID &, serializer &) = NULL;
+#endif
 
 int world::init(int max_node, int max_replica)
 {
@@ -23,21 +28,19 @@ void world::fin()
 	nbr_conhash_fin(m_ch);
 }
 
-void *world::connect_assigned_node(class connector_factory &cf, const UUID &uuid)
+void* world::connect_assigned_node(const UUID &uuid)
 {
-#if 0
-	conn *c = NULL;
+	connector *c = NULL;
 	bool retry_f = false;
-	const CHNODE *n[vmprotocol::vmd_object_multiplexity];
+	const CHNODE *n[object_multiplexity];
 	int n_node;
 retry:
-	if ((n_node = lookup_node(uuid, n,
-		vmprotocol::vmd_object_multiplexity)) < 0) {
+	if ((n_node = lookup_node(uuid, n, object_multiplexity)) < 0) {
 		ASSERT(false);
 		return NULL;
 	}
 	for (int i = 0 ; i < n_node; i++) {
-		if (!(c = cf.connect(uuid, n[i]->iden))) {
+		if (!(c = m_cf->connect(uuid, n[i]->iden))) {
 			del_node(*(n[i]));
 			if (!retry_f) {
 				retry_f = true;
@@ -48,10 +51,7 @@ retry:
 		}
 		TRACE("object replicate addr <%s>\n", n[i]->iden);
 	}
-	return c;
-#else
-	return NULL;
-#endif
+	return (void *)c;
 }
 
 CHNODE *world::add_node(const char *addr)
@@ -82,4 +82,18 @@ int world::del_node(const char *addr)
 	m_nodes.erase(addr);
 	return NBR_OK;
 }
+
+int world::request(MSGID msgid, const UUID &uuid, serializer &sr)
+{
+#if defined(_TEST)
+	if (m_test_request) {
+		return m_test_request(this, msgid, uuid, sr);
+	}
+#endif
+	connector *c = m_cf->get_by(uuid);
+	if (!c) { c = (connector *)connect_assigned_node(uuid); }
+	if (!c) { ASSERT(false); return NBR_EEXPIRE; }
+	return c->send(msgid, sr.p(), sr.len());
+}
+
 

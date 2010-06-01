@@ -53,7 +53,7 @@ public:
 		int respond(bool err, serializer &sr);
 		int dispatch(int argc);
 		int to_stack(rpc::ll_exec_request &req, bool trusted);
-		int to_stack(rpc::ll_exec_response &res); 
+		int to_stack(rpc::ll_exec_response &res);
 		int to_stack(rpc::create_object_request &res);
 		int to_stack(const rpc::data &d);
 		int to_func(const rpc::data &d);
@@ -83,15 +83,13 @@ public:
 protected:
 	VM m_vm;
 	serializer &m_sr;
-	msgid_generator &m_seed;
 	class object_factory &m_of;/* weakref */
 	class world_factory &m_wf;/* weakref2 */
 	array<coroutine> m_copool;
 	array<char[smblock_size]> m_smpool;
 public:
-	lua(class object_factory &of, class world_factory &wf,
-		serializer &sr, msgid_generator &seed) :
-		m_vm(NULL), m_sr(sr), m_seed(seed), m_of(of), m_wf(wf), m_smpool() {}
+	lua(class object_factory &of, class world_factory &wf, serializer &sr) :
+		m_vm(NULL), m_sr(sr), m_of(of), m_wf(wf), m_smpool() {}
 	~lua() { fin(); }
 	int init(int max_rpc_ongoing);
 	void fin();
@@ -105,7 +103,6 @@ public:
 	void co_destroy(coroutine *co) { m_copool.destroy(co); }
 protected:
 	array<char[smblock_size]> &smpool() { return m_smpool; }
-	MSGID new_msgid() { return m_seed.new_id(); }
 	int load_module(world_id wid, const char *srcfile);
 	/* metamethod */
 	static int class_index(VM vm);

@@ -6,7 +6,7 @@
 
 using namespace pfm;
 
-class testfiber2 : public fiber {
+class testfiber2 : public svnt::fiber {
 public:
 	static rpc::data m_d;
 public:
@@ -28,67 +28,34 @@ public:
 		sr.unpack_start(sr.p(), sr.len());
 		return sr.unpack(reqbuff());
 	}
-	static int test_request(object *p, serializer &sr) {
+	static int test_request(object *p, MSGID, ll *, serializer &sr) {
 		return ((test_object2 *)p)->request(sr);
 	}
 };
 
-class test_object_factory2 : public object_factory {
+class test_world2 : public world {
 public:
-	rpc::create_object_request m_d;
+	static rpc::create_object_request m_d;
 public:
-	test_object_factory2() : object_factory() {}
-	int request_create(const UUID &uuid, serializer &sr) {
+	test_world2() : world() {}
+	static int test_request(world *w, MSGID msgid,
+			const UUID &uuid, serializer &sr) {
 		sr.unpack_start(sr.p(), sr.len());
 		return sr.unpack(m_d);
 	}
 };
+rpc::create_object_request test_world2::m_d;
 rpc::data testfiber2::m_d;
-
-int world_create(const char *path,
-	fiber_factory<testfiber2> &ff, test_object_factory2 &tof,
-	fiber_factory<testfiber2> &ff_create_object, UUID &wuuid)
-{
-	int r;
-	testfiber2 *fb;
- 	const char *nodes[] = {
- 		"127.0.0.1:10101"
- 	};
-	/* for second world, use same wuuid for world object (then can share it) */
-	PREPARE_PACK(ff.sr());
-	MSGID msgid_dummy = 1000000;
-	TEST((r = rpc::create_world_request::pack_header(ff.sr(), msgid_dummy,
-		"test_world2", "", wuuid, path,
-		1, nodes)) < 0, "pack world_create fail (%d)\n", r);
-	ff.sr().unpack_start(ff.sr().p(), ff.sr().len());
-	rpc::create_world_request cwr;
-	TEST((r = ff.sr().unpack(cwr)) <= 0, "unpack world_create fail (%d)\n", r);
-	TEST((r = ff.call(cwr, true)) < 0, "fiber call world_create fail (%d)\n", r);
-	/* it should yield because of world object creation
-	* then create world object */
-	/* ff1's first fiber (now registerd as msgid = 1) 
-	must have object creation information */
-	TEST(!(fb = ff.find_fiber(1)), "world_create fiber not found(%p)\n", fb);
-	/* send it to ff_create_object and create actual world object 
-	(it should finish because it never yield inside) */
-	TEST((r = ff_create_object.call(tof.m_d, true)) < 0,
-		"world object_create fail(%d)\n", r);
-	/* reply result to first fiber (msgid = 1) */
-	TEST((r = ff.resume((rpc::response &)testfiber2::m_d)) < 0,
-		"world_create resume fail (%d)\n", r);
-	/* fiber should destroy and not registered any more. */	
-	TEST((fb = ff.find_fiber(1)), "it wrongly yields...(%p)\n", fb);
-	return NBR_OK;
-}
 
 #define MAX_THREAD 2
 
 struct context {
-	test_object_factory2 of;
+	object_factory of;
 	world_factory wf;
 	fiber_factory<testfiber2> *ff;
 	THREAD main;
 	UUID wuuid;
+	MSGID start;
 	const char *scr_path;
 	volatile THREAD ths[MAX_THREAD];
 	bool result[MAX_THREAD];
@@ -160,18 +127,18 @@ int fiber_test_thread(THREAD t, context *ctx)
 
 	/* 2. call world create request */
 	/* it should yield because of world object creation then create world object */
-	TEST((r = ff.call(cwr, true)) < 0, "fiber call world_create fail (%d)\n", r);
+	TEST((r = ff.call(t, cwr, true)) < 0, "fiber call world_create fail (%d)\n", r);
 	if (ctx->main == t) {
 		/* ff1's first fiber should registerd as msgid = 1 */
-		CHECK_FIBER_EXIST(1);
+		CHECK_FIBER_EXIST(ctx->start + 1);
 		/* send it to ff_create_object and create actual world object
 		(it should finish because it never yield inside) */
-		TEST((r = ff.call(ctx->of.m_d, true)) < 0,
+		TEST((r = ff.call(t, test_world2::m_d, true)) < 0,
 			"world object_create fail(%d)\n", r);
 		TEST((r = ff.resume((rpc::response &)testfiber2::m_d)) < 0,
 			"world_create resume fail (%d)\n", r);
 		/* fiber should destroy and not registered any more. */
-		CHECK_FIBER_FINISH(1);
+		CHECK_FIBER_FINISH(ctx->start + 1);
 		/* world object address */
 		TEST(!(o = ff.of().find(ctx->wuuid)), "cannot find world object (%p)\n", o);
 		TTRACE("world object (%p)\n", o);
@@ -180,16 +147,16 @@ int fiber_test_thread(THREAD t, context *ctx)
 	}
 	else {/* wait until main thread finish world object creation
 		 (it should be called twice) */
-		CHECK_FIBER_EXIST(2);
+		CHECK_FIBER_EXIST(ctx->start + 2);
 		WAIT_SIGNAL;
 		/* reply result to first fiber */
 		TEST((r = ff.resume((rpc::response &)testfiber2::m_d)) < 0,
 			"world_create resume fail (%d)\n", r);
-		CHECK_FIBER_FINISH(2);
+		CHECK_FIBER_FINISH(ctx->start + 2);
 	}
 	if (ctx->main == t) {
 		/* create world object again for another thread. */
-		TEST((r = ff.call(ctx->of.m_d, true)) < 0,
+		TEST((r = ff.call(t, test_world2::m_d, true)) < 0,
 			"world object_create fail(%d)\n", r);
 		WAIT_SIGNAL;
 	}
@@ -214,14 +181,12 @@ int fiber_test_thread(THREAD t, context *ctx)
 				"create object request unpack fails (%d)\n", r);
 
 		/* do actual call */
-		TEST((r = ff.call(cor, true)) < 0,
+		TEST((r = ff.call(t, cor, true)) < 0,
 				"create object fiber execution fails (%d)\n", r);
-		CHECK_FIBER_EXIST(3);
 		WAIT_SIGNAL;
 		/* reply result to first fiber (msgid = 1) */
 		TEST((r = ff.resume((rpc::response &)testfiber2::m_d)) < 0,
 			"world_create resume fail (%d)\n", r);
-		CHECK_FIBER_FINISH(3);
 		TEST(!(o = ff.of().find(uuid)), "Player object not found (%p)\n", o);
 		TEST((0 != strcmp(o->klass(), "Player")),
 				"klass type invalid (%s)\n", o->klass());
@@ -237,7 +202,7 @@ int fiber_test_thread(THREAD t, context *ctx)
 				"pack ll exec fails (%d)\n", r);
 			ff.sr().unpack_start(ff.sr().p(), ff.sr().len());
 			TEST((r = ff.sr().unpack(ler)) <= 0, "ll exec unpack fails(%d)\n", r);
-			TEST((r = ff.call(ler, true)) < 0, "get_id exec call fails(%d)\n", r);
+			TEST((r = ff.call(t, ler, true)) < 0, "get_id exec call fails(%d)\n", r);
 		}
 		rpc::ll_exec_response &rler = (rpc::ll_exec_response &)testfiber2::m_d;
 		TEST(((ll::num)rler.ret() != ll::num(666)), "Player:get_id fails (%d)\n",
@@ -245,7 +210,7 @@ int fiber_test_thread(THREAD t, context *ctx)
 	}
 	else {
 		/* create world object again for another thread. */
-		TEST((r = ff.call(to->reqbuff(), true)) < 0,
+		TEST((r = ff.call(t, to->reqbuff(), true)) < 0,
 			"call World:get_id fail(%d)\n", r);
 		/* wait for another thread */
 		WAIT_SIGNAL;
@@ -266,6 +231,7 @@ int fiber_test(int argc, char *argv[])
 	/* initialize modules */
 	for (int i = 0; i < MAX_THREAD; i++) { ctx.ths[i] = NULL; }
 	object::m_test_request = test_object2::test_request;
+	world::m_test_request = test_world2::test_request;
 	TEST((r = db.init(MAKEPATH(path, "rc/uuid/uuid.tch"))) < 0,
 		"uuid DB init fail (%d)\n",r);
 	TEST((r = UUID::init(db)) < 0, "UUID init fail (%d)\n", r);
@@ -276,6 +242,7 @@ int fiber_test(int argc, char *argv[])
 	ctx.wuuid.assign();
 	TTRACE("wuuid = (%s)\n", ctx.wuuid.to_s(path, sizeof(path)));
 	ctx.ff = &ff;
+	TTRACE("current msgid start = %u\n", ctx.start = ff.seedval());
 	ctx.scr_path = MAKEPATH(path, "rc/ll/test_world2/main.lua");
 
 	THPOOL thp = nbr_thpool_create(MAX_THREAD);
@@ -284,8 +251,8 @@ int fiber_test(int argc, char *argv[])
 		TEST(!(ctx.ths[i] = nbr_thread_create(thp, &ctx, fiber_test_launcher)),
 			"thread launch fails (%d)\n", i);
 		if (i == 0) { ctx.main = ctx.ths[i]; }
+		::sched_yield();
 	}
-	::sched_yield();
 	/* i = 0 > main (world object created), i = 1 > slave */
 	/* thread activate order is :
 	 * 1. main (world object create finish)

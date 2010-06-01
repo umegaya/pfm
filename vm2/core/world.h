@@ -14,10 +14,13 @@ protected:
 	world_id m_wid;
 	UUID m_world_object;
 	map<CHNODE, char*> m_nodes;
+	class connector_factory *m_cf;
 	static const U32 vnode_replicate_num = 30;
+	static const U32 object_multiplexity = 3;
 public:
 	typedef map<CHNODE, char*>::iterator iterator;
-	world() : m_ch(NULL), m_wid(NULL), m_world_object(), m_nodes() {}
+	world(class connector_factory *cf = NULL) :
+		m_ch(NULL), m_wid(NULL), m_world_object(), m_nodes(), m_cf(cf) {}
 	~world() { fin(); }
 	int init(int max_node, int max_replica);
 	void fin();
@@ -30,13 +33,20 @@ public:
 		return (*n) ? 1 : NBR_ENOTFOUND;
 	}
 	map<CHNODE, char*> &nodes() { return m_nodes; }
+	class connector_factory &cf() { return *m_cf; }
+	void set_cf(class connector_factory *cf) { m_cf = cf; }
 	CHNODE *add_node(const char *addr);
 	int del_node(const char *addr);
-	void *connect_assigned_node(class connector_factory &cf, const UUID &uuid);
 	int add_node(const CHNODE &n) {
 		return nbr_conhash_add_node(m_ch, (CHNODE *)&n); }
 	int del_node(const CHNODE &n) {
 		return nbr_conhash_del_node(m_ch, (CHNODE *)&n); }
+	int request(MSGID msgid, const UUID &uuid, serializer &sr);
+#if defined(_TEST)
+	static int (*m_test_request)(world *, MSGID, const UUID &, serializer &);
+#endif
+protected:
+	void *connect_assigned_node(const UUID &uuid);
 };
 
 class world_factory : public map<world, world_id> {
@@ -46,6 +56,7 @@ public:
 		bool b = super::init(64, 64, -1, opt_expandable | opt_threadsafe);
 		assert(b);	/* if down here, your machine is not suitable to use it */
 	}
+	~world_factory() { super::fin(); }
 	void remove_node(address &a) {
 		super::iterator it = begin();
 		for (; it != super::end(); it = super::next(it)) {
@@ -66,6 +77,12 @@ public:
 		return w;
 	}
 	void destroy(world_id wid) { super::erase(wid); }
+	int request(world_id wid, MSGID msgid,
+		const UUID &uuid, serializer &sr) {
+		world *w = super::find(wid);
+		if (!w) { return NBR_ENOTFOUND; }
+		return w->request(msgid, uuid, sr);
+	}
 };
 }
 

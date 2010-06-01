@@ -107,7 +107,6 @@ public:
 		record r(e);
 		if (!save(r, k, true)) {
 			super::erase(k);
-			ASSERT(false);
 			return record(NULL);
 		}
 		return r;
@@ -120,7 +119,6 @@ public:
 		record r(e);
 		if (!save(r, k, true)) {
 			super::erase(k);
-			ASSERT(false);
 			return record(NULL);
 		}
 		return r;

@@ -8,6 +8,7 @@
 #include "str.h"
 #include "uuid.h"
 #include "serializer.h"
+#include "msgid.h"
 
 namespace pfm {
 namespace rpc {
@@ -29,34 +30,6 @@ enum {
 
 /* classes */
 /* base */
-class msgid_generator {
-protected:
-	U32 m_msgid_seed;
-	static const U32 MSGID_NORMAL_LIMIT = 2000000000;
-	static const U32 MSGID_COMPACT_LIMIT = 60000;
-public:
-	typedef U32 NMSGID;
-	typedef U16 CMSGID;
-	msgid_generator() : m_msgid_seed(0) {}
-	inline NMSGID normal_new_id() {
-		__sync_val_compare_and_swap(&m_msgid_seed, MSGID_NORMAL_LIMIT, 0);
-		return __sync_add_and_fetch(&m_msgid_seed, 1);
-	}
-	inline CMSGID compact_new_id() {
-		__sync_val_compare_and_swap(&m_msgid_seed, MSGID_COMPACT_LIMIT, 0);
-		return __sync_add_and_fetch(&m_msgid_seed, 1);
-	}
-#if !defined(_USE_COMPACT_MSGID)
-	typedef NMSGID MSGID;
-	inline MSGID new_id() { return normal_new_id(); }
-#else
-	typedef CMSGID MSGID;
-	inline CMSGID new_id() { return compact_new_id(); }
-#endif
-};
-/* typedefs */
-typedef msgid_generator::MSGID MSGID;
-static const MSGID INVALID_MSGID = 0;
 typedef const char *world_id;
 static const U32 max_wid = 256;
 typedef class object pfmobj;
@@ -188,6 +161,21 @@ public:
 	RESPONSE_CASTER(create_world);
 };
 
+/* replicate */
+class replicate_request : public request {
+public:
+	const data &uuid() const { return request::argv(0); }
+	const data &log() const { return request::argv(1); }
+	static int pack_header(serializer &sr, MSGID msgid, const UUID &uuid,
+			int log_size);
+	REQUEST_CASTER(replicate);
+};
+
+class replicate_response : public response {
+public:
+	RESPONSE_CASTER(replicate);
+};
+
 /* login */
 class login_request : public world_request {
 public:
@@ -306,6 +294,16 @@ inline int create_world_response::pack_header(serializer &sr, MSGID msgid,
 	sr.pushnil();
 	return sr.len();
 
+}
+
+inline int replicate_request::pack_header(
+			serializer &sr, MSGID msgid, const UUID &uuid,
+			int log_size)
+{
+	request::pack_header(sr, msgid, replicate, 2);
+	sr.push_raw(reinterpret_cast<const char *>(&uuid), sizeof(UUID));
+	sr.push_map_len(log_size);
+	return sr.len();
 }
 
 inline int login_request::pack_header(serializer &sr, MSGID msgid,

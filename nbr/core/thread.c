@@ -87,11 +87,11 @@ typedef struct threadpool
 
 typedef struct thread
 {
-	pthread_t	id;
-	thpool_t	*belong;
-	cond_t		event;
-	void		*p;
-	void		*(*fn)	(void *);
+	pthread_t		id;
+	thpool_t		*belong;
+	cond_t			event;
+	void			*p;
+	void			*(*fn)	(void *);
 }	thread_t;
 
 typedef struct mutex
@@ -115,8 +115,9 @@ typedef struct rwlock
 /*-------------------------------------------------------------*/
 static struct {
 	ARRAY	pool_a;
+	pthread_key_t	*tls;
 	MUTEX	lock;
-}			g_thread = { NULL, NULL };
+}			g_thread = { NULL, NULL, NULL };
 static struct {
 	ARRAY			mtx_a;
 	ARRAY			rwl_a;
@@ -317,10 +318,10 @@ thread_launcher(void *p)
 {
 	thread_t *th = p;
 	/* do TLS related initialization here */
-	if (nbr_tls_init(th->p) != NBR_OK) {
+	if (nbr_tls_init(th) != NBR_OK) {
 		return NULL;
 	}
-	pthread_cleanup_push((void (*)(void *))nbr_tls_fin, th->p);
+	pthread_cleanup_push((void (*)(void *))nbr_tls_fin, th);
 	p = th->fn(th);
 	pthread_cleanup_pop(1);
 	return p;
@@ -347,6 +348,15 @@ nbr_thread_init(int max)
 		nbr_thread_fin();
 		return LASTERR;
 	}
+	if (!(g_thread.tls = nbr_malloc(sizeof(g_thread.tls)))) {
+		THREAD_ERROUT(ERROR,MALLOC,"malloc pthread key");
+		return LASTERR;
+	}
+	if (0 != pthread_key_create(g_thread.tls, NULL)) {
+		THREAD_ERROUT(ERROR,PTHREAD,"tls_key_create");
+		nbr_thread_fin();
+		return LASTERR;
+	}
 	return NBR_OK;
 }
 
@@ -368,6 +378,11 @@ nbr_thread_fin()
 	if (g_thread.lock) {
 		nbr_mutex_destroy(g_thread.lock);
 		g_thread.lock = NULL;
+	}
+	if (g_thread.tls) {
+		pthread_key_delete(*g_thread.tls);
+		nbr_free(g_thread.tls);
+		g_thread.tls = NULL;
 	}
 	return NBR_OK;
 }
@@ -634,6 +649,13 @@ nbr_thread_get_curid()
 	return pthread_self();
 }
 
+NBR_API THREAD
+nbr_thread_get_current()
+{
+	return pthread_getspecific(*g_thread.tls);
+}
+
+
 NBR_API int
 nbr_thread_is_current(THREAD th)
 {
@@ -645,17 +667,19 @@ nbr_thread_is_current(THREAD th)
 
 /* tls */
 int
-nbr_tls_init(void *p)
+nbr_tls_init(THREAD th)
 {
 	int r;
+	thread_t *thrd = th;
 	if ((r = nbr_rand_init()) != NBR_OK) {
 		return r;
 	}
+	pthread_setspecific(*g_thread.tls, thrd);
 	return NBR_OK;
 }
 
 void
-nbr_tls_fin(void *p)
+nbr_tls_fin(THREAD th)
 {
 	nbr_rand_fin();
 }
