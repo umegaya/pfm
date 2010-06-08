@@ -121,7 +121,7 @@ int dbm_test(int argc, char *argv[])
 	dbm db;
 	char path[1024];
 	const char *dbmopt = get_rcpath(path, sizeof(path), 
-		argv[0], "rc/dbm/test.tch#bnum=1000000");
+		argv[0], "rc/dbm/test.tch");
 	if (db.init(dbmopt) < 0) {
 		TTRACE("initialize fail with (%s)", dbmopt);
 		return NBR_ESYSCALL;
@@ -149,7 +149,7 @@ int dbm_test(int argc, char *argv[])
 	test_object	tests[1001], *pto;
 	pmap<test_object, char[9]>	pm;
 	const char *dbmopt2 = get_rcpath(path, sizeof(path), 
-			argv[0], "rc/dbm/to.tch#bnum=1000");
+			argv[0], "rc/dbm/to.tch");
 	if (!pm.init(1000, 100, 0, dbmopt2)) {
 		TTRACE("initialize fail with (%s)\n", dbmopt2);
 		return NBR_ESYSCALL;

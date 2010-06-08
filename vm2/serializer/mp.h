@@ -121,6 +121,7 @@ public:
 	inline void push(S64 s) { SET_64(m_p + m_c, htonll(s)); m_c += sizeof(s); }
 	inline void pop(S64 &s) { s = ntohll(GET_64(m_p + m_c)); m_c += sizeof(S64); }
 	inline int curpos() const { return m_c; }
+	inline void set_curpos(U32 pos) { m_c = pos; }
 	inline int rewind(U32 sz) {
 		if (m_c < sz) { return m_c; }
 		m_c -= sz;
@@ -524,10 +525,12 @@ public:
 	~mp() {}
 public:
 	char *p() { 
+#if defined(_DEBUG)
 		U8 u8 = (U8)__mp::m_p[0];
 		if (__mp::m_c > 0 && (u8 == BOOLEAN_TRUE || u8 == BOOLEAN_FALSE)) {
 			ASSERT(__mp::m_c == 1);
 		}
+#endif
 		return __mp::m_p; 
 	}
 	size_t len() { return __mp::m_c; }

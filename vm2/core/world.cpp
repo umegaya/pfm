@@ -54,9 +54,11 @@ retry:
 	return (void *)c;
 }
 
-CHNODE *world::add_node(const char *addr)
+CHNODE *world::add_node(const address &addr)
 {
 	CHNODE *n;
+	TRACE("addnode: <%s>\n", (const char *)addr);
+	ASSERT(((const char *)addr)[0] != '\0');
 	if ((n = m_nodes.find(addr))) { return n; }
 	if (!(n = m_nodes.create(addr))) { return NULL; }
 	nbr_conhash_set_node(n, addr, vnode_replicate_num);
@@ -69,12 +71,12 @@ CHNODE *world::add_node(const char *addr)
 	return n;
 }
 
-int world::del_node(const char *addr)
+int world::del_node(const address &addr)
 {
-	CHNODE *n = m_nodes.find(addr), nn;
+	CHNODE *n = m_nodes.find(addr);
 	if (!n) {
-		nbr_conhash_set_node(&nn, addr, vnode_replicate_num);
-		del_node(nn);
+		ASSERT(false);
+		return NBR_ENOTFOUND;
 	}
 	else {
 		del_node(*n);

@@ -4,6 +4,7 @@
 #include "common.h"
 #include "proto.h"
 #include "ll.h"
+#include "yield.h"
 
 namespace pfm {
 using namespace sfc;
@@ -20,44 +21,49 @@ protected:
 		/* ll_exec, create_object */
 			/*have no fiber status */
 		/* create_world  */
-			create_world_initialize = 1,
+			create_world_object = 1,
 		/* login */
 		/* replicate */
-		end = 255,	/* for all status */
+		/* node_ctrl */
+			/* common */
+			ncc_wait_global_commit = 1,
+			ncc_common_end = 2,
+			/* add */
+			ncc_add_world_object = ncc_common_end,
+			/* del */
+			/* list */
+			/* deploy */
 	};
 	enum {
 		from_thread = 1,
 		from_socket = 2,
+		from_fncall = 3,
 	};
 	union {
-		THREAD			m_thrd;
-		class session 	*m_socket;
+		THREAD		m_thrd;
+		class conn 	*m_socket;
+		int			(*m_cb)(serializer &sr);
 	};
 	union {
 		ll::coroutine *co;	/* ll_exec, creat_object */
+		struct { U8 cmd, padd[3]; } nctrl; /* node ctrl */
 	} m_ctx;
 	U8 m_cmd, m_status, m_type, padd;
 	MSGID m_msgid;
 	world_id m_wid;
-	time_t m_start;
+	yield *m_yld;
 	class ffutil *m_ff;
 public:
-	fiber() : m_status(start), m_start(time(NULL)), m_ff(NULL) {}
+	fiber() : m_status(start), m_yld(NULL), m_ff(NULL) {}
 	TEST_VIRTUAL ~fiber() {}
 	world_id wid() const { return m_wid; }
+	yield *yld() { return m_yld; }
 	MSGID msgid() const { return m_msgid; }
 	void set_ff(class ffutil *ffu) { m_ff = ffu; }
-	void set_from(THREAD thrd) { m_thrd = thrd; m_type = from_thread; }
-	void set_from(class session *socket) { m_socket = socket; m_type = from_socket; }
-	class ffutil &ff() { return *m_ff; }
-	template <class FB> operator FB*() { return (FB *)this; }
 	inline void fin();
-	inline bool timeout(time_t now, time_t span) const {
-		return (now >= (m_start + span)); }
-	inline void finish() { m_status = end; }
-	inline bool finished() const { return m_status == end; }
-	inline int send_error(int err);
 	inline MSGID new_msgid();
+	inline int yielding(MSGID msgid, int size = 1,
+		yield::callback cb = NULL, void *p = NULL);
 	template <class FB>
 		void terminate(fiber_factory<FB> &ff, int err);
 	template <class FB>
@@ -66,16 +72,29 @@ public:
 		int resume(fiber_factory<FB> &ff, rpc::response &res);
 	TEST_VIRTUAL int respond(bool err, serializer &sr);
 protected:
-	int call_create_world(rpc::request &req) { ASSERT(false); return NBR_ENOTSUPPORT; }
-	int resume_create_world(rpc::response &res) { ASSERT(false); return NBR_ENOTSUPPORT; }
-	int call_login(rpc::request &req) { ASSERT(false); return NBR_ENOTSUPPORT; }
-	int resume_login(rpc::response &res) { ASSERT(false); return NBR_ENOTSUPPORT; }
-	int call_replicate(rpc::request &req) { ASSERT(false); return NBR_ENOTSUPPORT; }
-	int resume_replicate(rpc::response &res) { ASSERT(false); return NBR_ENOTSUPPORT; }
+	int call_create_world(rpc::request &req) { ASSERT(0); return NBR_ENOTSUPPORT; }
+	int resume_create_world(rpc::response &res) { ASSERT(0); return NBR_ENOTSUPPORT; }
+	int call_login(rpc::request &req) { ASSERT(0); return NBR_ENOTSUPPORT; }
+	int resume_login(rpc::response &res) { ASSERT(0); return NBR_ENOTSUPPORT; }
+	int call_replicate(rpc::request &req) { ASSERT(0); return NBR_ENOTSUPPORT; }
+	int resume_replicate(rpc::response &res) { ASSERT(0); return NBR_ENOTSUPPORT; }
+	template <class FB> int call_node_ctrl(FB *fb, rpc::request &req);
+	template <class FB> int resume_node_ctrl(FB *fb, rpc::response &res);
+public:
+	void set_from(THREAD thrd) { m_thrd = thrd; m_type = from_thread; }
+	void set_from(class conn *socket) { m_socket = socket; m_type = from_socket; }
+	void set_from(int (*fn)(serializer &)) { m_cb = fn; m_type = from_fncall; }
+	inline bool yielded() const { return m_yld != NULL && !m_yld->finished(); }
 protected:
 	world_id get_world_id(rpc::request &req) {
 		return rpc::world_request::cast(req).wid();
 	}
+	inline int get_socket_address(address &a);
+	inline int send_error(int err);
+	class ffutil &ff() { return *m_ff; }
+	int pack_cmd_add(serializer &, class world *, rpc::node_ctrl_cmd::add &, MSGID &);
+	int pack_cmd_del(serializer &, class world *, rpc::node_ctrl_cmd::del &, MSGID &);
+	int pack_cmd_deploy(serializer &, class world *, rpc::node_ctrl_cmd::deploy &, MSGID &);
 };
 namespace rpc {
 typedef class fiber basic_fiber;
@@ -83,24 +102,44 @@ typedef class fiber basic_fiber;
 
 class ffutil
 {
+public:
+	struct quorum_context {
+		address m_node_addr;
+		struct reply {
+			MSGID msgid;
+			address node_addr;
+			THREAD thrd;
+		} *m_reply;
+		U32 m_rep_size;
+		quorum_context() : m_reply(NULL) {}
+		~quorum_context() { if (m_reply) { delete []m_reply; } }
+	};
 protected:
 	msgid_generator m_seed;
 	int m_max_rpc;
+	U32 m_timeout;
 	int m_max_node, m_max_replica;	/* world setting */
 	NBR_STLS ll *m_vm;
 	NBR_STLS serializer *m_sr;
 	NBR_STLS THREAD m_curr;
+	NBR_STLS array<yield> *m_yields;
+	NBR_STLS time_t m_last_check;
 	map<fiber*, MSGID>	m_fm;
 	class object_factory &m_of;
 	class world_factory &m_wf;
+	/* FIXME : now 1 world only do 1 quorum based replication concurrently */
+	map<quorum_context,world_id> m_quorums;
 public:
+	static const U32 max_cpu_core = 256;
 	typedef map<fiber, MSGID> super;
 	ffutil(class object_factory &of, class world_factory &wf) :
-		m_seed(), m_max_rpc(0), m_max_node(0), m_max_replica(0),
+		m_seed(), m_max_rpc(0), m_timeout(10),
+		m_max_node(0), m_max_replica(0),
 		m_of(of), m_wf(wf) {}
 	~ffutil() {}
  	inline bool initialized() { return m_vm != NULL; }
 	int init(int max_node, int max_replica);
+	void set_timeout(int timeout) { m_timeout = timeout; }
 	bool init_tls();
 	void fin_tls();
 	void fin();
@@ -110,10 +149,16 @@ public:
 	ll *vm() { return m_vm; }
 	THREAD curr() { return m_curr; }
 	serializer &sr() { return *m_sr; }
+	array<yield> &yields() { return *m_yields; }
+	map<fiber*,MSGID> &fm() { return m_fm; }
+	map<quorum_context,world_id> &quorums() { return m_quorums; }
+	bool quorum_locked(world_id wid) { return quorums().find(wid) != NULL; }
 	MSGID new_msgid() { return m_seed.new_id(); }
 	MSGID seedval() { return m_seed.seedval(); }
 	class world *world_new(world_id wid);
 	class world *world_create(const rpc::create_world_request &req);
+	class world *world_create(const rpc::node_ctrl_cmd::add &req);
+	int world_create_in_vm(const rpc::node_ctrl_cmd::add &req);
 	void world_destroy(const class world *w);
 	world *find_world(world_id wid);
 	void fiber_unregister(MSGID msgid) { m_fm.erase(msgid); }
@@ -147,6 +192,7 @@ public:
 	void fin() {
 		super::fin();
 	}
+	void poll(time_t nt);
 	FB *fiber_new() {
 		FB *f = super::create();
 		if (f) { f->set_ff(this); }
@@ -154,14 +200,14 @@ public:
 	}
 	void fiber_destroy(FB *f) { super::destroy(f); }
 	FB *find_fiber(MSGID msgid) { return (FB *)util::m_fm.find(msgid); }
-	template <typename FROM> int call(FROM &from, rpc::request &req, bool trusted);
-	int resume(rpc::response &res);
+	template <typename FROM> int call(FROM from, rpc::request &req, bool trusted);
+	template <typename FROM> int resume(FROM from, rpc::response &res);
 };
 
 /* inline functions */
 template <class FB>
 template <typename FROM> int
-fiber_factory<FB>::call(FROM &from, rpc::request &req, bool trusted)
+fiber_factory<FB>::call(FROM from, rpc::request &req, bool trusted)
 {
 	/* init TLS: jemalloc flaver */
 	if (!util::initialized() && !util::init_tls()) {
@@ -175,29 +221,64 @@ fiber_factory<FB>::call(FROM &from, rpc::request &req, bool trusted)
 	}
 	f->set_from(from);
 	int r = f->call(*this, req, trusted);
-	if (f->finished()) {
+	if (!f->yielded()) {
 		f->fin();
 		fiber_destroy(f);
 	}
 	return r;
 }
 
-template <class FB> int
-fiber_factory<FB>::resume(rpc::response &res)
+template <class FB>
+template <typename FROM> int
+fiber_factory<FB>::resume(FROM from, rpc::response &res)
 {
 	FB *f = find_fiber(res.msgid());
-	if (!f) {	/* would be destroyed by timeout */
+	if (!f) {	/* would be destroyed by timeout or error */
 		return NBR_ENOTFOUND;
+	}
+	//TRACE("resume: %u/%p/%p/%p\n", res.msgid(), &m_fm, f, f->yld());
+	ASSERT(f->yld());
+	if (f->yld()->reply(from, res) < 0) {
+		return NBR_OK;	/* wait for reply */
 	}
 	fiber_unregister(res.msgid());
 	int r = f->resume(*this, res);
-	if (f->finished()) {
+	if (!f->yielded()) {
+		//TRACE("finish: %u/%p/%p/%p\n", res.msgid(), &m_fm, f, f->yld());
 		f->fin();
 		fiber_destroy(f);
 	}
 	return r;
 }
 
+template <class FB>
+void fiber_factory<FB>::poll(time_t nt)
+{
+	if (nt > m_last_check) {
+		array<yield>::iterator yit = yields().begin(), nyit;
+		for (;yit != yields().end();) {
+			nyit = yit;
+			yit = yields().next(yit);
+			if (nyit->timeout(nt, m_timeout)) {
+				PREPARE_PACK(sr());
+				rpc::response::pack_header(sr(), nyit->msgid());
+				sr().pushnil();
+				sr() << NBR_ETIMEOUT;
+				rpc::response resp;
+				sr().unpack_start(sr().p(), sr().len());
+				if (sr().unpack(resp) <= 0) {
+					ASSERT(false);
+					continue;
+				}
+				resume(NULL, resp);	/* do error handling */
+			}
+		}
+		m_last_check = nt;
+	}
+}
+
+
+/* fiber */
 inline int
 fiber::send_error(int err)
 {
@@ -214,6 +295,17 @@ fiber::new_msgid()
 	MSGID msgid = ff().new_msgid();
 	TRACE("%08x:register %p to %u\n", nbr_thread_get_curid(), this, msgid);
 	return ff().fiber_register(msgid, this) ? msgid : INVALID_MSGID;
+}
+
+inline int
+fiber::yielding(MSGID msgid, int size, yield::callback fn, void *p)
+{
+	if (!m_yld) { 
+		m_yld = ff().yields().create(); 
+		if (!m_yld) { return NBR_EEXPIRE; }
+	}
+	//TRACE("yield: %u/%u/%p/%p/%p\n", msgid, size, &(ff().fm()), this, m_yld);
+	return m_yld->init(this, msgid, size, fn, p);
 }
 
 template <class FB> void
@@ -238,7 +330,7 @@ fiber::call(fiber_factory<FB> &ff, rpc::request &req, bool trusted)
 		return m_ctx.co->call(rpc::ll_exec_request::cast(req), trusted);
 	case rpc::login:
 		m_wid = get_world_id(req);
-		return ((FB*)*this)->call_login(req);
+		return ((FB*)this)->call_login(req);
 	default:
 		if (trusted) {
 			switch(m_cmd) {
@@ -248,10 +340,13 @@ fiber::call(fiber_factory<FB> &ff, rpc::request &req, bool trusted)
 				return m_ctx.co->call(rpc::create_object_request::cast(req));
 			case rpc::replicate:
 				/* replicate not contain world ID */
-				return ((FB*)*this)->call_replicate(req);
+				return ((FB*)this)->call_replicate(req);
 			case rpc::create_world:
 				m_wid = get_world_id(req);
-				return ((FB*)*this)->call_create_world(req);
+				return ((FB*)this)->call_create_world(req);
+			case rpc::node_ctrl:
+				m_wid = get_world_id(req);
+				return call_node_ctrl((FB*)this, req);
 			default:
 				break;
 			}
@@ -269,16 +364,102 @@ fiber::resume(fiber_factory<FB> &ff, rpc::response &res)
 	case rpc::create_object:
 		return m_ctx.co->resume(rpc::ll_exec_response::cast(res));
 	case rpc::replicate:
-		return ((FB*)*this)->resume_replicate(res);
+		return ((FB*)this)->resume_replicate(res);
 	case rpc::login:
-		return ((FB*)*this)->resume_login(res);
+		return ((FB*)this)->resume_login(res);
 	case rpc::create_world:
-		return ((FB*)*this)->resume_create_world(res);
+		return ((FB*)this)->resume_create_world(res);
+	case rpc::node_ctrl:
+		return resume_node_ctrl((FB*)this, res);
 	default:
 		ASSERT(false);
 		break;
 	}
 }
+
+template <class FB>
+int fiber::call_node_ctrl(FB *fb, rpc::request &req)
+{
+	ASSERT(this == fb);
+	int r = NBR_OK;
+	address a;
+	switch(m_status) {
+	case start: {
+		rpc::node_ctrl_request &ncr = rpc::node_ctrl_request::cast(req);
+		PREPARE_PACK(ff().sr());
+		world *w = ff().find_world(wid());
+		m_ctx.nctrl.cmd = (U32)ncr.command();
+		switch(m_ctx.nctrl.cmd) {
+		case rpc::node_ctrl_request::add:
+			r = fb->node_ctrl_add(w, ncr, ff().sr());
+			break;
+		case rpc::node_ctrl_request::del:
+			r = fb->node_ctrl_del(w, ncr, ff().sr());
+			break;
+		case rpc::node_ctrl_request::list:
+			r = fb->node_ctrl_list(w, ncr, ff().sr());
+			break;
+		case rpc::node_ctrl_request::deploy:
+			r = fb->node_ctrl_deploy(w, ncr, ff().sr());
+			break;
+		case rpc::node_ctrl_request::vm_init:
+			r = fb->node_ctrl_vm_init(w, ncr, ff().sr());
+			break;
+		case rpc::node_ctrl_request::vm_fin:
+			r = fb->node_ctrl_vm_fin(w, ncr, ff().sr());
+			break;
+		case rpc::node_ctrl_request::vm_deploy:
+			r = fb->node_ctrl_vm_deploy(w, ncr, ff().sr());
+			break;
+		}
+		} break;
+	default:
+		ASSERT(false);
+		r = NBR_EINVAL;
+		break;
+	}
+	if (r < 0) {
+		send_error(r);
+	}
+	return r;
+}
+
+template <class FB>
+int fiber::resume_node_ctrl(FB *fb, rpc::response &res)
+{
+	ASSERT(this == fb);
+	int r = NBR_OK;
+	PREPARE_PACK(ff().sr());
+	world *w = ff().find_world(wid());
+	switch(m_ctx.nctrl.cmd) {
+	case rpc::node_ctrl_request::add:
+		r = fb->node_ctrl_add_resume(w, res, ff().sr());
+		break;
+	case rpc::node_ctrl_request::del:
+		r = fb->node_ctrl_del_resume(w, res, ff().sr());
+		break;
+	case rpc::node_ctrl_request::list:
+		r = fb->node_ctrl_list_resume(w, res, ff().sr());
+		break;
+	case rpc::node_ctrl_request::deploy:
+		r = fb->node_ctrl_deploy_resume(w, res, ff().sr());
+		break;
+	case rpc::node_ctrl_request::vm_init:
+		r = fb->node_ctrl_vm_init_resume(w, res, ff().sr());
+		break;
+	case rpc::node_ctrl_request::vm_fin:
+		r = fb->node_ctrl_vm_fin_resume(w, res, ff().sr());
+		break;
+	case rpc::node_ctrl_request::vm_deploy:
+		r = fb->node_ctrl_vm_deploy_resume(w, res, ff().sr());
+		break;
+	}
+	if (r < 0) {
+		send_error(r);
+	}
+	return r;
+}
+
 
 
 inline void
@@ -293,10 +474,15 @@ fiber::fin()
 	case rpc::replicate:
 	case rpc::login:
 	case rpc::create_world:
+	case rpc::node_ctrl:
 		break;
 	default:
 		ASSERT(false);
 		break;
+	}
+	if (m_yld) {
+		ff().yields().destroy(m_yld);
+		m_yld = NULL;
 	}
 }
 
@@ -315,6 +501,14 @@ public:
 	typedef pmap<account_info, char[rpc::login_request::max_account]>
 		account_list;
 	static account_list m_al;
+public:	/* master quorum base replication */
+	typedef ffutil::quorum_context quorum_context;
+	int quorum_vote_commit(world *w, MSGID msgid, quorum_context *ctx, serializer &sr);
+	int quorum_global_commit(world *w, quorum_context *ctx, int result);
+	quorum_context *init_context(world *w);
+	static int quorum_vote_callback(rpc::response &r, class conn *c, void *ctx);
+public:
+	static int init(int max_account, const char *dbpath);
 public:
 	int call_create_world(rpc::request &req);
 	int resume_create_world(rpc::response &res);
@@ -323,19 +517,75 @@ public:
 	int call_replicate(rpc::request &req) { ASSERT(false); return NBR_ENOTSUPPORT; }
 	int resume_replicate(rpc::response &res) {
 		ASSERT(false); return NBR_ENOTSUPPORT; }
+public:
+	int node_ctrl_add(class world *, rpc::node_ctrl_cmd::add &, serializer &);
+	int node_ctrl_add_resume(class world *, rpc::response &, serializer &);
+	int node_ctrl_del(class world *, rpc::node_ctrl_cmd::del &, serializer &);
+	int node_ctrl_del_resume(class world *, rpc::response &, serializer &);
+	int node_ctrl_list(class world *, rpc::node_ctrl_cmd::list &, serializer &);
+	int node_ctrl_list_resume(class world *, rpc::response &, serializer &);
+	int node_ctrl_deploy(class world *, rpc::node_ctrl_cmd::deploy &, serializer &);
+	int node_ctrl_deploy_resume(class world *, rpc::response &, serializer &);
+	int node_ctrl_vm_init(class world *,
+		rpc::node_ctrl_cmd::vm_init &, serializer &) {
+		ASSERT(0); return NBR_ENOTSUPPORT;
+	}
+	int node_ctrl_vm_init_resume(class world *, rpc::response &, serializer &) {
+		ASSERT(0); return NBR_ENOTSUPPORT;
+	}
+	int node_ctrl_vm_fin(class world *,
+		rpc::node_ctrl_cmd::vm_fin &, serializer &) {
+		ASSERT(0); return NBR_ENOTSUPPORT;
+	}
+	int node_ctrl_vm_fin_resume(class world *, rpc::response &, serializer &) {
+		ASSERT(0); return NBR_ENOTSUPPORT;
+	}
+	int node_ctrl_vm_deploy(class world *,
+		rpc::node_ctrl_cmd::vm_deploy &, serializer &) {
+		ASSERT(0); return NBR_ENOTSUPPORT;
+	}
+	int node_ctrl_vm_deploy_resume(class world *, rpc::response &, serializer &) {
+		ASSERT(0); return NBR_ENOTSUPPORT;
+	}
 };
 }
 
 namespace svnt {
 class fiber : public rpc::basic_fiber {
+public:	/* master quorum base replication */
+	typedef ffutil::quorum_context quorum_context;
+	int quorum_vote_commit(MSGID msgid, quorum_context *ctx, serializer &sr);
+	int quorum_global_commit(world *w, quorum_context *ctx, int result);
+	quorum_context *init_context(world *w);
+	static int quorum_vote_callback(rpc::response &r, THREAD t, void *ctx);
+public:
+	static int init();
 public:
 	int call_create_world(rpc::request &req);
 	int resume_create_world(rpc::response &res);
 	int call_login(rpc::request &req) { ASSERT(false); return NBR_ENOTSUPPORT; }
 	int resume_login(rpc::response &res) { ASSERT(false); return NBR_ENOTSUPPORT; }
 	int call_replicate(rpc::request &req) { ASSERT(false); return NBR_ENOTSUPPORT; }
-	int resume_replicate(rpc::response &res) {
-		ASSERT(false); return NBR_ENOTSUPPORT; }
+	int resume_replicate(rpc::response &res) { ASSERT(false); return NBR_ENOTSUPPORT; }
+public:
+	int node_ctrl_add(class world *, rpc::node_ctrl_cmd::add &, serializer &);
+	int node_ctrl_add_resume(class world *, rpc::response &, serializer &);
+	int node_ctrl_del(class world *, rpc::node_ctrl_cmd::del &, serializer &);
+	int node_ctrl_del_resume(class world *, rpc::response &, serializer &);
+	int node_ctrl_list(class world *, rpc::node_ctrl_cmd::list &, serializer &);
+	int node_ctrl_list_resume(class world *, rpc::response &, serializer &);
+	int node_ctrl_deploy(class world *, rpc::node_ctrl_cmd::deploy &, serializer &);
+	int node_ctrl_deploy_resume(class world *, rpc::response &, serializer &);
+	int node_ctrl_vm_init(class world *,
+			rpc::node_ctrl_cmd::vm_init &, serializer &);
+	int node_ctrl_vm_init_resume(class world *, rpc::response &, serializer &);
+	int node_ctrl_vm_fin(class world *,
+		rpc::node_ctrl_cmd::vm_fin &, serializer &);
+	int node_ctrl_vm_fin_resume(class world *, rpc::response &, serializer &);
+	int node_ctrl_vm_deploy(class world *,
+		rpc::node_ctrl_cmd::vm_deploy &, serializer &);
+	int node_ctrl_vm_deploy_resume(class world *, rpc::response &, serializer &);
+
 };
 }
 
@@ -354,6 +604,11 @@ public:
 		ASSERT(false); return NBR_ENOTSUPPORT; }
 	int resume_replicate(rpc::response &res) {
 		ASSERT(false); return NBR_ENOTSUPPORT; }
+	int call_node_ctrl(rpc::request &req) {
+		ASSERT(0); return NBR_ENOTSUPPORT; }
+	int resume_node_ctrl(rpc::response &res) {
+		ASSERT(0); return NBR_ENOTSUPPORT; }
+
 };
 }
 

@@ -7,6 +7,21 @@
 using namespace pfm;
 using namespace pfm::rpc;
 
+static int ll_resume_test(int argc, char *argv[]);
+static int ll_call_test(int argc, char *argv[]);
+
+int ll_test(int argc, char *argv[])
+{
+	int r;
+	TEST((r = ll_call_test(argc, argv)) < 0, "ll_call_test fail (%d)\n", r);
+	TEST((r = ll_resume_test(argc, argv)) < 0, "ll_resume_test fail (%d)\n", r);
+	return NBR_OK;
+}
+
+
+
+
+/* script execution test */
 class test_fiber : public fiber {
 public:
 	int m_result;
@@ -56,9 +71,7 @@ static void push_rpc_context(serializer &sr, msgid_generator &seed,
 
 }
 
-static int ll_resume_test(int argc, char *argv[]);
-
-int ll_test(int argc, char *argv[])
+int ll_call_test(int argc, char *argv[])
 {
 	int r;
 	serializer sr;
@@ -76,7 +89,7 @@ int ll_test(int argc, char *argv[])
 	TEST(!(w1 = wf.create("test_world", 10, 10)), "world1 create fail (%p)\n", w1);
 	TEST(!(w2 = wf.create("test_world2", 10, 10)), "world2 create fail (%p)\n", w2);
 	if ((r = of.init(1000000, 100000, opt_expandable | opt_threadsafe, 
-		MAKEPATH(path, "rc/ll/of.tch#bnum=1000000"))) < 0) {
+		MAKEPATH(path, "rc/ll/of.tch"))) < 0) {
 		TTRACE("init_object_factory fail (%d)\n", r);
 		return r;
 	}
@@ -159,9 +172,16 @@ int ll_test(int argc, char *argv[])
 
 	scr.fin();
 
-	return ll_resume_test(argc, argv);
+	return NBR_OK;
 }
 
+
+/* for fiber resume test */
+struct ll_resume_thread_context {
+	int argc;
+	char **argv;
+	int result;
+};
 
 class testfiber : public fiber
 {
@@ -210,7 +230,38 @@ public:
 create_object_request test_world::m_d;
 UUID test_world::m_uuid;
 
+static void *ll_resume_test_thread(THREAD th);
+static int ll_resume_test_thread_main(THREAD th, int argc, char *argv[]);
+
+
 int ll_resume_test(int argc, char *argv[])
+{
+	THPOOL thp;
+	THREAD th;
+	int r;
+	ll_resume_thread_context ctx;
+	ctx.result = NBR_OK;
+	ctx.argc = argc;
+	ctx.argv = argv;
+	TEST(!(thp = nbr_thpool_create(1)), "error create thread pool (%p)\n", thp);
+	TEST(!(th = nbr_thread_create(thp, &ctx, ll_resume_test_thread)),
+		"error create thread (%p)\n", th);
+
+	nbr_thread_join(th, 0, NULL);
+
+	return ctx.result;
+}
+
+void *ll_resume_test_thread(THREAD th)
+{
+	ll_resume_thread_context *ctx = 
+		(ll_resume_thread_context *)nbr_thread_get_data(th);
+	ASSERT(ctx);
+	ctx->result = ll_resume_test_thread_main(th, ctx->argc, ctx->argv);
+	return NULL;
+}
+
+int	ll_resume_test_thread_main(THREAD th, int argc, char *argv[])
 {
 	object_factory of;
 	world_factory wf;
@@ -233,7 +284,7 @@ int ll_resume_test(int argc, char *argv[])
 	TEST(!(w = wf.create("test_world", 10, 10)), "world create fail (%p)\n", w);
 	TEST((r = scr1.init(10000)) < 0, "scr1 init fail (%d)\n", r);
 	TEST((r = scr2.init(10000)) < 0, "scr2 init fail (%d)\n", r);
-	TEST(!of.init(10000, 1000, 0, MAKEPATH(path,"rc/ll/of.tch#bnum=10000")),
+	TEST(!of.init(10000, 1000, 0, MAKEPATH(path,"rc/ll/of.tch")),
 		"object factory creation fail (%d)\n", r = NBR_EINVAL);
 	of.clear();
 	TEST((r = scr1.init_world("test_world", NULL,
@@ -243,6 +294,7 @@ int ll_resume_test(int argc, char *argv[])
 		MAKEPATH(path, "rc/ll/test_world/main.lua"))) < 0,
 		"scr2 init world fail (%d)\n", r);
 	TEST((r = ff.init(10000, 100, 10)) < 0, "fiber initialize fail (%d)\n", r);
+	TEST(!(ff.init_tls()), "fiber init tls fails (%d)\n", r = NBR_EPTHREAD);
 	fb1.set_ff(&ff);
 	fb2.set_ff(&ff);
 	uuid1.assign();

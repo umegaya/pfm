@@ -101,9 +101,20 @@ int lua::coroutine::resume(ll_exec_response &res)
 		PREPARE_PACK(sr);
 		ll_exec_response::pack_header(sr, m_fb->msgid());
 		sr.pushnil();
-		/* TODO : need support except string type? */
-		if ((r = sr.push_string(res.err(), res.err().len())) < 0) { 
-			return r; 
+		/* TODO : need support except string/integer type? */
+		switch(res.err().type()) {
+		case datatype::INTEGER:
+			sr << (int)res.err(); break;
+		case datatype::BLOB:
+			if ((r = sr.push_string(res.err(), res.err().len())) < 0) {
+				ASSERT(false);
+				sr << r;
+			}
+			break;
+		default:
+			ASSERT(false);
+			sr << NBR_ENOTSUPPORT;
+			break;
 		}
 		return respond(true, *m_scr);
 	}
@@ -563,6 +574,10 @@ int lua::coroutine::method_call(VM vm)
 			lua_pushfstring(vm, "send request to object fail (%d)", r);
 			lua_error(vm);
 		}
+		if (co->fb().yielding(msgid) < 0) {
+			lua_pushstring(vm, "cannot yield fiber");
+			lua_error(vm);
+		}
 		return lua_yield(vm, 0);
 	}
 }
@@ -600,6 +615,10 @@ int lua::coroutine::ctor_call(VM vm)
 	}
 	if (co->scr().wf().request(wid, msgid, uuid, co->scr()) < 0) {
 		lua_pushfstring(vm, "send request object creation fail (%d)", r);
+		lua_error(vm);
+	}
+	if (co->fb().yielding(msgid) < 0) {
+		lua_pushstring(vm, "cannot yield fiber");
 		lua_error(vm);
 	}
 	return lua_yield(vm, 0);
@@ -880,7 +899,7 @@ int lua::copy_table(VM vm, int from, int to, int type)
 
 void lua::dump_table(VM vm, int index)
 {
-	ASSERT(index > 0 || index < -10000);      /* should give positive index(because minus index
+	ASSERT(index > 0 || index <= -10000);      /* should give positive index(because minus index
 				changes its meaning after lua_pushnil below) */
 	lua_pushnil(vm);	/* push first key (idiom, i think) */
 	printf("table ptr = %p\n", lua_topointer(vm, index));

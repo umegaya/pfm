@@ -39,7 +39,7 @@ public:
 	address() : m_len(0) { m_a[0] = '\0'; }
 	operator const char*() const { return m_a; }
 	bool operator == (const address &a) const { return
-		m_len == a.len() && nbr_mem_cmp(m_a, a.a(), m_len); }
+		m_len == a.len() && (0 == nbr_mem_cmp(m_a, a.a(), m_len)); }
 	char *a() { return m_a; }
 	const char *a() const { return m_a; }
 	int len() const { return m_len; }
@@ -387,6 +387,7 @@ public:
 	inline iterator	insert(value v, key k);
 	inline retval	*find(key k) const;
 	inline retval	*create(key k);
+	inline retval 	*create_if_not_exist(key k);
 	inline void		erase(key k);
 	inline bool		initialized() { return super::initialized() && m_s != NULL; }
 #if defined(_DEBUG)
@@ -395,7 +396,7 @@ public:
 protected:
 	inline element	*findelem(key k) const;
 	inline element	*alloc(key k);
-	inline element 	*rawalloc(key k);
+	inline element 	*rawalloc(key k, bool nil_if_exist, bool *if_exist);
 private:
 	map(const map &m);
 };

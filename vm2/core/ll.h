@@ -14,6 +14,8 @@ public:
 	THREAD thrd() const { return m_thrd; }
 	static inline class ll *cast(ll_impl *li);
 	static inline class ll &cast(ll_impl &li);
+	int load_module(world_id w, const char *srcfile) { 
+		return ll_impl::load_module(w, srcfile); }
 };
 inline class ll *ll::cast(ll_impl *li) { return (class ll *)li; }
 inline class ll &ll::cast(ll_impl &li) { return (class ll &)li; }

@@ -12,17 +12,12 @@ template <class V, class K>
 class pmap : protected sfc::util::map<V,K> {
 protected:
 	dbm	m_db;
-	RWLOCK m_lk;
 public:
-	pmap() : m_db(), m_lk(NULL) {}
+	pmap() : m_db() {}
 	~pmap() {}
 	bool init(int max, int hashsz, int opt, const char *dbmopt) {
-		if (!util::map<V,K>::init(max, hashsz, -1, opt & ~util::opt_threadsafe)) {
+		if (!util::map<V,K>::init(max, hashsz, -1, opt)) {
 			return false; 
-		}
-		if (!(m_lk = nbr_rwlock_create())) {
-			fin();
-			return false;
 		}
 		if (m_db.init(dbmopt) < 0) {
 			fin();
@@ -56,7 +51,6 @@ public:
 		inline retval *operator -> () { return m_e->get(); }
 		inline operator retval *() { return m_e->get();}
 	};
-	operator RWLOCK () { return m_lk; }
 	int cachesize() const { return super::use(); }
 	int rnum() const { return m_db.rnum(); }
 	void clear() { m_db.clear(); }
@@ -64,10 +58,10 @@ public:
 		return record(super::findelem(k));
 	}
 	inline record load(key k) {	/* find disk and load it and cache on memory */
-		util::lock lk(m_lk, true);
-		element *e = super::findelem(k);
-		if (e) { return record(e); }
-		if (!(e = super::rawalloc(k))) { return record(NULL); }
+		bool exists;
+		element *e;
+		if (!(e = super::rawalloc(k, true, &exists))) { return record(NULL); }
+		if (exists) { return record(e); }
 		record rec(e);
 		dbm::record r = m_db.select(key_traits::kp(k), key_traits::kl(k));
 		if (!r || rec.load(r.p<char>(), r.len()) < 0) {
@@ -78,10 +72,10 @@ public:
 	}
 	inline record load(key k, bool &exist_on_disk) {/* find disk and load it
 										and cache on memory */
-		util::lock lk(m_lk, true);
-		element *e = super::findelem(k);
-		if (e) { return record(e); }
-		if (!(e = super::rawalloc(k))) { return record(NULL); }
+		bool exists;
+		element *e;
+		if (!(e = super::rawalloc(k, false, &exists))) { return record(NULL); }
+		if (exists) { return record(e); }
 		record rec(e);
 		dbm::record r = m_db.select(key_traits::kp(k), key_traits::kl(k));
 		exist_on_disk = (r && rec.load(r.p<char>(), r.len()) >= 0);
@@ -99,10 +93,8 @@ public:
 		return res;
 	}
 	inline record insert(value v, key k) { /* insert new record with initialization */
-		util::lock lk(m_lk, true);
 		element *e;
-		if ((e = super::findelem(k))) { return record(NULL); }
-		if (!(e = super::rawalloc(k))) { return record(NULL); }
+		if (!(e = super::rawalloc(k, true, NULL))) { return record(NULL); }
 		e->set(v);
 		record r(e);
 		if (!save(r, k, true)) {
@@ -112,10 +104,8 @@ public:
 		return r;
 	}
 	inline record create(key k) {	/* create record (if already exists, return NULL) */
-		util::lock lk(m_lk, true);
 		element *e;
-		if ((e = super::findelem(k))) { return record(NULL); }
-		if (!(e = super::rawalloc(k))) { return record(NULL); }
+		if (!(e = super::rawalloc(k, true, NULL))) { return record(NULL); }
 		record r(e);
 		if (!save(r, k, true)) {
 			super::erase(k);

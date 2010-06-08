@@ -348,7 +348,7 @@ map<V,K>::find(key k) const
 template<class V, typename K> typename map<V,K>::iterator
 map<V,K>::insert(value v, key k)
 {
-	element *e = alloc(k);
+	element *e = rawalloc(k, true, NULL);
 	if (!e) { return NULL; }
 	e->set(v);
 	return iterator(e);
@@ -364,25 +364,37 @@ map<V,K>::create(key k)
 	return a->get();
 }
 
+template<class V, typename K> typename map<V,K>::retval	*
+map<V,K>::create_if_not_exist(key k)
+{
+	element *a = rawalloc(k, true, NULL);
+	if (!a) {
+		return NULL;
+	}
+	return a->get();
+}
+
 template<class V, typename K> typename map<V,K>::element *
 map<V,K>::alloc(key k)
 {
-	element *e = findelem(k);
-	if (e) {	/* already exist */
-		return e;
-	}
-	return rawalloc(k);
+	return rawalloc(k, false, NULL);
 }
 template<class V, typename K> typename map<V,K>::element *
-map<V,K>::rawalloc(key k)
+map<V,K>::rawalloc(key k, bool nil_if_exist, bool *if_exist)
 {
 	if (nbr_array_full(super::m_a)) {
 		return NULL;	/* no mem */
 	}
-	if (m_lk) { nbr_rwlock_wrlock(m_lk); }
-	element *a = new(super::m_a) element;
-	if (!a) { goto end; }
 	int r;
+	if (m_lk) { nbr_rwlock_wrlock(m_lk); }
+	element *a = kcont<V,K>::get(m_s, k);
+	if (a) {
+		if (if_exist) { *if_exist = true; }
+		if (m_lk) { nbr_rwlock_unlock(m_lk); }
+		return nil_if_exist ? NULL : a;
+	}
+	if (if_exist) { *if_exist = false; }
+	if (!(a = new(super::m_a) element)) { goto end; }
 	if ((r = kcont<V,K>::regist(m_s, k, a)) < 0) {
 		erase(k);
 		a = NULL;

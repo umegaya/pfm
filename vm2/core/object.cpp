@@ -30,3 +30,5 @@ int object::request(MSGID msgid, ll *vm, serializer &sr)
 	}
 	return m_wld->request(msgid, uuid(), sr);
 }
+
+/* object_factory */

@@ -25,6 +25,10 @@ enum {
 	login = 4,
 	create_world = 5,
 	register_node = 6,
+	node_ctrl = 7,
+	vote = 8,			/* for commit protocol */
+
+	flag_3pc = 0x80,	/* use 3 phase commit */
 };
 } /* namespace rpc */
 
@@ -136,8 +140,7 @@ public:
 };
 
 /* create_world */
-class create_world_request : public world_request
-{
+class create_world_request : public world_request {
 public:
 	typedef world_request super;
 	world_id from() const { return super::argv(0); }
@@ -151,8 +154,7 @@ public:
 	REQUEST_CASTER(create_world);
 };
 
-class create_world_response : public response
-{
+class create_world_response : public response {
 public:
 	world_id wid() const { return response::ret().elem(0); }
 	const UUID &world_object_id() const { return response::ret().elem(1); }
@@ -189,8 +191,7 @@ public:
 	REQUEST_CASTER(login);
 };
 
-class login_response : public response
-{
+class login_response : public response {
 public:
 	RESPONSE_CASTER(login);
 };
@@ -205,28 +206,130 @@ public:
 	REQUEST_CASTER(register_node);
 };
 
-class register_node_response : public response
-{
+class register_node_response : public response {
 public:
 	RESPONSE_CASTER(register_node);
+};
+
+/* node control */
+class node_ctrl_request : public world_request {
+public:
+	enum {
+		add = 1,
+		del = 2,
+		list = 3,
+		deploy = 4,
+		vm_init = 5,
+		vm_fin = 6,
+		vm_deploy = 7,
+	};
+public:
+	typedef world_request super;
+	const data &command() const { return super::argv(0); }
+	int argc() const { return super::argc() - 1; }
+	const data &argv(int n) const { return super::argv(n + 1); }
+	static inline int pack_header(
+			serializer &sr, MSGID msgid,
+			U8 cmd, world_id wid, size_t wlen, int n_arg);
+	REQUEST_CASTER(node_ctrl);
+	template <class CMD> operator CMD &() { return (CMD &)*this; }
+};
+
+namespace node_ctrl_cmd {
+class add : public node_ctrl_request {
+public:
+	typedef node_ctrl_request super;
+	const data &node_addr() const { return super::argv(0); }
+	world_id from() const { return super::argv(1); }
+	const UUID &world_object_id() const { return super::argv(2); }
+	const data &srcfile() const { return super::argv(3); }
+	int n_node() const { return super::argc() - 4; }
+	const data &addr(int n) const { return super::argv(n+4); }
+	static inline int pack_header(serializer &sr, MSGID msgid,
+			world_id wid, size_t wlen,
+			const char *address, size_t alen,
+			world_id from, const UUID &uuid,
+			const char *srcfile, int n_nodes, const char *node[]);
+};
+
+class vm_init : public node_ctrl_request {
+public:
+	typedef node_ctrl_request super;
+	world_id from() const { return super::argv(0); }
+	const data &srcfile() const { return super::argv(1); }
+	static inline int pack_header(serializer &sr, MSGID msgid,
+			world_id wid, size_t wlen,
+			world_id from, const char *srcfile);
+};
+
+class del : public node_ctrl_request {
+public:
+	typedef node_ctrl_request super;
+	const data &node_addr() const { return super::argv(0); }
+	static inline int pack_header(serializer &sr, MSGID msgid, 
+			world_id wid, size_t wlen,
+			const char *address, size_t alen);
+};
+
+class vm_fin : public node_ctrl_request {
+public:
+	typedef node_ctrl_request super;
+	static inline int pack_header(serializer &sr, MSGID msgid,
+		world_id wid, size_t wlen);
+};
+
+class list : public node_ctrl_request {
+public:
+	typedef node_ctrl_request super;
+	static inline int pack_header(serializer &sr, MSGID msgid, 
+			world_id wid, size_t wlen);
+};
+
+class deploy : public node_ctrl_request {
+public:
+	typedef node_ctrl_request super;
+	const data &srcfile() const { return super::argv(0); }
+	static inline int pack_header(serializer &sr, MSGID msgid, 
+			world_id wid, size_t wlen,
+			const char *srcpath);
+};
+
+class vm_deploy : public node_ctrl_request {
+public:
+	typedef node_ctrl_request super;
+	const data &srcfile() const { return super::argv(0); }
+	static inline int pack_header(serializer &sr, MSGID msgid,
+			world_id wid, size_t wlen,
+			const char *srcpath);
+};
+}
+
+
+class node_ctrl_response : public response {
+public:
+	RESPONSE_CASTER(node_ctrl);
 };
 
 
 inline int request::pack_header(serializer &sr, MSGID msgid, U8 reqtype, int n_arg)
 {
+	sr.set_curpos(0);
 	sr.push_array_len(4);
 	sr << ((U8)msg_request);
 	sr << msgid;
 	sr << reqtype;
 	sr.push_array_len(n_arg);
+	ASSERT(msgid != 0);
 	return sr.len();
 }
 
 inline int response::pack_header(serializer &sr, MSGID msgid)
 {
+	sr.set_curpos(0);
 	sr.push_array_len(4);
 	sr << ((U8)msg_response);
 	sr << msgid;
+	ASSERT(msgid != 0);
 	return sr.len();
 }
 
@@ -323,6 +426,85 @@ inline int register_node_request::pack_header(serializer &sr, MSGID msgid,
 	sr.push_string(address, nbr_str_length(address, 256));
 	return sr.len();
 }
+
+
+inline int node_ctrl_cmd::add::pack_header(serializer &sr, MSGID msgid,
+		world_id wid, size_t wlen,
+		const char *address, size_t alen,
+		world_id from, const UUID &uuid,
+		const char *srcpath, int n_nodes, const char *node[])
+{
+	super::pack_header(sr, msgid, super::add, wid, wlen, 4 + n_nodes);
+	sr.push_string(address, alen);
+	sr.push_string(from, nbr_str_length(from, max_wid));
+	sr.push_raw(reinterpret_cast<const char *>(&uuid), sizeof(UUID));
+	sr.push_string(srcpath, nbr_str_length(srcpath, 256));
+	for (int i = 0; i < n_nodes; i++) {
+		sr.push_string(node[i], nbr_str_length(node[i], 256));
+	}
+	return sr.len();
+}
+
+inline int node_ctrl_cmd::vm_init::pack_header(serializer &sr, MSGID msgid,
+		world_id wid, size_t wlen,
+		world_id from, const char *srcpath)
+{
+	super::pack_header(sr, msgid, super::vm_init, wid, wlen, 2);
+	sr.push_string(from, nbr_str_length(from, max_wid));
+	sr.push_string(srcpath, nbr_str_length(srcpath, 256));
+	return sr.len();
+}
+
+inline int node_ctrl_cmd::del::pack_header(serializer &sr, MSGID msgid, 
+		world_id wid, size_t wlen,
+		const char *address, size_t alen)
+{
+	super::pack_header(sr, msgid, super::del, wid, wlen, 1);
+	sr.push_string(address, alen);
+	return sr.len();
+}
+
+inline int node_ctrl_cmd::list::pack_header(serializer &sr, MSGID msgid, 
+		world_id wid, size_t wlen)
+{
+	super::pack_header(sr, msgid, super::list, wid, wlen, 0);
+	return sr.len();
+}
+
+inline int node_ctrl_cmd::deploy::pack_header(serializer &sr, MSGID msgid, 
+		world_id wid, size_t wlen,
+		const char *srcpath)
+{
+	super::pack_header(sr, msgid, super::deploy, wid, wlen, 1);
+	sr.push_string(srcpath, nbr_str_length(srcpath, 256));
+	return sr.len();
+}
+
+inline int node_ctrl_cmd::vm_fin::pack_header(serializer &sr, MSGID msgid,
+		world_id wid, size_t wlen)
+{
+	super::pack_header(sr, msgid, super::vm_fin, wid, wlen, 1);
+	return sr.len();
+}
+
+inline int node_ctrl_cmd::vm_deploy::pack_header(serializer &sr, MSGID msgid,
+		world_id wid, size_t wlen,
+		const char *srcpath)
+{
+	super::pack_header(sr, msgid, super::vm_deploy, wid, wlen, 1);
+	sr.push_string(srcpath, nbr_str_length(srcpath, 256));
+	return sr.len();
+}
+
+inline int node_ctrl_request::pack_header(
+		serializer &sr, MSGID msgid,
+		U8 cmd, world_id wid, size_t wlen, int n_arg)
+{
+	super::pack_header(sr, msgid, node_ctrl, wid, wlen, n_arg + 1);
+	sr << cmd;
+	return sr.len();
+}
+
 
 
 } /* namespace rpc */

@@ -1,5 +1,6 @@
 pfm.class("World")
 function World:new()
+	print("World:new called")
 	self.seed = 665
 	return self
 end

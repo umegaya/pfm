@@ -252,6 +252,7 @@ NBR_API UTIME	nbr_time();
 /* mem.c */
 static inline void *nbr_malloc(size_t s) { return malloc(s); }
 static inline void nbr_free(void *p) { free(p); }
+static inline void *nbr_realloc(void *p, size_t ns) { return realloc(p, ns); }
 
 
 /* rand.c */
