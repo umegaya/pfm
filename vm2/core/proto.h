@@ -23,12 +23,9 @@ enum {
 	create_object = 2,
 	replicate = 3,
 	login = 4,
-	create_world = 5,
-	register_node = 6,
-	node_ctrl = 7,
-	vote = 8,			/* for commit protocol */
-
-	flag_3pc = 0x80,	/* use 3 phase commit */
+	node_ctrl = 5,
+	vote = 6,			/* for commit protocol */
+	load_object = 7,
 };
 } /* namespace rpc */
 
@@ -127,40 +124,19 @@ public:
 	const UUID &object_id() const { return super::argv(1); }
 	int argc() const { return super::argc() - 2; }
 	const data &argv(int n) const { return super::argv(n+2); }
+	bool need_load() const { return ((U32)method()) == load_object; }
 	static inline int pack_header(serializer &sr, MSGID msgid,
 			const UUID &uuid, const char *klass, size_t klen,
-			world_id wid, size_t wlen, int n_arg);
-	REQUEST_CASTER(create_object);
+			world_id wid, size_t wlen, bool load, int n_arg);
+	static inline create_object_request &cast(request &r) {
+		ASSERT((U32)r.method() == create_object ||
+				(U32)r.method() == load_object);
+		return (create_object_request &)r;
+	}
 };
 class create_object_response : public response {
 public:
-	static inline int pack_header(serializer &sr, MSGID msgid,
-			pfmobj *o, const char *e, size_t el);
 	RESPONSE_CASTER(create_object);
-};
-
-/* create_world */
-class create_world_request : public world_request {
-public:
-	typedef world_request super;
-	world_id from() const { return super::argv(0); }
-	const UUID &world_object_id() const { return super::argv(1); }
-	const char *srcfile() const { return super::argv(2); }
-	int n_node() const { return super::argc() - 3; }
-	const data &addr(int n) const { return super::argv(n+3); }
-	static inline int pack_header(serializer &sr, MSGID msgid,
-			world_id wid, world_id from, const UUID &uuid,
-			const char *srcfile, int n_nodes, const char *node[]);
-	REQUEST_CASTER(create_world);
-};
-
-class create_world_response : public response {
-public:
-	world_id wid() const { return response::ret().elem(0); }
-	const UUID &world_object_id() const { return response::ret().elem(1); }
-	static int pack_header(serializer &sr, MSGID msgid,
-			world_id wid, size_t wlen, const UUID &uuid);
-	RESPONSE_CASTER(create_world);
 };
 
 /* replicate */
@@ -193,22 +169,11 @@ public:
 
 class login_response : public response {
 public:
-	RESPONSE_CASTER(login);
-};
-
-/* register node */
-class register_node_request : public request {
-public:
-	typedef request super;
-	const data &node_addr() const { return super::argv(0); }
+	typedef response super;
+	const UUID &object_id() { return super::ret(); }
 	static inline int pack_header(serializer &sr, MSGID msgid,
-			const char *address);
-	REQUEST_CASTER(register_node);
-};
-
-class register_node_response : public response {
-public:
-	RESPONSE_CASTER(register_node);
+			const UUID &uuid);
+	RESPONSE_CASTER(login);
 };
 
 /* node control */
@@ -354,47 +319,12 @@ inline int ll_exec_request::pack_header(serializer &sr, MSGID msgid,
 inline int create_object_request::pack_header(
 		serializer &sr, MSGID msgid, const UUID &uuid,
 		const char *klass, size_t klen,
-		world_id wid, size_t wlen, int n_arg)
+		world_id wid, size_t wlen, bool load, int n_arg)
 {
-	super::pack_header(sr, msgid, create_object, wid, wlen, n_arg + 2);
+	super::pack_header(sr, msgid,
+		load ? load_object : create_object, wid, wlen, n_arg + 2);
 	sr.push_string(klass, klen);
 	sr.push_raw(reinterpret_cast<const char *>(&uuid), sizeof(UUID));
-	return sr.len();
-
-}
-
-inline int create_object_response::pack_header(
-			serializer &sr, MSGID msgid, pfmobj *o, const char *e, size_t el)
-{
-	response::pack_header(sr, msgid);
-	o ? world_request::pack_object(sr, *o) : sr.pushnil();
-	e ? sr.push_string(e, el) : sr.pushnil();
-	return sr.len();
-}
-
-inline int create_world_request::pack_header(serializer &sr, MSGID msgid,
-		world_id wid, world_id from, const UUID &uuid,
-		const char *srcfile, int n_nodes, const char *node[])
-{
-	super::pack_header(sr, msgid, create_world,
-		wid, nbr_str_length(wid, max_wid), n_nodes + 3);
-	sr.push_string(from, nbr_str_length(from, max_wid));
-	sr.push_raw(reinterpret_cast<const char *>(&uuid), sizeof(UUID));
-	sr.push_string(srcfile, nbr_str_length(srcfile, 256));
-	for (int i = 0; i < n_nodes; i++) {
-		sr.push_string(node[i], nbr_str_length(node[i], 32));
-	}
-	return sr.len();
-}
-
-inline int create_world_response::pack_header(serializer &sr, MSGID msgid,
-		world_id wid, size_t wlen, const UUID &uuid)
-{
-	response::pack_header(sr, msgid);
-	sr.push_array_len(2);
-	sr.push_string(wid, wlen);
-	sr.push_raw(reinterpret_cast<const char *>(&uuid), sizeof(UUID));
-	sr.pushnil();
 	return sr.len();
 
 }
@@ -419,13 +349,15 @@ inline int login_request::pack_header(serializer &sr, MSGID msgid,
 	return sr.len();
 }
 
-inline int register_node_request::pack_header(serializer &sr, MSGID msgid,
-		const char * address)
+inline int login_response::pack_header(serializer &sr, MSGID msgid,
+		const UUID &uuid)
 {
-	super::pack_header(sr, msgid, register_node, 1);
-	sr.push_string(address, nbr_str_length(address, 256));
+	super::pack_header(sr, msgid);
+	sr.push_raw(reinterpret_cast<const char *>(&uuid), sizeof(UUID));
+	sr.pushnil();
 	return sr.len();
 }
+
 
 
 inline int node_ctrl_cmd::add::pack_header(serializer &sr, MSGID msgid,

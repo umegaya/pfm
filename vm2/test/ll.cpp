@@ -296,7 +296,9 @@ int	ll_resume_test_thread_main(THREAD th, int argc, char *argv[])
 	TEST((r = ff.init(10000, 100, 10)) < 0, "fiber initialize fail (%d)\n", r);
 	TEST(!(ff.init_tls()), "fiber init tls fails (%d)\n", r = NBR_EPTHREAD);
 	fb1.set_ff(&ff);
+	fb1.set_msgid(seed.new_id());
 	fb2.set_ff(&ff);
+	fb2.set_msgid(seed.new_id());
 	uuid1.assign();
 	TEST(!(o1 = of.create(uuid1,w,&scr1,"Player")), "create o1 fail (%p)\n", o1);
 	/* call Player:new */

@@ -35,14 +35,6 @@ const char *get_rcpath(char *buf, size_t blen,
 
 using namespace pfm;
 
-int pack_rpc_resheader(serializer &sr, class object &o)
-{
-	int r;
-	MSGID msgid = 1;
-	TEST((r = rpc::create_object_response::pack_header(sr, msgid, &o, NULL, 0)) < 0, 
-		"pack_header fail (%d)\n", r);
-	return sr.len();
-}
 
 int pack_rpc_reqheader(serializer &sr, class object &o, 
 		const char *method, world_id wid, int n_arg)

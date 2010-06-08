@@ -406,6 +406,80 @@ int fiber_test_add_node(test_context &ctx, int argc, char *argv[], void *p)
 /*------------------------------------------------------------------*/
 int fiber_test_login(test_context &ctx, int argc, char *argv[])
 {
+	int r;
+	rpc::login_request req;
+	rpc::login_response res;
+	rpc::create_object_request req2;
+	rpc::ll_exec_response res2;
+	node_data *svnt, *nd, *wnd;
+	int idx = nbr_rand32() % ctx.m_snd.use();
+	map<node_data, address>::iterator it = ctx.m_snd.begin();
+	for (int i = 0; i < idx; i++) {
+		it = ctx.m_snd.next(it);
+	}
+	conn c;
+	svnt = &(*it);
+	PREPARE_PACK(svnt->m_sff->sr());
+	TEST((r = rpc::login_request::pack_header(svnt->m_sff->sr(), 1000006,
+		"test_world2", sizeof("test_world2") - 1,
+		"user", "password", sizeof("password") - 1)) < 0,
+		"pack login command fails (%d)\n", r);
+	TEST((r = svnt->m_sff->sr().unpack(req)) <= 0,
+		"unpack login command fails (%d)\n", r);
+	TEST((r = svnt->m_sff->call(&c, req, false)) < 0,
+		"call login command fails (%d)\n", r);
+	TEST((r = ctx.m_mnd.m_mff->call(&c, get_cor(), true)) < 0,
+		"call login command (mstr) fails (%d)\n", r);
+	TEST((r = mresponse(svnt->m_sff->sr(), res)) < 0,
+		"invalid login response from mstr (%d)\n", r);
+	connector *ct;
+	world *w;
+	address a;
+	TEST(!(w = ctx.m_mnd.m_wf.find("test_world2")), "world not found (%p)\n", w);
+	TEST(!(ct = (connector *)w->_connect_assigned_node(res.object_id())),
+			"connector not found (%p)\n", ct);
+	a = ct->primary()->get_addr(a);
+	TEST(!(nd = ctx.m_snd.find(a)),
+			"node data which handle world object not found (%p)\n", nd);
+	TEST((r = svnt->m_sff->resume(&c, res)) < 0,
+		"resume login response fails (%d)\n", r);
+	/* will call Player object creation */
+	packet *p;
+	TEST(((r = test_conn::m_pktmap.use()) != 1),
+		"too much packet sending (%d)\n", r);
+	TEST(!(p = test_conn::m_pktmap.find(a)),
+		"packet not found (%p)\n", p);
+	test_conn::m_pktmap.erase(a);
+	TEST((r = p->unpack(nd->m_sff->sr(), req2)) < 0,
+		"create object request fails (%d)\n", r);
+	/* will call Player:new */
+	TEST((r = nd->m_sff->call(&c, req2, true)) < 0,
+		"create object call fails (%d)\n", r);
+	/* will call World:get_id */
+	TEST(!(ct = (connector *)w->_connect_assigned_node(ctx.wuuid)),
+		"connector not found (%p)\n", ct);
+	a = ct->primary()->get_addr(a);
+	TEST(!(wnd = ctx.m_snd.find(a)),
+		"node data which handle world object not found (%p)\n", wnd);
+	TEST(((r = test_conn::m_pktmap.use()) != 1),
+		"too much packet sending (%d)\n", r);
+	TEST(!(p = test_conn::m_pktmap.find(a)),
+		"packet not found (%p)\n", p);
+	test_conn::m_pktmap.erase(a);
+	TEST((r = p->unpack(wnd->m_sff->sr(), req2)) < 0,
+		"create object request fails (%d)\n", r);
+	TEST((r = wnd->m_sff->call(&c, req2, true)) < 0,
+		"World:get_id call fails (%d)\n", r);
+	/* will call Player:login */
+	TEST((r = sresponse(svnt->m_sff->sr(), res2)) < 0,
+		"invalid login response from svnt (%d)\n", r);
+	TEST((r = svnt->m_sff->resume(&c, res2)) < 0,
+		"resume login response fails (%d)\n", r);
+	/* will return 788 */
+	TEST((r = sresponse(svnt->m_sff->sr(), res2)) < 0,
+		"invalid login response from svnt (%d)\n", r);
+	TEST((ll::num(788) != (ll::num)res2.ret()),
+		"retval invalid (%d)\n", (int)(ll::num)res2.ret());
 	return NBR_OK;
 }
 
@@ -447,7 +521,7 @@ int fiber_test_ll(test_context &ctx, int argc, char *argv[])
 	TEST((r = rpc::create_object_request::pack_header(
 		ff.sr(), 10000001/* msgid_dummy */, uuid,
 		ll::player_klass_name, ll::player_klass_name_len,
-		"test_world2", sizeof("test_world2") - 1, 0)) < 0,
+		"test_world2", sizeof("test_world2") - 1, false, 0)) < 0,
 		"pack create object fails (%d)\n", r);
 	ff.sr().unpack_start(ff.sr().p(), ff.sr().len());
 	TEST((r = ff.sr().unpack(cor)) <= 0, "unpack fails (%d)\n", r);
@@ -510,7 +584,7 @@ int fiber_test_thread(test_context &ctx, int argc, char *argv[])
 	TEST((r = UUID::init(db)) < 0, "UUID init fail (%d)\n", r);	
 	TEST((r = testmfiber::init(10000, MAKEPATH(path, "rc/fiber/al.tch"))) < 0,
 		"testmfiber::init fails(%d)\n", r);
-	TEST((r = testsfiber::init()) < 0, "testsfiber::init fails(%d)\n",r);
+	TEST((r = testsfiber::init(1000)) < 0, "testsfiber::init fails(%d)\n",r);
 	TEST(!(test_conn::m_pktmap.init(100, 100)), 
 		"test_conn::pktmap init fail (%d)\n", r = NBR_EEXPIRE);
 	TEST(!m_thevmap.init(100, 100, -1, opt_threadsafe | opt_expandable), 

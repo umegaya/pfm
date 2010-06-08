@@ -9,7 +9,6 @@ extern char *rand_string(char *p, size_t l);
 extern char *rand_buffer(char *p, size_t l);
 extern const char *get_rcpath(char *b, size_t blen, const char *exepath, const char *path);
 
-extern int pack_rpc_resheader(pfm::serializer &sr, pfm::object &o);
 extern int pack_rpc_reqheader(pfm::serializer &sr, pfm::object &o, 
 	const char *method, pfm::world_id wid, int n_arg);
 

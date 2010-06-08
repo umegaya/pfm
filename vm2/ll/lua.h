@@ -46,19 +46,22 @@ public:
 		int init(class fiber *f, class lua *scr);
 		int call(rpc::ll_exec_request &req, bool trusted);
 		int call(rpc::create_object_request &req);
-		int resume(rpc::ll_exec_response &res);
+		int call(rpc::ll_exec_response &res, const char *method);
+		int resume(rpc::ll_exec_response &res, bool packobj = false);
 		int push_world_object(class object *o);
-		static int pack_object(serializer &sr, class object &o);
+		static int pack_object(serializer &sr, class object &o,
+			bool packobj = false);
 	protected:
 		int respond(bool err, serializer &sr);
-		int dispatch(int argc);
+		int dispatch(int argc, bool packobj);
 		int to_stack(rpc::ll_exec_request &req, bool trusted);
 		int to_stack(rpc::ll_exec_response &res);
+		int to_stack(rpc::ll_exec_response &res, const char *method);
 		int to_stack(rpc::create_object_request &res);
 		int to_stack(const rpc::data &d);
 		int to_func(const rpc::data &d);
-		int from_stack(int start_id, serializer &sr);
-		int from_stack(serializer &sr, int stkid);
+		int from_stack(int start_id, serializer &sr, bool packobj = false);
+		int from_stack(serializer &sr, int stkid, bool packobj = false);
 		int from_func(serializer &sr);
 		int push_object(class object *o);
 		class object *to_o(int stkid);

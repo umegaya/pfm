@@ -18,6 +18,10 @@ public:
 		flag_local = 0x00000001,
 		flag_loaded = 0x00000002,
 		flag_collected = 0x00000004,
+		flag_cached_local = 0x00000008,	/* actually this node not assigned to 
+						this object, but for performance issue, 
+						it loads all data into here and treated as 
+						local */
 	};
 public:
 	object() : m_uuid(), m_flag(0), m_klass("Unknown"), 
@@ -37,6 +41,8 @@ public:
 	void set_flag(U32 f, bool on) {
 		if (on) { m_flag |= f; } else { m_flag &= ~(f); } }
 	bool local() const { return m_flag & flag_local; }
+	bool cached_local() const { return (m_flag & (flag_local | flag_cached_local)) == 
+					(flag_local | flag_cached_local); }
 	bool remote() const { return !local(); }
 	const char *klass() const { return m_klass; }
 	bool loaded() const { return m_flag & flag_loaded; }

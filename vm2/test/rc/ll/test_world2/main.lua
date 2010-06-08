@@ -1,7 +1,7 @@
 pfm.class("World")
 function World:new()
 	print("World:new called")
-	self.seed = 665
+	self.seed = 664
 	return self
 end
 function World:test_function(map, array, n, str)
@@ -25,4 +25,7 @@ end
 function Player:get_id()
 	assert(self.hoge == 123)
 	return self.id
+end
+function Player:login()
+	return self.hoge + self.id -- should be 123 + 665 => 788
 end

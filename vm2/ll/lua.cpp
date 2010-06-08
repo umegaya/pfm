@@ -54,17 +54,25 @@ int lua::coroutine::call(create_object_request &req)
 		}
 		return r; 
 	}
-	return dispatch(r);
+	return dispatch(r, req.need_load());
 }
 
 int lua::coroutine::call(ll_exec_request &req, bool trusted)
 {
 	int r;
 	if ((r = to_stack(req, trusted)) < 0) { return r; }
-	return dispatch(r);
+	return dispatch(r, false);
 }
 
-int lua::coroutine::dispatch(int argc)
+int lua::coroutine::call(ll_exec_response &res, const char *method)
+{
+	int r;
+	if ((r = to_stack(res, method)) < 0) { return r; }
+	return dispatch(r, false);
+}
+
+
+int lua::coroutine::dispatch(int argc, bool packobj)
 {
 	int r;
 	if ((r = lua_resume(m_exec, argc)) == LUA_YIELD) {
@@ -85,7 +93,8 @@ int lua::coroutine::dispatch(int argc)
 		serializer &sr = *m_scr;
 		PREPARE_PACK(sr);
 		ll_exec_response::pack_header(sr, m_fb->msgid());
-		if ((r = from_stack(1, sr)) < 0) {
+		/* FIXME : return multiple value */
+		if ((r = from_stack(1, sr, packobj)) < 0) {
 			ASSERT(false); return r; 
 		}
 		sr.pushnil();
@@ -93,7 +102,7 @@ int lua::coroutine::dispatch(int argc)
 	}
 }
 
-int lua::coroutine::resume(ll_exec_response &res)
+int lua::coroutine::resume(ll_exec_response &res, bool packobj)
 {
 	int r;
 	if (res.err().type() != datatype::NIL) {
@@ -119,7 +128,7 @@ int lua::coroutine::resume(ll_exec_response &res)
 		return respond(true, *m_scr);
 	}
 	if ((r = to_stack(res)) < 0) { return r; }
-	return dispatch(r);
+	return dispatch(r, packobj);
 }
 
 int lua::coroutine::push_world_object(object *o)
@@ -130,10 +139,10 @@ int lua::coroutine::push_world_object(object *o)
 	return NBR_OK;
 }
 
-int lua::coroutine::pack_object(serializer &sr, object &o)
+int lua::coroutine::pack_object(serializer &sr, object &o, bool packobj)
 {
 	int r;
-	if ((r = sr.push_array_len(3)) < 0) { return r; }
+	if ((r = sr.push_array_len(packobj ? 4 : 3)) < 0) { return r; }
 	if ((r = (sr << ((U8)LUA_TUSERDATA))) < 0) { return r; }
 	if ((r = sr.push_string(o.klass(), strlen(o.klass()))) < 0) { return r; }
 	if ((r = sr.push_raw(reinterpret_cast<const char *>(&(o.uuid())), 
@@ -148,12 +157,12 @@ int lua::coroutine::respond(bool err, serializer &sr)
 	return m_fb->respond(err, sr);
 }
 
-int lua::coroutine::from_stack(int start_id, serializer &sr)
+int lua::coroutine::from_stack(int start_id, serializer &sr, bool packobj)
 {
 	int top = lua_gettop(m_exec), r;
 	ASSERT(start_id <= top);
 	for (int i = start_id; i <= top; i++) {
-		if ((r = from_stack(sr, i)) < 0) { return r; }
+		if ((r = from_stack(sr, i, packobj)) < 0) { return r; }
 	}
 	return sr.len();
 }
@@ -178,7 +187,7 @@ int lua::coroutine::from_func(serializer &sr)
 	return r;
 }
 
-int lua::coroutine::from_stack(serializer &sr, int stkid) 
+int lua::coroutine::from_stack(serializer &sr, int stkid, bool packobj)
 {
 	int r;
 	switch(lua_type(m_exec, stkid)) {
@@ -219,7 +228,11 @@ int lua::coroutine::from_stack(serializer &sr, int stkid)
 		} break;
 	case LUA_TUSERDATA: { /* = array ( LUA_TUSERDATA, UUID, objectdata ) */
 		object *o = to_o(stkid);
-		if (o) { pack_object(sr, *o); }
+		if (o) { pack_object(sr, *o, packobj); }
+		if (packobj) {
+			lua_getmetatable(m_exec, stkid);
+			from_stack(sr, lua_gettop(m_exec));
+		}
 		} break;
 	case LUA_TTHREAD:
 	case LUA_TLIGHTUSERDATA:
@@ -266,7 +279,7 @@ int lua::coroutine::to_stack(const rpc::data &d)
 			if ((r = to_func(d.elem(1))) < 0) { return r; }
 			break;
 		case LUA_TUSERDATA:
-			/* [LUA_TUSERDATA, subtype:string(blob), UUID:blob] */
+			/* [LUA_TUSERDATA, subtype:string(blob), UUID:blob, (data:blob)] */
 			ASSERT(d.elem(1).type() == datatype::BLOB);
 			lua_getfield(m_exec, LUA_GLOBALSINDEX, d.elem(1));
 			b = lua_istable(m_exec, -1);
@@ -279,6 +292,19 @@ int lua::coroutine::to_stack(const rpc::data &d)
 					ll::cast(m_scr), d.elem(1));
 				if (!o) { ASSERT(false); return NBR_EINVAL; }
 				if ((r = push_object(o)) < 0) { return r; }	
+				if (d.size() > 3) {
+					/* actual data loaded. */
+					lua_getmetatable(m_exec, -1);
+					const rpc::data &ud = d.elem(3);
+					for (i = 0; i < ud.size(); i++) {
+						to_stack(ud.key(i));
+						to_stack(ud.val(i));
+						lua_settable(m_exec, -3);
+					}
+					o->set_flag((object::flag_local | 
+						object::flag_cached_local), 
+						true);
+				}
 			}
 			else {
 				/* TODO: another developper defined objects */
@@ -375,6 +401,21 @@ int lua::coroutine::to_stack(rpc::ll_exec_response &res)
 	if ((r = to_stack(res.ret())) < 0) { return r; }
 	return 1;
 }
+
+int lua::coroutine::to_stack(rpc::ll_exec_response &res, const char *method)
+{
+	int r;
+	ASSERT(res.ret().type() == datatype::ARRAY);
+	if ((r = to_stack(res)) < 0) { return r; }
+	lua_pushstring(m_exec, method);
+	lua_gettable(m_exec, -2);	/* load function */
+	if (!lua_isfunction(m_exec, -1)) { ASSERT(false); return NBR_EINVAL; }
+	lua_pushvalue(m_exec, -2);
+	ASSERT(lua_gettop(m_exec) == 3);
+	lua_remove(m_exec, 1); /* remove object on bottom of stack */
+	return 1;
+}
+
 
 object *lua::coroutine::to_o(int stkid)
 {
@@ -605,7 +646,7 @@ int lua::coroutine::ctor_call(VM vm)
 		lua_error(vm);
 	}
 	create_object_request::pack_header(co->scr(), msgid, uuid,
-		m->name(), strlen(m->name()), wid, strlen(wid), top - 2);
+		m->name(), strlen(m->name()), wid, strlen(wid), false, top - 2);
 	/* arguments are starts from index 3 (1:method object,2:Klass or object)*/
 	for (int i = 3; i <= top; i++) {
 		if ((r = co->from_stack(co->scr(), i)) < 0) {
