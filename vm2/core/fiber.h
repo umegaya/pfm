@@ -100,6 +100,12 @@ namespace rpc {
 typedef class fiber basic_fiber;
 }
 
+#if defined(_TEST)
+#define PFM_STLS
+#else
+#define PFM_STLS NBR_STLS
+#endif
+
 class ffutil
 {
 public:
@@ -119,11 +125,11 @@ protected:
 	int m_max_rpc;
 	U32 m_timeout;
 	int m_max_node, m_max_replica;	/* world setting */
-	NBR_STLS ll *m_vm;
-	NBR_STLS serializer *m_sr;
-	NBR_STLS THREAD m_curr;
-	NBR_STLS array<yield> *m_yields;
-	NBR_STLS time_t m_last_check;
+	PFM_STLS ll *m_vm;
+	PFM_STLS serializer *m_sr;
+	PFM_STLS THREAD m_curr;
+	PFM_STLS array<yield> *m_yields;
+	PFM_STLS time_t m_last_check;
 	map<fiber*, MSGID>	m_fm;
 	class object_factory &m_of;
 	class world_factory &m_wf;
@@ -509,6 +515,7 @@ public:	/* master quorum base replication */
 	static int quorum_vote_callback(rpc::response &r, class conn *c, void *ctx);
 public:
 	static int init(int max_account, const char *dbpath);
+	static void fin() { m_al.fin(); }
 public:
 	int call_create_world(rpc::request &req);
 	int resume_create_world(rpc::response &res);
@@ -560,6 +567,7 @@ public:	/* master quorum base replication */
 	static int quorum_vote_callback(rpc::response &r, THREAD t, void *ctx);
 public:
 	static int init();
+	static void fin() {};
 public:
 	int call_create_world(rpc::request &req);
 	int resume_create_world(rpc::response &res);

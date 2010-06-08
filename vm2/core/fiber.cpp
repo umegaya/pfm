@@ -5,11 +5,13 @@
 
 using namespace pfm;
 
+#if !defined(_TEST)
 NBR_TLS ll *ffutil::m_vm = NULL;
 NBR_TLS serializer *ffutil::m_sr = NULL;
 NBR_TLS THREAD ffutil::m_curr = NULL;
 NBR_TLS array<yield> *ffutil::m_yields = NULL;
 NBR_TLS time_t ffutil::m_last_check = 0;
+#endif
 
 /* ffutil */
 int ffutil::init(int max_node, int max_replica) {
@@ -769,6 +771,8 @@ int svnt::fiber::node_ctrl_add_resume(world *w, rpc::response &res, serializer &
 {
 	int r;
 	MSGID msgid = INVALID_MSGID;
+	ll::coroutine *co = NULL;
+	object *o = NULL;
 	quorum_context *ctx = yld()->p<quorum_context>();
 	if (res.success()) {
 		switch(m_status) {
@@ -801,6 +805,20 @@ int svnt::fiber::node_ctrl_add_resume(world *w, rpc::response &res, serializer &
 				r = NBR_EEXPIRE;
 				goto error;
 			}
+			/* add this object as global variable */
+			if (!(o = ff().of().load(w->world_object_uuid(),
+				w, ff().vm(), ll::world_klass_name))) {
+				r = NBR_EEXPIRE;
+				goto error;
+			}
+			if (!(co = ff().co_create(this))) {
+				r = NBR_EEXPIRE;
+				goto error;
+			}
+			else if ((r = co->push_world_object(o)) < 0) {
+				goto error;
+			}
+			ff().vm()->co_destroy(co);
 			msgid = new_msgid();
 			if (msgid == INVALID_MSGID) {
 				r = NBR_EEXPIRE;
@@ -834,6 +852,8 @@ int svnt::fiber::node_ctrl_add_resume(world *w, rpc::response &res, serializer &
 		return res.err();
 	}
 error:
+	if (o) { ff().of().unload(o->uuid()); }
+	if (co) { ff().vm()->co_destroy(co); }
 	if (msgid != INVALID_MSGID) { ff().fiber_unregister(msgid); }
 	quorum_global_commit(w, ctx, r);
 	return r;

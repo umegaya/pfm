@@ -362,7 +362,8 @@ nbr_search_init(int max)
 {
 	nbr_search_fin();
 
-	if (!(g_search = nbr_array_create(max, sizeof(search_t), 1))) {
+	if (!(g_search = nbr_array_create(max, sizeof(search_t), 
+		NBR_PRIM_EXPANDABLE | NBR_PRIM_THREADSAFE))) {
 		SEARCH_ERROUT(ERROR,INTERNAL,"nbr_array_create: %d", max);
 		return LASTERR;
 	}

@@ -77,7 +77,7 @@ NBR_API void
 nbr_get_default(CONFIG *c)
 {
 	c->max_search = 64;
-	c->max_array = 128 + c->max_search;
+	c->max_array = 1024 + c->max_search;
 	c->max_proto = 3;
 	c->max_sockmgr = 16;
 	c->max_nfd = 1024;

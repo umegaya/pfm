@@ -69,7 +69,7 @@ public:
 	}
 };
 
-#define EXEC_THREAD(__thp, __fn, __data, ...) \
-		__data.run(__thp, argc, argv, __data.get_cb(__fn), true, __VA_ARGS__)
+#define EXEC_THREAD(__thp, __fn, __data, __wait, ...) \
+		__data.run(__thp, argc, argv, __data.get_cb(__fn), __wait, __VA_ARGS__)
 
 #endif

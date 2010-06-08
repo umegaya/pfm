@@ -23,5 +23,6 @@ function Player:new()
 	return self
 end
 function Player:get_id()
+	assert(self.hoge == 123)
 	return self.id
 end
