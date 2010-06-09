@@ -204,6 +204,7 @@ public:
 			NBR_OK : NBR_EMALLOC;
 	}
 	void fin() {
+		util::fin();
 		super::fin();
 	}
 	void poll(time_t nt);
@@ -216,6 +217,26 @@ public:
 	FB *find_fiber(MSGID msgid) { return (FB *)util::m_fm.find(msgid); }
 	template <typename FROM> int call(FROM from, rpc::request &req, bool trusted);
 	template <typename FROM> int resume(FROM from, rpc::response &res);
+	template <typename FROM> int recv(FROM from, char *p, int l, bool trust) {
+		rpc::data d;
+		sr().unpack_start(p, l);
+		int r = sr().unpack(d);
+		if (r < 0) { return r; }
+		else if (r > 0) {
+			switch(r = d.elem(0)) {
+			case rpc::msg_request:
+				return call(from, d, trust);
+			case rpc::msg_response:
+				return resume(from, d);
+			default:
+				ASSERT(false);
+				return NBR_EINVAL;
+			}
+		}
+		else {
+			return NBR_OK;
+		}
+	}
 };
 
 /* inline functions */

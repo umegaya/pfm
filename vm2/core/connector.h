@@ -44,6 +44,8 @@ public:
 		return conn_pool_impl::connect(c, a, p); }
 	conn *create(const address &a) { return conn_pool_impl::pool().create(a); }
 	conn *find(const address &a) { return conn_pool_impl::pool().find(a); }
+	static inline class conn_pool *cast(conn_pool_impl *cpi) { 
+		return (class conn_pool *)cpi; }
 };
 
 class connector_impl {

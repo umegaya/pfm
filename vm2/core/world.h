@@ -63,11 +63,14 @@ protected:
 	class connector_factory *m_cf;
 public:
 	typedef map<world, world_id> super;
-	world_factory(class connector_factory *cf = NULL) : map<world, world_id>(), m_cf(cf) {
+	world_factory(class connector_factory *cf) :
+		map<world, world_id>(), m_cf(cf) {
 		bool b = super::init(64, 64, -1, opt_expandable | opt_threadsafe);
 		assert(b);	/* if down here, your machine is not suitable to use it */
 	}
+	world_factory() : map<world, world_id>() {}
 	~world_factory() { super::fin(); }
+	class connector_factory *cf() { return m_cf; }
 	void set_cf(class connector_factory *cf) { m_cf = cf; }
 	void remove_node(address &a) {
 		super::iterator it = begin();

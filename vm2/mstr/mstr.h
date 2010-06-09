@@ -8,30 +8,22 @@
 
 namespace pfm {
 using namespace sfc;
-using namespace sfc::util;
 
 class pfmm : public app::daemon {
-public:
-	/* session */
-	class session : public base::session {
-	public:
-		static class pfmm *m_daemon;
-	public:
-		session() : base::session() {}
-		~session() {}
-	};
 protected:
 	fiber_factory<mstr::fiber> &m_ff;
+	class connector_factory &m_cf;
+	dbm m_db;
 public:
-	pfmm(fiber_factory<mstr::fiber> &ff) : m_ff(ff) {
-		session::m_daemon = this;
-	}
-	/* daemon process */
-	base::factory *create_factory(const char *sname) { return NULL; }
-	int	create_config(config* cl[], int size) { return 0; }
-	int	boot(int argc, char *argv[]) { return NBR_OK; }
+	pfmm(fiber_factory<mstr::fiber> &ff, 
+		class connector_factory &cf) : 
+		m_ff(ff), m_cf(cf), m_db() {}
+	fiber_factory<mstr::fiber> &ff() { return m_ff; }
+	base::factory *create_factory(const char *sname);
+	int	create_config(config* cl[], int size);
+	int	boot(int argc, char *argv[]);
+	void shutdown();
 	int	initlib(CONFIG &c) { return NBR_OK; }
-	int on_signal(int signo) { return NBR_OK; }
 };
 }
 

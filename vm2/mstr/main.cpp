@@ -10,9 +10,10 @@ int main(int argc, char *argv[])
 	int r;
 	connector_factory cf;
 	object_factory of;
-	world_factory wf(&cf);
+	world_factory wf;
+	wf.set_cf(&cf);
 	fiber_factory<mstr::fiber> ff(of, wf);
-	pfmm d(ff);
+	pfmm d(ff,cf);
 	if ((r = d.init(argc,argv)) < 0) {
 		return r;
 	}

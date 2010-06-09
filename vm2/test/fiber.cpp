@@ -124,6 +124,8 @@ int init_node_data(node_data &d, const char *a, int type, char *argv[])
 		TEST((r = d.m_of.init(10000, 1000, 0,
 			MAKEPATH(path, tmp))) < 0,
 			"object factory creation fail (%s)\n", path);
+		TEST((r = d.m_wf.init(64, 64, -1, opt_expandable | opt_threadsafe)) < 0,
+			"world factory creation fail (%d)\n", r);
 		d.m_of.clear();
 		TEST(!(d.m_sff = new fiber_factory<testsfiber>(d.m_of, d.m_wf)),
 				"init servant fiber factory fails (%d)\n", r = NBR_EEXPIRE);
@@ -137,6 +139,8 @@ int init_node_data(node_data &d, const char *a, int type, char *argv[])
 		TEST((r = d.m_of.init(10000, 1000, 0,
 			MAKEPATH(path, tmp))) < 0,
 			"object factory creation fail (%s)\n", path);
+		TEST((r = d.m_wf.init(64, 64, -1, opt_expandable | opt_threadsafe)) < 0,
+			"world factory creation fail (%d)\n", r);
 		d.m_of.clear();
 		TEST(!(d.m_sff2 = new fiber_factory<testsfiber2>(d.m_of, d.m_wf)),
 				"init servant2 fiber factory fails (%d)\n", r = NBR_EEXPIRE);
@@ -147,6 +151,8 @@ int init_node_data(node_data &d, const char *a, int type, char *argv[])
 		TEST((r = d.m_of.init(10000, 1000, 0,
 			MAKEPATH(path, "rc/fiber/mof.tch"))) < 0,
 			"object factory creation fail (%d)\n", r);
+		TEST((r = d.m_wf.init(64, 64, -1, opt_expandable | opt_threadsafe)) < 0,
+			"world factory creation fail (%d)\n", r);
 		TEST(!(d.m_mff = new fiber_factory<testmfiber>(d.m_of, d.m_wf)),
 				"init servant fiber factory fails (%d)\n", r = NBR_EEXPIRE);
 		TEST((r = d.m_mff->init(10000, 100, 10)) < 0,

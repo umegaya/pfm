@@ -75,7 +75,7 @@ int ll_call_test(int argc, char *argv[])
 {
 	int r;
 	serializer sr;
-	world_factory wf;
+	world_factory wf(NULL);
 	object_factory of;
 	msgid_generator seed;
 	ll scr(of, wf, sr, NULL);
@@ -264,7 +264,7 @@ void *ll_resume_test_thread(THREAD th)
 int	ll_resume_test_thread_main(THREAD th, int argc, char *argv[])
 {
 	object_factory of;
-	world_factory wf;
+	world_factory wf(NULL);
 	fiber_factory<testfiber> ff(of, wf);
 	serializer sr;
 	msgid_generator seed;

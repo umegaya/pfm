@@ -7,7 +7,7 @@ CC = g++
 AR = ar crv
 DEFS = -D_GNU_SOURCE
 ifeq ($(DEBUG), 1)
-CFLAG = -Wall -g -march=i686 -fPIC -D_DEBUG -D_TEST -D_RPC_PROF
+CFLAG = -Wall -g -march=i686 -fPIC -D_DEBUG -D_RPC_PROF
 else 
 CFLAG = -O4 -march=i686 -fPIC -D_RPC_PROF
 endif
@@ -29,6 +29,8 @@ LIBS = -L. -L./lib -L$(NBRDIR) -L$(SFCDIR) -lsfc -lnbr
 INCS = -I. -Icore -Ilib -Itest -I$(NBRCOREDIR) -I$(SFCCOREDIR) -I$(SFCLIBDIR)
 DEPS = dep
 OBJS = obj
+TOBJS = tobj
+TDEPS = tdep
 ifeq ($(DEBUG), 1)
 LUA = luad
 else
@@ -63,8 +65,8 @@ SERVANT = pfms
 #-----------------------------------------------------------------------
 TESTDIR = test
 TESTSRCS = $(shell find $(TESTDIR) -regex .*\\.cpp$$ -printf %f\\n)
-TESTOBJS = $(TESTSRCS:%.cpp=$(OBJS)/$(TESTDIR)/%.o)
-TESTDEPS = $(TESTSRCS:%.cpp=$(DEPS)/$(TESTDIR)/%.d)
+TESTOBJS = $(TESTSRCS:%.cpp=$(TOBJS)/$(TESTDIR)/%.o)
+TESTDEPS = $(TESTSRCS:%.cpp=$(TDEPS)/$(TESTDIR)/%.d)
 TESTREQLIBS = tokyocabinet z bz2 pthread rt m ssl crypto $(LUA) msgpack
 TESTLIBS = $(foreach lib,$(TESTREQLIBS),$(shell echo "-l$(lib)"))
 UNITTEST = ut
@@ -77,8 +79,9 @@ RUNTEST = any
 COREDIR = core
 CORESRCS = $(shell find $(COREDIR) -regex .*\\.cpp$$)
 COREOBJS = $(CORESRCS:%.cpp=$(OBJS)/%.o)
+TCOREOBJS = $(CORESRCS:%.cpp=$(TOBJS)/%.o)
 COREDEPS = $(CORESRCS:%.cpp=$(DEPS)/%.d)
-
+TCOREDEPS = $(CORESRCS:%.cpp=$(TDEPS)/%.d)
 
 #-----------------------------------------------------------------------
 #	module setting
@@ -106,6 +109,18 @@ $(OBJS)/$(SDIR)/%.o: $(SDIR)/%.cpp
 	@mkdir -p $(OBJS)/$(SDIR)
 	$(CC) $(CFLAG) $(INCS) -c -o $@ $<
 
+$(TOBJS)/$(TESTDIR)/%.o: $(TESTDIR)/%.cpp
+	@mkdir -p $(TOBJS)/$(TESTDIR)
+	$(CC) $(CFLAG) -D_TEST $(INCS) -c -o $@ $<
+
+$(TOBJS)/$(COREDIR)/%.o: $(COREDIR)/%.cpp
+	@mkdir -p $(TOBJS)/$(COREDIR)
+	$(CC) $(CFLAG) -D_TEST $(INCS) -c -o $@ $<
+
+$(TOBJS)/%.o:
+	@mkdir -p $(TOBJS)/$(dir $<)
+	$(CC) $(CFLAG) -D_TEST $(INCS) -c -o $@ $<
+
 $(OBJS)/%.o:
 	@mkdir -p $(OBJS)/$(dir $<)
 	$(CC) $(CFLAG) $(INCS) -c -o $@ $<
@@ -119,6 +134,16 @@ $(DEPS)/$(COREDIR)/%.d: $(COREDIR)/%.cpp
 	@mkdir -p $(DEPS)/$(COREDIR)
 	@$(CC) $(CFLAG) $(INCS) $< -M |         \
 		sed 's:.*\.o:${OBJS}/${COREDIR}/\0:' > $@
+
+$(TDEPS)/$(COREDIR)/%.d: $(COREDIR)/%.cpp
+	@mkdir -p $(TDEPS)/$(COREDIR)
+	@$(CC) $(CFLAG) -D_TEST $(INCS) $< -M | 	\
+		sed 's:.*\.o:$(TOBJS)/$(COREDIR)/\0:' > $@
+
+$(TDEPS)/$(TESTDIR)/%.d: $(TESTDIR)/%.cpp
+	@mkdir -p $(TDEPS)/$(TESTDIR)
+	@$(CC) $(CFLAG) -D_TEST $(INCS) $< -M | 	\
+		sed 's:.*\.o:$(TOBJS)/$(TESTDIR)/\0:' > $@
 
 $(DEPS)/$(SDIR)/%.d: $(SDIR)/%.cpp
 	@mkdir -p $(DEPS)/$(SDIR)
@@ -145,27 +170,27 @@ $(DEPS)/%.d: $(dir %)/$(notdir %).cpp
 #-----------------------------------------------------------------------
 #	make target
 #-----------------------------------------------------------------------
-all: module $(UNITTEST) mstr svnt
+all: module $(UNITTEST) $(MASTER) $(SERVANT)
 
 test: all
 	./$(TESTDIR)/$(UNITTEST) $(RUNTEST)
 
-mstr: $(COREOBJS) $(MOBJS)
+$(MASTER): $(COREOBJS) $(MOBJS)
 	$(CC) -o $(MDIR)/$(MASTER) $(CFLAG) $(LNKOPT) $(INCS) $(COREOBJS) $(MOBJS) $(MODULES) $(LIBS) $(MLIBS)
 
-svnt: $(COREOBJS) $(SOBJS)
+$(SERVANT) : $(COREOBJS) $(SOBJS)
 	$(CC) -o $(SDIR)/$(SERVANT) $(CFLAG) $(LNKOPT) $(INCS) $(COREOBJS) $(SOBJS) $(MODULES) $(LIBS) $(SLIBS)
 
 module: $(MODULES)
 
-$(UNITTEST) : $(TESTOBJS) $(COREOBJS)
-	$(CC) -o $(TESTDIR)/$(UNITTEST) $(CFLAG) $(LNKOPT) $(INCS) $(TESTOBJS) $(COREOBJS) $(MODULES) $(LIBS) $(TESTLIBS)
+$(UNITTEST) : $(TESTOBJS) $(TCOREOBJS)
+	$(CC) -o $(TESTDIR)/$(UNITTEST) $(CFLAG) $(LNKOPT) $(INCS) $(TESTOBJS) $(TCOREOBJS) $(MODULES) $(LIBS) $(TESTLIBS)
 
 clean:
 	rm -f $(TESTOBJS) $(TESTDIR)/$(UNITTEST) $(MODULES) $(COREFILE) $(MOBJS) $(SOBJS) $(MDIR)/$(MASTER) $(SDIR)/$(SERVANT)
 	
 cleanup: clean
-	rm -rf $(OBJS) $(DEPS)
+	rm -rf $(OBJS) $(DEPS) $(TOBJS) $(TDEPS)
 
 
 #-----------------------------------------------------------------------
@@ -174,3 +199,6 @@ cleanup: clean
 -include $(MODULE_DEPS)
 -include $(TESTDEPS)
 -include $(COREDEPS)
+-include $(TCOREDEPS)
+-include $(SDEPS)
+-include $(MDEPS)

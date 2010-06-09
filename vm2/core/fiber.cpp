@@ -71,6 +71,7 @@ bool ffutil::init_tls()
 void ffutil::fin()
 {
 	m_fm.fin();
+	m_quorums.fin();
 }
 
 void ffutil::fin_tls()

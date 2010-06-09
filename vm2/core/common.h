@@ -21,4 +21,10 @@
 		((serializer &)(scr)).unpack_start(((serializer &)(scr)).p(),	\
 						((serializer &)(scr)).len());
 
+#define INIT_OR_DIE(cond, ret, ...)	\
+	if (cond) {	\
+		TRACE(__VA_ARGS__);	\
+		return ret;	\
+	}
+
 #endif

@@ -51,6 +51,7 @@ public:
 	const data &val(int i) const { return (const data &)serializer::data::val(i); }
 	data &val(int i) { return (data &)serializer::data::val(i); }
 	void set_ptr(const void *p) { serializer::data::set_ptr(p); }
+	template <class CMD> operator CMD &() { return (CMD &)*this; }
 };
 class request : public data {
 public:
