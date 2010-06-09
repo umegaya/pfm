@@ -202,14 +202,23 @@ int lua::coroutine::from_stack(serializer &sr, int stkid, bool packobj)
 		/* convert to real stkid (because minus stkid change its meaning
 		* during below iteration) */
 		stkid = (stkid < 0 ? lua_gettop(m_exec) + stkid + 1 : stkid);
-		r = lua_objlen(m_exec, stkid);
-		sr.push_map_len(r);
 		r = lua_gettop(m_exec);     /* preserve current stack size to r */
+		TRACE("nowtop=%d\n", r);
+		lua_pushnil(m_exec);        /* push first key (idiom, i think) */
+		int tblsz = 0;
+		while(lua_next(m_exec, stkid)) {
+			if (!lua_isfunction(m_exec, lua_gettop(m_exec))) { tblsz++; }
+			lua_pop(m_exec, 1);
+		}
+		TRACE("tblsz=%d\n", r);
+		sr.push_map_len(tblsz);
 		lua_pushnil(m_exec);        /* push first key (idiom, i think) */
 		while(lua_next(m_exec, stkid)) {    /* put next key/value on stack */
 			int top = lua_gettop(m_exec);       /* use absolute stkid */
-			from_stack(sr, top - 1);        /* pack table key */
-			from_stack(sr, top);    /* pack table value */
+			if (!lua_isfunction(m_exec, top)) {
+				from_stack(sr, top - 1);        /* pack table key */
+				from_stack(sr, top);    /* pack table value */
+			}
 			lua_pop(m_exec, 1); /* destroy value */
 		}
 		lua_settop(m_exec, r);      /* recover stack size */
@@ -301,6 +310,7 @@ int lua::coroutine::to_stack(const rpc::data &d)
 						to_stack(ud.val(i));
 						lua_settable(m_exec, -3);
 					}
+					lua_pop(m_exec, 1);	/* remove metatable */
 					o->set_flag((object::flag_local | 
 						object::flag_cached_local), 
 						true);
@@ -316,7 +326,7 @@ int lua::coroutine::to_stack(const rpc::data &d)
 		}
 		break;
 	case datatype::MAP:
-		lua_newtable(m_exec);
+		lua_createtable(m_exec, d.size(), 0);
 		for (i = 0; i < d.size(); i++) {
 			to_stack(d.key(i));
 			to_stack(d.val(i));

@@ -181,6 +181,7 @@ public:
 		querydata *find_query(MSGID msgid) {
 			return m_querylist.find(msgid);
 		}
+		/* TODO : call this when every packet receiving */
 		void remove_query(MSGID msgid) {
 			remove_query_low(msgid);
 			if (msgid_generator::compare_msgid(msgid, m_last_respond_msgid) > 0) {
@@ -319,9 +320,7 @@ public:
 			return NULL;
 		}
 		c->m_s = s;
-		if (m_address_chain_map.insert(c, a) == m_address_chain_map.end()) {
-			return NULL;
-		}
+		m_address_chain_map.insert(c, a);
 		((failover_chain *)ct)->insert(c);
 		if (!s->valid()) {
 			pool().connect(s, a, p);

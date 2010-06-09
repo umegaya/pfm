@@ -269,12 +269,28 @@ static rpc::ll_exec_request &get_ler(test_object2 *o) { return o->reqbuff(); }
 /*------------------------------------------------------------------*/
 /* test : node_ctrl :: add 											*/
 /*------------------------------------------------------------------*/
+int 
+get_world_object_node(test_context &ctx, node_data *&nd)
+{
+	int r;
+	connector *ct;
+	world *w;
+	address a;
+	TEST(!(w = ctx.m_mnd.m_wf.find("test_world2")), "world not found (%p:%d)\n", 
+		w, r = NBR_ENOTFOUND);
+	TEST(!(ct = (connector *)w->_connect_assigned_node(ctx.wuuid)),
+		"connector not found (%p:%d)\n", ct, r = NBR_ENOTFOUND);
+	a = ct->primary()->get_addr(a);
+	TEST(!(nd = ctx.m_snd.find(a)),
+		"node data which handle world object not found (%p:%d)\n", 
+		nd, r = NBR_ENOTFOUND);
+	return NBR_OK;
+}
 int fiber_test_add_node(test_context &ctx, int argc, char *argv[], void *p)
 {
 	int r;
 	serializer local_sr;
-	node_data *nd;
-	world *w;
+	node_data *nd, *wnd;
 	conn *c;
 	char path[1024];
 	address &a = *(address *)p;
@@ -310,6 +326,8 @@ int fiber_test_add_node(test_context &ctx, int argc, char *argv[], void *p)
 			"call servant add node fails (%d)\n", r);
 		/* if world is first created, then vm_init fiber will create. */
 		if (!nd->m_have_world) { thread_msg_wait(ctx); }
+		TEST(!(r = get_world_object_node(ctx, wnd)) < 0,
+			"there is not node for world object (%p)\n", wnd);
 		/* servant's add node will call servant thread's vm_init */
 		map<packet, THREAD>::iterator tpit = m_thevmap.begin(), ntpit;
 		for (;tpit != m_thevmap.end();) {
@@ -320,7 +338,15 @@ int fiber_test_add_node(test_context &ctx, int argc, char *argv[], void *p)
 				"unpack packet fails (%d)\n", r);
 			TEST((r = nd->m_sff->call(ctx.thrd, req, true)) < 0,
 				"call servant add node fails (%d)\n", r);
-			/* it will initiate object creation */
+			/* it will initiate object creation in wnd */
+			TEST((r = wnd->m_sff->call(c, get_cor(), true)) < 0,
+				"create world object fails (%d)\n", r);
+			/* it will send back reply to each vm_init fiber */
+			TEST((r = sresponse(nd->m_sff->sr(), resp)) <= 0,
+				"response unpack fails (%d)\n", r);
+			TEST((r = nd->m_sff->resume(c, resp)) < 0,
+				"resume servant add node fails (%d)\n", r);
+			/* it will reply to main add node fiber */
 			TEST((r = sresponse(nd->m_sff->sr(), resp)) <= 0,
 				"response unpack fails (%d)\n", r);
 			TEST((r = nd->m_sff->resume(ntpit->m_th, resp)) < 0,
@@ -332,26 +358,11 @@ int fiber_test_add_node(test_context &ctx, int argc, char *argv[], void *p)
 			"not resume correctly(%d)\n", r);
 		TEST((r = m_thevmap.use()) != 0,
 			"unprocessed packet exist (%d)\n", r);
-			
-		connector *cn;
-		address tmp;
-		TEST(!(w = nd->m_wf.find(test_world_id)),
-			"cannot find world object (%p)\n", w);
-		TEST(!(cn = (connector *)w->_connect_assigned_node(ctx.wuuid)), 
-			"cannot find connector for world object (%p)\n", cn);
-		TEST(!(ctx.m_wond = ctx.m_snd.find(cn->primary()->get_addr(tmp))), 
-			"cannot find node for world object (%p)\n", ctx.m_wond);
-		TEST((r = ctx.m_wond->m_sff->call(ctx.thrd, get_cor(), true)) < 0, 
-			"create world object fails (%d)\n", r);
-		TEST((r = sresponse(nd->m_sff->sr(), resp)) <= 0,
-			"response unpack fails (%d)\n", r);
-		TEST((r = nd->m_sff->resume(ctx.thrd, resp)) < 0,
-			"resume servant add node fails (%d)\n", r);
-		/* only main add node fiber remains */
-		TEST((r = nd->m_sff->use()) != (1 + (nd->m_have_world ? 0 : ctx.n_thread)),
-			"not stop correctly(%d)\n", r);
-		TEST(!(c = ctx.m_mnd.m_cf.get_by(npit->m_a)), "cannot find conn (%p)\n", c);
-		test_conn::m_pktmap.erase(npit->m_a);
+
+		/* add node fiber should finish and reply to master add node fiber */
+		TEST(!(c = ctx.m_mnd.m_cf.get_by(npit->m_a)), 
+			"cannot found connection from servant (%p:%d)\n", 
+			c, r = NBR_ENOTFOUND);
 		TEST((r = sresponse(nd->m_sff->sr(), resp)) <= 0,
 			"response unpack fails (%d)\n", r);
 		TEST((r = ctx.m_mnd.m_mff->resume(c, resp)) < 0,
@@ -367,8 +378,9 @@ int fiber_test_add_node(test_context &ctx, int argc, char *argv[], void *p)
 		TTRACE("process2 %s/%p\n", (const char *)npit->m_a, nd->m_sff);
 		TEST((r = npit->unpack(nd->m_sff->sr(), resp)) < 0, 
 			"unpack fails (%d)\n", r);
-		TEST(!(c = nd->m_cf.get_by(npit->m_a)), 
-			"cannot find conn (%p)\n", c);
+		/* find connection to master */
+		TEST(!(c = nd->m_cf.get_by("127.0.0.1:8000")), 
+			"cannot find conn (%p:%d)\n", c, r = NBR_ENOTFOUND);
 		init_thread_msg_wait(ctx);
 		TEST((r = nd->m_sff->resume(c, resp)) < 0, 
 			"resume add node servant fails (%d)\n", r);
@@ -391,7 +403,10 @@ int fiber_test_add_node(test_context &ctx, int argc, char *argv[], void *p)
 		TEST((r = m_thevmap.use()) != 0, "unprocessed packet exist (%d)\n", r);
 		/* after global commit, no fiber should be running */
 		TEST((r = nd->m_sff->use()) != 0, "wrongly resume (%d)\n", r);
+		test_conn::m_pktmap.erase(npit->m_a);
 	}
+	TEST((r = test_conn::m_pktmap.use()) != 0, 
+		"packet not processed correctly (%d)\n",r);
 	TEST((ctx.m_mnd.m_mff->quorum_locked(test_world_id)),
 		"context still locked (master) (%d)\n", r = NBR_EINVAL);
 	TEST((r = ctx.m_mnd.m_mff->use()) != 0,
@@ -407,6 +422,7 @@ int fiber_test_add_node(test_context &ctx, int argc, char *argv[], void *p)
 int fiber_test_login(test_context &ctx, int argc, char *argv[])
 {
 	int r;
+	packet *p;
 	rpc::login_request req;
 	rpc::login_response res;
 	rpc::create_object_request req2;
@@ -424,14 +440,22 @@ int fiber_test_login(test_context &ctx, int argc, char *argv[])
 		"test_world2", sizeof("test_world2") - 1,
 		"user", "password", sizeof("password") - 1)) < 0,
 		"pack login command fails (%d)\n", r);
+	PREPARE_UNPACK(svnt->m_sff->sr());
 	TEST((r = svnt->m_sff->sr().unpack(req)) <= 0,
 		"unpack login command fails (%d)\n", r);
 	TEST((r = svnt->m_sff->call(&c, req, false)) < 0,
 		"call login command fails (%d)\n", r);
-	TEST((r = ctx.m_mnd.m_mff->call(&c, get_cor(), true)) < 0,
+	TEST((r = test_conn::m_pktmap.use()) != 1, 
+		"packet send too much (%d)\n", r);
+	TEST(!(p = test_conn::m_pktmap.find("127.0.0.1:8000")),
+		"packet not send correctly (%p:%d)\n", p, r = NBR_ENOTFOUND);
+	TEST((r = p->unpack(svnt->m_sff->sr(), req)) < 0,
+		"packet unpack fails (%d)\n", r);
+	TEST((r = ctx.m_mnd.m_mff->call(&c, req, true)) < 0,
 		"call login command (mstr) fails (%d)\n", r);
 	TEST((r = mresponse(svnt->m_sff->sr(), res)) < 0,
 		"invalid login response from mstr (%d)\n", r);
+	test_conn::m_pktmap.erase("127.0.0.1:8000");
 	connector *ct;
 	world *w;
 	address a;
@@ -443,39 +467,32 @@ int fiber_test_login(test_context &ctx, int argc, char *argv[])
 			"node data which handle world object not found (%p)\n", nd);
 	TEST((r = svnt->m_sff->resume(&c, res)) < 0,
 		"resume login response fails (%d)\n", r);
-	/* will call Player object creation */
-	packet *p;
-	TEST(((r = test_conn::m_pktmap.use()) != 1),
-		"too much packet sending (%d)\n", r);
-	TEST(!(p = test_conn::m_pktmap.find(a)),
-		"packet not found (%p)\n", p);
-	test_conn::m_pktmap.erase(a);
-	TEST((r = p->unpack(nd->m_sff->sr(), req2)) < 0,
-		"create object request fails (%d)\n", r);
 	/* will call Player:new */
-	TEST((r = nd->m_sff->call(&c, req2, true)) < 0,
+	TEST((r = nd->m_sff->call(&c, get_cor(), true)) < 0,
 		"create object call fails (%d)\n", r);
 	/* will call World:get_id */
+	object *o;
+	TEST(!(o = nd->m_of.find(ctx.wuuid)), 
+		"world object not found (%p:%d)\n", o, r = NBR_ENOTFOUND);
+	test_object2 *to = (test_object2 *)o;
 	TEST(!(ct = (connector *)w->_connect_assigned_node(ctx.wuuid)),
 		"connector not found (%p)\n", ct);
 	a = ct->primary()->get_addr(a);
 	TEST(!(wnd = ctx.m_snd.find(a)),
 		"node data which handle world object not found (%p)\n", wnd);
-	TEST(((r = test_conn::m_pktmap.use()) != 1),
-		"too much packet sending (%d)\n", r);
-	TEST(!(p = test_conn::m_pktmap.find(a)),
-		"packet not found (%p)\n", p);
-	test_conn::m_pktmap.erase(a);
-	TEST((r = p->unpack(wnd->m_sff->sr(), req2)) < 0,
-		"create object request fails (%d)\n", r);
-	TEST((r = wnd->m_sff->call(&c, req2, true)) < 0,
+	TEST((r = wnd->m_sff->call(&c, get_ler(to), true)) < 0,
 		"World:get_id call fails (%d)\n", r);
-	/* will call Player:login */
+	/* resume Player:new */
+	TEST((r = sresponse(nd->m_sff->sr(), res2)) < 0,
+		"invalid login response from svnt (%d)\n", r);
+	TEST((r = nd->m_sff->resume(&c, res2)) < 0,
+		"resume login response fails (%d)\n", r);
+	/* resume player login (now object creation finish) */
 	TEST((r = sresponse(svnt->m_sff->sr(), res2)) < 0,
 		"invalid login response from svnt (%d)\n", r);
 	TEST((r = svnt->m_sff->resume(&c, res2)) < 0,
 		"resume login response fails (%d)\n", r);
-	/* will return 788 */
+	/* will call Player:login and will return 788 */
 	TEST((r = sresponse(svnt->m_sff->sr(), res2)) < 0,
 		"invalid login response from svnt (%d)\n", r);
 	TEST((ll::num(788) != (ll::num)res2.ret()),
@@ -525,11 +542,12 @@ int fiber_test_ll(test_context &ctx, int argc, char *argv[])
 		"pack create object fails (%d)\n", r);
 	ff.sr().unpack_start(ff.sr().p(), ff.sr().len());
 	TEST((r = ff.sr().unpack(cor)) <= 0, "unpack fails (%d)\n", r);
-	TEST((r = ff.call(t, cor, true)) < 0,
-		"create object fails (%d)\n", r);
-	/* store world object address */
 	TEST(!(o = ff.of().find(ctx.wuuid)), "world object not found (%p)\n", o);
 	to = (test_object2 *)o;
+	/* force set remote */
+	to->set_flag(object::flag_local, false);
+	TEST((r = ff.call(t, cor, true)) < 0,
+		"create object fails (%d)\n", r);
 	/* it should resume inside of it and call World object */
 	TEST((r = ffw.call(t, get_ler(to), true)) < 0,
 		"resume object creation fails (call World:get_id) (%d)\n", r);
@@ -553,7 +571,7 @@ int fiber_test_ll(test_context &ctx, int argc, char *argv[])
 	rpc::ll_exec_response rler;
 	TEST((r = sresponse(ff.sr(), rler)) < 0, "response unpack fails (%d)\n", r);
 	TEST(((ll::num)rler.ret() != ll::num(666)), "Player:get_id fails (%d)\n",
-			(int)(ll::num)(666));
+			(int)(ll::num)(rler.ret()));
 	return NBR_OK;
 }
 
@@ -579,12 +597,19 @@ int fiber_test_thread(test_context &ctx, int argc, char *argv[])
 	node_data *nd;
 	dbm db;
 
+	/* set callback to emulate network IO */
+	object::m_test_request = test_object2::test_request;
+	world::m_test_request = test_world2::test_request;
+	conn::m_test_send = test_conn::test_send;
+	conn_pool::m_test_connect = test_conn_pool::test_connect;
+
 	TEST((r = db.init(MAKEPATH(path, "rc/uuid/uuid.tch"))) < 0,
 		"uuid DB init fail (%d)\n",r);
 	TEST((r = UUID::init(db)) < 0, "UUID init fail (%d)\n", r);	
-	TEST((r = testmfiber::init(10000, MAKEPATH(path, "rc/fiber/al.tch"))) < 0,
+	TEST((r = testmfiber::init_global(10000, MAKEPATH(path, "rc/fiber/al.tch"))) < 0,
 		"testmfiber::init fails(%d)\n", r);
-	TEST((r = testsfiber::init(1000)) < 0, "testsfiber::init fails(%d)\n",r);
+	testmfiber::m_al.clear();
+	TEST((r = testsfiber::init_global(1000)) < 0, "testsfiber::init fails(%d)\n",r);
 	TEST(!(test_conn::m_pktmap.init(100, 100)), 
 		"test_conn::pktmap init fail (%d)\n", r = NBR_EEXPIRE);
 	TEST(!m_thevmap.init(100, 100, -1, opt_threadsafe | opt_expandable), 
@@ -608,16 +633,14 @@ int fiber_test_thread(test_context &ctx, int argc, char *argv[])
 			"reg node fail (%s)\n", HOST_LIST[i]);
 		address addr(HOST_LIST[i]);
 		c->set_addr(addr);
-		TEST(!(c = nd->m_cp.create(HOST_LIST[i])), 
+		connector *ct;
+		TEST(!(ct = nd->m_cf.backend_connect("127.0.0.1:8000")),
+			"backend connect fails (%p)\n", ct);
+		TEST(!(c = nd->m_cp.find("127.0.0.1:8000")),
 			"reg node fail (%s)\n", HOST_LIST[i]);
-		c->set_addr(addr);
 	}
 	TEST((ctx.m_snd.use() != (int)N_HOST), "invalid servant node size (%d)\n", 
 		ctx.m_snd.use());
-	object::m_test_request = test_object2::test_request;
-	world::m_test_request = test_world2::test_request;
-	conn::m_test_send = test_conn::test_send;
-	conn_pool::m_test_connect = test_conn_pool::test_connect;
 	ctx.wuuid.assign();
 	TTRACE("wuuid = (%s)\n", ctx.wuuid.to_s(path, sizeof(path)));
 
@@ -633,8 +656,8 @@ int fiber_test_thread(test_context &ctx, int argc, char *argv[])
 
 	m_thevmap.fin();
 	test_conn::m_pktmap.fin();
-	mstr::fiber::fin();
-	svnt::fiber::fin();
+	mstr::fiber::fin_global();
+	svnt::fiber::fin_global();
 	return NBR_OK;
 }
 

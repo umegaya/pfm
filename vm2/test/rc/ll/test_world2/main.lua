@@ -8,8 +8,9 @@ function World:test_function(map, array, n, str)
 	return map['key_b'] + array[2] + n + #str
 end
 function World:get_id()
-	print("World:get_id called")
+	print("World:get_id called : seed = " .. self.seed)
 	self.seed = self.seed + 1
+	print("World:get_id now seed = " .. self.seed)
 	return self.seed
 end
 

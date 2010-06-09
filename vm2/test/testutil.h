@@ -17,6 +17,7 @@ extern int pack_rpc_reqheader(pfm::serializer &sr, pfm::object &o,
 #define PUSHSTR(sr,name)	sr.push_string(#name, sizeof(#name) - 1);
 #define MAKEPATH(_b,_path) get_rcpath(_b, sizeof(_b), argv[0], _path)
 
+
 #define TEST(cond, ...)	\
 	if (cond) {	\
 		TTRACE(__VA_ARGS__);	\

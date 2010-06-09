@@ -214,7 +214,7 @@ fiber::get_socket_address(address &a)
 /* fiber logic (master mode) */
 mstr::fiber::account_list mstr::fiber::m_al;
 
-int mstr::fiber::init(int max_account, const char *dbpath)
+int mstr::fiber::init_global(int max_account, const char *dbpath)
 {
 	if (!m_al.init(max_account, max_account,
 		opt_threadsafe | opt_expandable, dbpath)) {
@@ -686,6 +686,7 @@ int svnt::fiber::resume_login(rpc::response &p)
 			if ((r = yielding(msgid)) < 0) {
 				goto error;
 			}
+			m_status = login_wait_object_create;
 		} break;
 		case login_wait_object_create: {
 			rpc::ll_exec_response &res = rpc::ll_exec_response::cast(p);
@@ -740,6 +741,10 @@ int svnt::fiber::node_ctrl_add(world *w,
 				goto error;
 			}
 			ctx->m_node_addr.from(req.node_addr(), req.node_addr().len());
+			if (!w->add_node(ctx->m_node_addr)) {
+				r = NBR_EEXPIRE;
+				goto error;
+			}
 			msgid = new_msgid();
 			if (msgid == INVALID_MSGID) {
 				r = NBR_EEXPIRE;
@@ -763,25 +768,26 @@ int svnt::fiber::node_ctrl_add(world *w,
 			ctx->m_node_addr.from(req.node_addr(), req.node_addr().len());
 			/* because no quorum used */
 			ctx->m_rep_size = 0;
+			if (!w->add_node(ctx->m_node_addr)) {
+				r = NBR_EEXPIRE;
+				goto error;
+			}
 			msgid = new_msgid();
 			if (msgid == INVALID_MSGID) {
 				r = NBR_EEXPIRE;
 				ff().world_destroy(w);
 				goto error;
 			}
-			if ((r = rpc::create_object_request::pack_header(
-				sr, msgid, w->world_object_uuid(),
-				ll::world_klass_name, ll::world_klass_name_len,
-				w->id(), nbr_str_length(w->id(), max_wid), false, 0)) < 0) {
-				goto error;
-			}
-			if ((r = w->request(msgid, w->world_object_uuid(), sr)) < 0) {
-				goto error;
-			}
 			if ((r = yielding(msgid, 1, NULL, ctx)) < 0) {
 				goto error;
 			}
-			m_status = ncc_add_world_object;
+			rpc::response::pack_header(sr, m_msgid);
+			sr << msgid;
+			sr.pushnil();
+			if ((r = respond(false, sr)) < 0) {
+				goto error;
+			}
+			m_status = ncc_wait_global_commit;
 		}
 		break;
 	default:
@@ -793,14 +799,13 @@ int svnt::fiber::node_ctrl_add(world *w,
 error:
 	if (msgid != INVALID_MSGID) { ff().fiber_unregister(msgid); }
 	if (ctx) { ff().quorums().erase(w->id()); }
+	w->del_node(ctx->m_node_addr);
 	return r;
 }
 int svnt::fiber::node_ctrl_add_resume(world *w, rpc::response &res, serializer &sr)
 {
 	int r;
 	MSGID msgid = INVALID_MSGID;
-	ll::coroutine *co = NULL;
-	object *o = NULL;
 	quorum_context *ctx = yld()->p<quorum_context>();
 	if (res.success()) {
 		switch(m_status) {
@@ -809,44 +814,6 @@ int svnt::fiber::node_ctrl_add_resume(world *w, rpc::response &res, serializer &
 				r = NBR_ENOTFOUND;
 				goto error;
 			}
-			msgid = new_msgid();
-			if (msgid == INVALID_MSGID) {
-				r = NBR_EEXPIRE;
-				goto error;
-			}
-			if ((r = rpc::create_object_request::pack_header(
-				sr, msgid, w->world_object_uuid(),
-				ll::world_klass_name, ll::world_klass_name_len,
-				w->id(), nbr_str_length(w->id(), max_wid), false, 0)) < 0) {
-				goto error;
-			}
-			m_status = ncc_add_world_object;
-			if ((r = w->request(msgid, w->world_object_uuid(), sr)) < 0) {
-				goto error;
-			}
-			if ((r = yielding(msgid, 1, NULL, ctx)) < 0) {
-				goto error;
-			}
-			break;
-		case ncc_add_world_object:
-			if (!w->add_node(ctx->m_node_addr)) {
-				r = NBR_EEXPIRE;
-				goto error;
-			}
-			/* add this object as global variable */
-			if (!(o = ff().of().load(w->world_object_uuid(),
-				w, ff().vm(), ll::world_klass_name))) {
-				r = NBR_EEXPIRE;
-				goto error;
-			}
-			if (!(co = ff().co_create(this))) {
-				r = NBR_EEXPIRE;
-				goto error;
-			}
-			else if ((r = co->push_world_object(o)) < 0) {
-				goto error;
-			}
-			ff().vm()->co_destroy(co);
 			msgid = new_msgid();
 			if (msgid == INVALID_MSGID) {
 				r = NBR_EEXPIRE;
@@ -876,14 +843,13 @@ int svnt::fiber::node_ctrl_add_resume(world *w, rpc::response &res, serializer &
 		return NBR_OK;
 	}
 	else {
-		quorum_global_commit(w, ctx, res.err());
-		return res.err();
+		r = res.err();
+		goto error;
 	}
 error:
-	if (o) { ff().of().unload(o->uuid()); }
-	if (co) { ff().vm()->co_destroy(co); }
 	if (msgid != INVALID_MSGID) { ff().fiber_unregister(msgid); }
 	quorum_global_commit(w, ctx, r);
+	w->del_node(ctx->m_node_addr);
 	return r;
 }
 
@@ -963,6 +929,8 @@ int svnt::fiber::node_ctrl_del_resume(world *w, rpc::response &res, serializer &
 	}
 error:
 	if (msgid != INVALID_MSGID) { ff().fiber_unregister(msgid); }
+	/* rollback node status */
+	w->add_node(ctx->m_node_addr);
 	quorum_global_commit(w, ctx, r);
 	return r;
 }
@@ -1070,37 +1038,94 @@ int svnt::fiber::node_ctrl_vm_init(
 		class world *w, rpc::node_ctrl_cmd::vm_init &req, serializer &sr)
 {
 	int r;
+	MSGID msgid = INVALID_MSGID;
 	if (!w) { return NBR_ENOTFOUND; }
 	if ((r = ff().vm()->init_world(req.wid(), req.from(), req.srcfile())) < 0) {
-		return r;
+		goto error;
 	}
-	MSGID msgid = new_msgid();
+	msgid = new_msgid();
 	if (msgid == INVALID_MSGID) {
-		return NBR_EEXPIRE;
+		goto error;
 	}
-	rpc::response::pack_header(sr, m_msgid);
-	sr << msgid;
-	sr.pushnil();
-	if ((r = respond(false, sr)) < 0) {
-		ff().fiber_unregister(msgid);
-		return r;
+	if ((r = rpc::create_object_request::pack_header(
+		sr, msgid, w->world_object_uuid(),
+		ll::world_klass_name, ll::world_klass_name_len,
+		w->id(), nbr_str_length(w->id(), max_wid), false, 0)) < 0) {
+		goto error;
+	}
+	if ((r = w->request(msgid, w->world_object_uuid(), sr)) < 0) {
+		goto error;
 	}
 	if ((r = yielding(msgid)) < 0) {
-		ff().fiber_unregister(msgid);
-		return r;
+		goto error;
 	}
 	return NBR_OK;
+error:
+	if (msgid != INVALID_MSGID) {
+		ff().fiber_unregister(msgid);
+	}
+	ff().vm()->fin_world(req.wid());
+	return r;
 }
 int svnt::fiber::node_ctrl_vm_init_resume(
 		class world *w, rpc::response &res, serializer &sr)
 {
+	int r;
+	MSGID msgid = INVALID_MSGID;
+	ll::coroutine *co = NULL;
+	object *o = NULL;
 	if (res.success()) {
-		return NBR_OK;
+		switch(m_status) {
+		case start:
+			if (!w) {
+				r = NBR_ENOTFOUND;
+				goto error;
+			}
+			/* add this object as global variable */
+			if (!(o = ff().of().load(w->world_object_uuid(),
+				w, ff().vm(), ll::world_klass_name))) {
+				r = NBR_EEXPIRE;
+				goto error;
+			}
+			if (!(co = ff().co_create(this))) {
+				r = NBR_EEXPIRE;
+				goto error;
+			}
+			else if ((r = co->push_world_object(o)) < 0) {
+				goto error;
+			}
+			ff().vm()->co_destroy(co);
+			msgid = new_msgid();
+			if (msgid == INVALID_MSGID) {
+				r = NBR_EEXPIRE;
+				goto error;
+			}
+			rpc::response::pack_header(sr, m_msgid);
+			sr << msgid;
+			sr.pushnil();
+			if ((r = respond(false, sr)) < 0) {
+				goto error;
+			}
+			if ((r = yielding(msgid)) < 0) {
+				goto error;
+			}
+			m_status = ncc_wait_global_commit;
+			return NBR_OK;
+		case ncc_wait_global_commit:
+			return NBR_OK;
+		}
 	}
 	else {
-		/* TODO: rollback vm status */
-		return res.err();
+		/* rollback vm status */
+		ff().vm()->fin_world(wid());
+		r = res.err();
+		goto error;
 	}
+error:
+	if (o) { ff().of().unload(o->uuid()); }
+	if (co) { ff().vm()->co_destroy(co); }
+	if (msgid != INVALID_MSGID) { ff().fiber_unregister(msgid); }
+	return r;
 }
 
 int svnt::fiber::node_ctrl_vm_fin(

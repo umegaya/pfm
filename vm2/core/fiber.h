@@ -35,6 +35,7 @@ protected:
 			/* del */
 			/* list */
 			/* deploy */
+			/* vm_init */
 	};
 	enum {
 		from_thread = 1,
@@ -495,6 +496,7 @@ fiber::fin()
 	switch(m_cmd) {
 	case rpc::ll_exec:
 	case rpc::create_object:
+	case rpc::load_object:
 		ff().vm()->co_destroy(m_ctx.co);
 		m_ctx.co = NULL;
 		break;
@@ -552,8 +554,8 @@ public:	/* master quorum base replication */
 	quorum_context *init_context(world *w);
 	static int quorum_vote_callback(rpc::response &r, class conn *c, void *ctx);
 public:
-	static int init(int max_account, const char *dbpath);
-	static void fin() { m_al.fin(); }
+	static int init_global(int max_account, const char *dbpath);
+	static void fin_global() { m_al.fin(); }
 public:
 	int call_login(rpc::request &req);
 	int resume_login(rpc::response &res);
@@ -604,13 +606,13 @@ public:	/* master quorum base replication */
 	quorum_context *init_context(world *w);
 	static int quorum_vote_callback(rpc::response &r, THREAD t, void *ctx);
 public:
-	static int init(int max_conn) {
+	static int init_global(int max_conn) {
 		if (!m_sm.init(max_conn, max_conn, -1, opt_expandable | opt_threadsafe)) {
 			return NBR_EMALLOC;
 		}
 		return NBR_OK;
 	}
-	static void fin() { m_sm.fin(); };
+	static void fin_global() { m_sm.fin(); };
 public:
 	int call_login(rpc::request &req);
 	int resume_login(rpc::response &res);
