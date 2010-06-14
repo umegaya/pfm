@@ -44,6 +44,7 @@ public:
 		return conn_pool_impl::connect(c, a, p); }
 	conn *create(const address &a) { return conn_pool_impl::pool().create(a); }
 	conn *find(const address &a) { return conn_pool_impl::pool().find(a); }
+	const address &bind_addr(const address &a) { return conn_pool_impl::ifaddr(); }
 	static inline class conn_pool *cast(conn_pool_impl *cpi) { 
 		return (class conn_pool *)cpi; }
 };
@@ -304,6 +305,10 @@ public:
 	}
 	connector *backend_conn() {
 		return super::find(UUID::invalid_id());
+	}
+	bool backend_enable() {
+		connector *ct = backend_conn();
+		return ct && ct->chain();
 	}
 	connector *add_failover_chain(const UUID &k, const address &a, void *p) {
 		conn *s;

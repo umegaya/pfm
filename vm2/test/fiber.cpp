@@ -42,6 +42,9 @@ public:
 		if (err) { return NBR_ESYSCALL; }
 		return m_d.set(sr.p(), sr.len());
 	}
+	static int test_respond(pfm::fiber *f, bool e, serializer &sr) {
+		return ((testmfiber *)f)->respond(e, sr);
+	}
 };
 packet testmfiber::m_d;
 
@@ -52,6 +55,9 @@ public:
 	int respond(bool err, serializer &sr) {
 		if (err) { return NBR_ESYSCALL; }
 		return m_d.set(sr.p(), sr.len());
+	}
+	static int test_respond(pfm::fiber *f, bool e, serializer &sr) {
+		return ((testsfiber *)f)->respond(e, sr);
 	}
 };
 packet testsfiber::m_d;
@@ -108,6 +114,7 @@ struct test_context {
 	}
 };
 
+static void thevent(THREAD from, THREAD to, char *p, size_t l);
 int init_node_data(node_data &d, const char *a, int type, char *argv[])
 {
 	int r;
@@ -167,9 +174,9 @@ int init_node_data(node_data &d, const char *a, int type, char *argv[])
 /*------------------------------------------------------------------*/
 /* hook fiber response		 										*/
 /*------------------------------------------------------------------*/
-template <class T> static int mresponse(serializer &sr, T &p) {
-	return testmfiber::m_d.unpack(sr, p);
-}
+//template <class T> static int mresponse(serializer &sr, T &p) {
+//	return testmfiber::m_d.unpack(sr, p);
+//}
 template <class T> static int sresponse(serializer &sr, T &p) {
 	return testsfiber::m_d.unpack(sr, p);
 }
@@ -459,7 +466,7 @@ int fiber_test_login(test_context &ctx, int argc, char *argv[])
 		"packet unpack fails (%d)\n", r);
 	TEST((r = ctx.m_mnd.m_mff->call(&c, req, true)) < 0,
 		"call login command (mstr) fails (%d)\n", r);
-	TEST((r = mresponse(svnt->m_sff->sr(), res)) < 0,
+	TEST((r = sresponse(svnt->m_sff->sr(), res)) < 0,
 		"invalid login response from mstr (%d)\n", r);
 	test_conn::m_pktmap.erase("127.0.0.1:8000");
 	connector *ct;
@@ -608,6 +615,8 @@ int fiber_test_thread(test_context &ctx, int argc, char *argv[])
 	world::m_test_request = test_world2::test_request;
 	conn::m_test_send = test_conn::test_send;
 	conn_pool::m_test_connect = test_conn_pool::test_connect;
+	fiber::m_test_respond = testsfiber::test_respond;
+
 
 	TEST((r = db.init(MAKEPATH(path, "rc/uuid/uuid.tch"))) < 0,
 		"uuid DB init fail (%d)\n",r);
@@ -644,6 +653,9 @@ int fiber_test_thread(test_context &ctx, int argc, char *argv[])
 			"backend connect fails (%p)\n", ct);
 		TEST(!(c = nd->m_cp.find("127.0.0.1:8000")),
 			"reg node fail (%s)\n", HOST_LIST[i]);
+	}
+	for (int i = 0; i < ctx.n_thread; i++) {
+		nbr_sock_set_worker_data(ctx.workers[i], (void *)&ctx, thevent);
 	}
 	TEST((ctx.m_snd.use() != (int)N_HOST), "invalid servant node size (%d)\n", 
 		ctx.m_snd.use());

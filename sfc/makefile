@@ -10,7 +10,7 @@ AR = ar crv
 DEFS = 
 DEFS += -D_GNU_SOURCE
 ifeq ($(DEBUG), 1)
-CFLAG = -Wall -march=i686 -fPIC -D_DEBUG -D_TEST
+CFLAG = -Wall -g -march=i686 -fPIC -D_DEBUG -D_TEST
 else 
 CFLAG = -O4 -march=i686 -fPIC
 endif

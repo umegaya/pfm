@@ -26,6 +26,7 @@ enum {
 	node_ctrl = 5,
 	vote = 6,			/* for commit protocol */
 	load_object = 7,
+	node_inquiry = 8,
 };
 } /* namespace rpc */
 
@@ -51,7 +52,6 @@ public:
 	const data &val(int i) const { return (const data &)serializer::data::val(i); }
 	data &val(int i) { return (data &)serializer::data::val(i); }
 	void set_ptr(const void *p) { serializer::data::set_ptr(p); }
-	template <class CMD> operator CMD &() { return (CMD &)*this; }
 };
 class request : public data {
 public:
@@ -175,6 +175,32 @@ public:
 	static inline int pack_header(serializer &sr, MSGID msgid,
 			const UUID &uuid);
 	RESPONSE_CASTER(login);
+};
+
+/* node_inquery */
+class node_inquiry_request : public request {
+public:
+	typedef request super;
+	enum node_type {
+		servant_node,
+		master_node,
+	};
+	static inline int pack_header(serializer &sr, MSGID msgid, int node_type) {
+		super::pack_header(sr, msgid, node_inquiry, 1);
+		sr << node_type;
+		return sr.len();
+	}
+	int node_type() const { return super::argv(0); }
+	REQUEST_CASTER(node_inquiry);
+};
+
+class node_inquiry_response : public response {
+public:
+	typedef response super;
+	const data &node_addr() { return super::ret(); }
+	static inline int pack_header(serializer &sr, MSGID msgid,
+			const char *node_addr, int alen);
+	RESPONSE_CASTER(node_inquiry);
 };
 
 /* node control */
@@ -359,7 +385,14 @@ inline int login_response::pack_header(serializer &sr, MSGID msgid,
 	return sr.len();
 }
 
-
+inline int node_inquiry_response::pack_header(serializer &sr, MSGID msgid,
+		const char *node_addr, int alen)
+{
+	super::pack_header(sr, msgid);
+	sr.push_string(node_addr, alen);
+	sr.pushnil();
+	return sr.len();
+}
 
 inline int node_ctrl_cmd::add::pack_header(serializer &sr, MSGID msgid,
 		world_id wid, size_t wlen,

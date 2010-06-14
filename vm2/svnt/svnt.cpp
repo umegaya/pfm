@@ -1,3 +1,4 @@
+#include "finder.h"
 #include "svnt.h"
 #include "world.h"
 #include "object.h"
@@ -33,6 +34,33 @@ public:
 	}
 };
 
+/* finder */
+class finder : public cluster::finder_session {
+public:
+	finder(SOCK s, base::factory *f) : cluster::finder_session(s,f) {}
+	int on_recv(char *p, int l) {
+		session::app().ff().recv(this, p, l, true);
+		return NBR_OK;
+	}
+};
+class finder_factory : public cluster::finder_factory {
+public:
+	int init(const config &cfg) {
+		return cluster::finder_factory::init(cfg, on_recv<finder>);
+	}
+	void poll(UTIME ut) {
+		if (session::app().ff().wf().cf()->backend_enable()) {
+			return;
+		}
+		serializer &sr = session::app().sr();
+		PREPARE_PACK(sr);
+		rpc::node_inquiry_request::pack_header(
+			sr, session::app().ff().new_msgid(), 
+			rpc::node_inquiry_request::servant_node);
+		session::app().ff().run_fiber(sr.p(), sr.len());
+	}
+};
+
 /* config */
 class config : public util::config {
 public:
@@ -58,6 +86,9 @@ pfms::create_factory(const char *sname)
 		ff().wf().cf()->set_pool(conn_pool::cast(cpi));
 		return fc;
 	}
+	if (strcmp(sname, "finder") == 0) {
+		return new svnt::finder_factory;
+	}
 	ASSERT(false);
 	return NULL;
 }
@@ -68,7 +99,7 @@ pfms::create_config(config* cl[], int size)
 	CONF_START(cl);
 	CONF_ADD(base::config, (
 			"clnt",
-			"0.0.0.0:9000",
+			"0.0.0.0:8100",
 			10,
 			60, opt_not_set,
 			64 * 1024, 64 * 1024,
@@ -96,6 +127,23 @@ pfms::create_config(config* cl[], int size)
 			nbr_sock_rparser_bin16,
 			nbr_sock_send_bin16,
 			util::config::cfg_flag_not_set));
+	CONF_ADD(cluster::finder_property, (
+			"finder",
+			"0.0.0.0:9999",
+			10,
+			30, opt_expandable,/* max 10 session/30sec timeout */
+			256, 2048, /* send 256b,recv2kb */
+			0, 0,/* no ping */
+			-1,0,/* no query buffer */
+			"UDP", "eth0",
+			1 * 1000 * 1000/* every 10 sec, send probe command */,
+			0/* never wait ld recovery */,
+			kernel::INFO,
+			nbr_sock_rparser_raw,
+			nbr_sock_send_raw,
+			config::cfg_flag_server,
+			finder_property::MCAST_GROUP,
+			8888, 1/* ttl = 1 */));
 	CONF_END();
 }
 
@@ -105,17 +153,21 @@ pfms::boot(int argc, char *argv[])
 	svnt::session::m_daemon = this;
 	int r;
 	conn_pool_impl *fc;
-	INIT_OR_DIE((r = m_db.init("db/uuid.tch")) < 0, r,
+	svnt::finder_factory *fdr;
+	INIT_OR_DIE((r = m_db.init("svnt/db/uuid.tch")) < 0, r,
 		"uuid DB init fail (%d)\n", r);
 	INIT_OR_DIE((r = UUID::init(m_db)) < 0, r,
 		"UUID init fail (%d)\n", r);
 	INIT_OR_DIE((r = svnt::fiber::init_global(10000)) < 0, r,
 		"svnt::fiber::init fails(%d)\n", r);
-	INIT_OR_DIE(!(fc = find_config<conn_pool_impl>("svnt")), NBR_ENOTFOUND,
+	INIT_OR_DIE(!(fc = find_factory<conn_pool_impl>("svnt")), NBR_ENOTFOUND,
+		"conn_pool not found (%p)\n", fc);
+	INIT_OR_DIE(!(fdr = find_factory<svnt::finder_factory>("finder")), NBR_ENOTFOUND,
 		"conn_pool not found (%p)\n", fc);
 	INIT_OR_DIE((r = ff().wf().cf()->init(conn_pool::cast(fc), 100, 100, 100)) < 0, r,
 		"init connector factory fails (%d)\n", r);
-	INIT_OR_DIE((r = ff().of().init(10000, 1000, 0, "db/mof.tch")) < 0, r,
+	ff().set_finder(fdr);
+	INIT_OR_DIE((r = ff().of().init(10000, 1000, 0, "svnt/db/mof.tch")) < 0, r,
 		"object factory creation fail (%d)\n", r);
 	INIT_OR_DIE((r = ff().wf().init(
 		256, 256, -1, opt_threadsafe | opt_expandable)) < 0, r,

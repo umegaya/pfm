@@ -1,9 +1,11 @@
+#include "finder.h"
 #include "fiber.h"
 #include "world.h"
 #include "object.h"
 #include "connector.h"
 
 using namespace pfm;
+using namespace pfm::cluster;
 
 #if !defined(_TEST)
 NBR_TLS ll *ffutil::m_vm = NULL;
@@ -13,6 +15,7 @@ NBR_TLS array<yield> *ffutil::m_yields = NULL;
 NBR_TLS time_t ffutil::m_last_check = 0;
 void ffutil::clear_tls() {}
 #else
+int (*fiber::m_test_respond)(fiber *, bool, serializer &) = NULL;
 void ffutil::clear_tls() {
 	m_vm = NULL;
 	m_sr = NULL;
@@ -23,13 +26,29 @@ void ffutil::clear_tls() {
 #endif
 
 /* ffutil */
-int ffutil::init(int max_node, int max_replica) {
+int ffutil::init(int max_node, int max_replica,
+		void (*wkev)(THREAD,THREAD,char*,size_t)) {
 	m_max_node = max_node;
 	m_max_replica = max_replica;
 	if (!m_quorums.init(world::max_world, world::max_world,
 		-1, opt_threadsafe | opt_expandable)) {
 		return NBR_EMALLOC;
 	}
+	int n_th = max_cpu_core;
+	THREAD a_th[n_th];
+	if ((n_th = nbr_sock_get_worker(a_th, n_th)) < 0) {
+		return n_th;
+	}
+	m_wnum = (U16)n_th;
+	if (!(m_workers = new THREAD[n_th])) {
+		return NBR_EMALLOC;
+	}
+	if (wkev) {
+		for (int i = 0; i < n_th; i++) {
+			nbr_sock_set_worker_data(a_th[i], this, wkev);
+		}
+	}
+	nbr_mem_copy(m_workers, a_th, n_th * sizeof(THREAD));
 	return m_fm.init(m_max_rpc, m_max_rpc, -1, opt_threadsafe | opt_expandable) ? 
 		NBR_OK : NBR_EMALLOC;
 }
@@ -131,6 +150,9 @@ world *ffutil::world_create(const rpc::node_ctrl_cmd::add &req)
 /* fiber */
 int fiber::respond(bool err, serializer &sr)
 {
+#if defined(_TEST)
+	if (m_test_respond) { return m_test_respond(this, err, sr); }
+#endif
 	switch(m_type) {
 	case from_thread:
 		return nbr_sock_worker_event(ff().curr(), m_thrd, sr.p(), sr.len());
@@ -138,6 +160,13 @@ int fiber::respond(bool err, serializer &sr)
 		return m_socket->send(sr.p(), sr.len());
 	case from_fncall:
 		return m_cb(sr);
+	case from_mcastr:
+		return m_finder_r->send(sr.p(), sr.len());
+	case from_mcasts:
+		return m_finder_s->send(sr.p(), sr.len());
+	case from_fiber:
+		ASSERT(false);
+		return NBR_ENOTSUPPORT;
 	default:
 		ASSERT(false);
 		return NBR_ENOTFOUND;
@@ -203,11 +232,17 @@ int fiber::pack_cmd_deploy(serializer &sr, world *w,
 inline int
 fiber::get_socket_address(address &a)
 {
-	if (m_type == from_thread) {
+	switch(m_type) {
+	case from_socket:
+		a = m_socket->get_addr(a);
+		break;
+	case from_mcastr:
+		a = m_finder_r->get_addr(a);
+		break;
+	default:
 		ASSERT(false);
 		return NBR_EINVAL;
 	}
-	a = m_socket->get_addr(a);
 	return NBR_OK;
 }
 
@@ -360,6 +395,48 @@ error:
 
 int mstr::fiber::resume_login(rpc::response &res)
 {
+	return NBR_OK;
+}
+
+int mstr::fiber::call_node_inquiry(rpc::request &rq)
+{
+	int r;
+	address a, da;
+	MSGID msgid = INVALID_MSGID;
+	rpc::node_inquiry_request &req = rpc::node_inquiry_request::cast(rq);
+	if (req.node_type() != rpc::node_inquiry_request::master_node) {
+		return NBR_OK;	/* no thank you guys! */
+	}
+	if (get_socket_address(da) >= 0) {
+		LOG("node_inquiry : from %s\n", (const char *)da);
+	}
+	msgid = new_msgid();
+	if (msgid == INVALID_MSGID) {
+		r = NBR_EEXPIRE;
+		goto error;
+	}
+	PREPARE_PACK(ff().sr());
+	a = ff().wf().cf()->pool().bind_addr(a);
+	rpc::node_inquiry_response::pack_header(ff().sr(),msgid,a,a.len());
+	if ((r = ff().finder().send(ff().sr().p(), ff().sr().len())) < 0) {
+		goto error;
+	}
+	if ((r = yielding(msgid)) < 0) {
+		goto error;
+	}
+	return NBR_OK;
+error:
+	if (r < 0) {
+		send_error(r);
+	}
+	return r;
+}
+
+int mstr::fiber::resume_node_inquiry(rpc::response &r)
+{
+	rpc::node_inquiry_response &res = rpc::node_inquiry_response::cast(r);
+	/* FIXME : prepare another connector_factory to manage master connection */
+	LOG("node_inquiry : connect to (%s)\n", (const char *)res.node_addr());
 	return NBR_OK;
 }
 
@@ -722,6 +799,48 @@ error:
 	return r;
 }
 
+int svnt::fiber::call_node_inquiry(rpc::request &rq)
+{
+	int r;
+	rpc::node_inquiry_request &req = rpc::node_inquiry_request::cast(rq);
+	if (req.node_type() != rpc::node_inquiry_request::servant_node) {
+		return NBR_OK;	/* no thank you guys! */
+	}
+	MSGID msgid = new_msgid();
+	if (msgid == INVALID_MSGID) {
+		r = NBR_EEXPIRE;
+		goto error;
+	}
+	PREPARE_PACK(ff().sr());
+	rpc::node_inquiry_request::pack_header(ff().sr(), msgid,
+		rpc::node_inquiry_request::master_node);
+	if ((r = ff().finder().send(ff().sr().p(), ff().sr().len())) < 0) {
+		goto error;
+	}
+	if ((r = yielding(msgid)) < 0) {
+		goto error;
+	}
+	return NBR_OK;
+error:
+	if (r < 0) {
+		send_error(r);
+	}
+	return r;
+}
+
+int svnt::fiber::resume_node_inquiry(rpc::response &rs)
+{
+	int r;
+	connector *ct;
+	rpc::node_inquiry_response &res = rpc::node_inquiry_response::cast(rs);
+	if ((ct = ff().wf().cf()->backend_connect(address(res.node_addr()))) < 0) {
+		r = NBR_EEXPIRE;
+		LOG("node_inquiry : connect(%s) fail (%d)\n",
+			(const char *)res.node_addr(), r);
+	}
+	LOG("node_inquiry : connect to (%s)\n", (const char *)res.node_addr());
+	return r;
+}
 
 int svnt::fiber::node_ctrl_add(world *w,
 		rpc::node_ctrl_cmd::add &req, serializer &sr)

@@ -161,6 +161,12 @@ $(OBJS)/%.a:
 	@$(AR) $@ $@.o
 	@rm $@.o
 
+$(TOBJS)/%.a:
+	@mkdir -p $(TOBJS)/$(dir $<)
+	@$(CC) $(CFLAG) -D_TEST $(INCS) -c -o $@.o $<
+	@$(AR) $@ $@.o
+	@rm  $@.o
+
 $(DEPS)/%.d: $(dir %)/$(notdir %).cpp
 	@mkdir -p $(DEPS)/$(dir $<)
 	@$(CC) $(CFLAG) $(INCS) $< -M | \

@@ -41,8 +41,6 @@ int factory::log(loglevel lv, const char *fmt, ...)
 	vsnprintf(buff, sizeof(buff) - 1, fmt, v);
 	va_end(v);
 
-	ASSERT(cfg().m_name[0] == 's' || cfg().m_name[0] == 'm' ||
-		cfg().m_name[0] == 'c');
 	fprintf(stdout, "%u[%s]%u:%s", nbr_osdep_getpid(), cfg().m_name, lv, buff);
 	return NBR_OK;
 }

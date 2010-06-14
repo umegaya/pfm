@@ -14,11 +14,13 @@ protected:
 	fiber_factory<svnt::fiber> &m_ff;
 	class connector_factory &m_cf;
 	dbm m_db;
+	serializer m_sr;
 public:
 	pfms(fiber_factory<svnt::fiber> &ff,
 		class connector_factory &cf) :
-		m_ff(ff), m_cf(cf), m_db() {}
+		m_ff(ff), m_cf(cf), m_db(), m_sr() {}
 	fiber_factory<svnt::fiber> &ff() { return m_ff; }
+	serializer &sr() { return m_sr; }
 	base::factory *create_factory(const char *sname);
 	int	create_config(config* cl[], int size);
 	int	boot(int argc, char *argv[]);

@@ -40,6 +40,9 @@ public:
 		m_result = (int)(ll::num)(d.ret());
 		return m_result;
 	}
+	static int test_respond(fiber *f, bool err, serializer &sr) {
+		return ((test_fiber *)f)->respond(err, sr);
+	}
 };
 
 class test_coroutine : public ll::coroutine {
@@ -86,6 +89,7 @@ int ll_call_test(int argc, char *argv[])
 	world *w1, *w2;
 	UUID uuid1, uuid2;
 
+	fiber::m_test_respond = test_fiber::test_respond;
 	TEST(!(w1 = wf.create("test_world", 10, 10)), "world1 create fail (%p)\n", w1);
 	TEST(!(w2 = wf.create("test_world2", 10, 10)), "world2 create fail (%p)\n", w2);
 	if ((r = of.init(1000000, 100000, opt_expandable | opt_threadsafe, 
@@ -120,6 +124,8 @@ int ll_call_test(int argc, char *argv[])
 		TTRACE("lua::init_world fail (test_world:%d)\n", r);
 		return r;
 	}
+	fb.set_msgid(1000000);
+	fb2.set_msgid(1000001);
 	
 	/* call 
 	map = { key_a => 111, key_b => 222, key_c => 333 }
@@ -188,11 +194,15 @@ class testfiber : public fiber
 public:
 	rpc::ll_exec_response m_d;
 public:
+	testfiber() {}
 	testfiber(world_id wid) { fiber::m_wid = wid; }
 	rpc::ll_exec_response &result() { return m_d; }
 	int respond(bool err, serializer &sr) {
 		sr.unpack_start(sr.p(), sr.len());
 		return sr.unpack(m_d);
+	}
+	static int test_respond(fiber *f, bool err, serializer &sr) {
+		return ((testfiber *)f)->respond(err, sr);
 	}
 };
 
@@ -281,6 +291,7 @@ int	ll_resume_test_thread_main(THREAD th, int argc, char *argv[])
 
 	object::m_test_request = test_object::test_request;
 	world::m_test_request = test_world::test_request;
+	fiber::m_test_respond = testfiber::test_respond;
 	TEST(!(w = wf.create("test_world", 10, 10)), "world create fail (%p)\n", w);
 	TEST((r = scr1.init(10000)) < 0, "scr1 init fail (%d)\n", r);
 	TEST((r = scr2.init(10000)) < 0, "scr2 init fail (%d)\n", r);
