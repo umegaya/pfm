@@ -131,7 +131,9 @@ int init_node_data(node_data &d, const char *a, int type, char *argv[])
 		TEST((r = d.m_of.init(10000, 1000, 0,
 			MAKEPATH(path, tmp))) < 0,
 			"object factory creation fail (%s)\n", path);
-		TEST((r = d.m_wf.init(64, 64, -1, opt_expandable | opt_threadsafe)) < 0,
+		sprintf(tmp, "rc/fiber/%s_w.tch", a);
+		TEST((r = d.m_wf.init(64, 64, opt_expandable | opt_threadsafe,
+			MAKEPATH(path, tmp))) < 0,
 			"world factory creation fail (%d)\n", r);
 		d.m_of.clear();
 		TEST(!(d.m_sff = new fiber_factory<testsfiber>(d.m_of, d.m_wf)),
@@ -146,7 +148,9 @@ int init_node_data(node_data &d, const char *a, int type, char *argv[])
 		TEST((r = d.m_of.init(10000, 1000, 0,
 			MAKEPATH(path, tmp))) < 0,
 			"object factory creation fail (%s)\n", path);
-		TEST((r = d.m_wf.init(64, 64, -1, opt_expandable | opt_threadsafe)) < 0,
+		sprintf(tmp, "rc/fiber/%s_w.tch", a);
+		TEST((r = d.m_wf.init(64, 64, opt_expandable | opt_threadsafe,
+			MAKEPATH(path, tmp))) < 0,
 			"world factory creation fail (%d)\n", r);
 		d.m_of.clear();
 		TEST(!(d.m_sff2 = new fiber_factory<testsfiber2>(d.m_of, d.m_wf)),
@@ -158,7 +162,9 @@ int init_node_data(node_data &d, const char *a, int type, char *argv[])
 		TEST((r = d.m_of.init(10000, 1000, 0,
 			MAKEPATH(path, "rc/fiber/mof.tch"))) < 0,
 			"object factory creation fail (%d)\n", r);
-		TEST((r = d.m_wf.init(64, 64, -1, opt_expandable | opt_threadsafe)) < 0,
+		sprintf(tmp, "rc/fiber/%s_w.tch", a);
+		TEST((r = d.m_wf.init(64, 64, opt_expandable | opt_threadsafe,
+			MAKEPATH(path, tmp))) < 0,
 			"world factory creation fail (%d)\n", r);
 		TEST(!(d.m_mff = new fiber_factory<testmfiber>(d.m_of, d.m_wf)),
 				"init servant fiber factory fails (%d)\n", r = NBR_EEXPIRE);
@@ -334,7 +340,7 @@ int fiber_test_add_node(test_context &ctx, int argc, char *argv[], void *p)
 		init_thread_msg_wait(ctx);
 		TEST((r = npit->unpack(nd->m_sff->sr(), req)) <= 0, 
 			"unpack packet fails (%d)\n", r);
-		nd->m_have_world = (nd->m_wf.find(test_world_id) != NULL);
+		nd->m_have_world = (bool)(nd->m_wf.find(test_world_id));
 		TEST((r = nd->m_sff->call(ctx.thrd, req, true)) < 0,
 			"call servant add node fails (%d)\n", r);
 		/* if world is first created, then vm_init fiber will create. */

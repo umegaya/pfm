@@ -118,7 +118,7 @@ pfms::create_config(config* cl[], int size)
 			10,
 			60, opt_expandable,
 			64 * 1024, 64 * 1024,
-			0, 0,
+			100 * 1000 * 1000, 5 * 1000 * 1000,
 			10000,	-1,
 			"TCP", "eth0",
 			1 * 100 * 1000/* 100msec task span */,
@@ -167,10 +167,10 @@ pfms::boot(int argc, char *argv[])
 	INIT_OR_DIE((r = ff().wf().cf()->init(conn_pool::cast(fc), 100, 100, 100)) < 0, r,
 		"init connector factory fails (%d)\n", r);
 	ff().set_finder(fdr);
-	INIT_OR_DIE((r = ff().of().init(10000, 1000, 0, "svnt/db/mof.tch")) < 0, r,
+	INIT_OR_DIE((r = ff().of().init(10000, 1000, 0, "svnt/db/of.tch")) < 0, r,
 		"object factory creation fail (%d)\n", r);
 	INIT_OR_DIE((r = ff().wf().init(
-		256, 256, -1, opt_threadsafe | opt_expandable)) < 0, r,
+		256, 256, opt_threadsafe | opt_expandable, "svnt/db/wf.tch")) < 0, r,
 		"object factory creation fail (%d)\n", r);
 	INIT_OR_DIE((r = ff().init(10000, 100, 10)) < 0, r,
 		"fiber_factory init fails(%d)\n", r);

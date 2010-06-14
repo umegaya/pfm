@@ -261,7 +261,7 @@ public:
 	int run_fiber(char *p, int l) {
 		__sync_val_compare_and_swap(&m_widx, m_wnum, 0);
 		return nbr_sock_worker_event(curr(),
-			m_workers[0/*__sync_fetch_and_add(&m_widx, 1)*/], p, l);
+			m_workers[__sync_fetch_and_add(&m_widx, 1)], p, l);
 	}
 };
 
@@ -336,6 +336,7 @@ fiber_factory<FB>::call(FROM from, rpc::request &req, bool trusted)
 		ASSERT(false);
 		return NBR_EEXPIRE;
 	}
+	TRACE("fiber new : %p\n", f);
 	f->set_from(from);
 	int r = f->call(*this, req, trusted);
 	if (!f->yielded()) {
@@ -353,7 +354,7 @@ fiber_factory<FB>::resume(FROM from, rpc::response &res)
 	if (!f) {	/* would be destroyed by timeout or error */
 		return NBR_ENOTFOUND;
 	}
-	//TRACE("resume: %u/%p/%p/%p\n", res.msgid(), &m_fm, f, f->yld());
+	TRACE("resume: %u/%p/%p/%p\n", res.msgid(), &m_fm, f, f->yld());
 	ASSERT(f->yld());
 	if (f->yld()->reply(from, res) < 0) {
 		return NBR_OK;	/* wait for reply */
@@ -361,7 +362,7 @@ fiber_factory<FB>::resume(FROM from, rpc::response &res)
 	fiber_unregister(res.msgid());
 	int r = f->resume(*this, res);
 	if (!f->yielded()) {
-		//TRACE("finish: %u/%p/%p/%p\n", res.msgid(), &m_fm, f, f->yld());
+		TRACE("finish: %u/%p/%p/%p\n", res.msgid(), &m_fm, f, f->yld());
 		f->fin();
 		fiber_destroy(f);
 	}
@@ -382,6 +383,7 @@ void fiber_factory<FB>::poll(time_t nt)
 			nyit = yit;
 			yit = yields().next(yit);
 			if (nyit->timeout(nt, m_timeout)) {
+				TRACE("fiber timeout (%u/%p)\n", nyit->fb()->msgid(), nyit->fb());
 				PREPARE_PACK(sr());
 				rpc::response::pack_header(sr(), nyit->msgid());
 				sr().pushnil();

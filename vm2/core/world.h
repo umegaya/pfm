@@ -54,21 +54,37 @@ public:
 		return connect_assigned_node(uuid);
 	}
 #endif
+	int save(char *&p, int &l) {
+		int thissz = (int)sizeof(*this);
+		if (l <= thissz) {
+			ASSERT(false);
+			if (!(p = (char *)nbr_malloc(thissz))) {
+				return NBR_EMALLOC;
+			}
+			l = thissz;
+		}
+		memcpy(p, (void *)&m_world_object, sizeof(UUID));
+		return sizeof(UUID);
+	}
+	int load(const char *p, int l) {
+		m_world_object = *(UUID *)p;
+		return NBR_OK;
+	}
 protected:
 	void *connect_assigned_node(const UUID &uuid);
 };
 
-class world_factory : public map<world, world_id> {
+class world_factory : public pmap<world, world_id> {
 protected:
 	class connector_factory *m_cf;
 public:
-	typedef map<world, world_id> super;
-	world_factory(class connector_factory *cf) :
-		map<world, world_id>(), m_cf(cf) {
-		bool b = super::init(64, 64, -1, opt_expandable | opt_threadsafe);
+	typedef pmap<world, world_id> super;
+	world_factory(class connector_factory *cf, const char *dbmopt) :
+		pmap<world, world_id>(), m_cf(cf) {
+		bool b = super::init(64, 64, opt_expandable | opt_threadsafe, dbmopt);
 		assert(b);	/* if down here, your machine is not suitable to use it */
 	}
-	world_factory() : map<world, world_id>() {}
+	world_factory() : pmap<world, world_id>() {}
 	~world_factory() { super::fin(); }
 	class connector_factory *cf() { return m_cf; }
 	void set_cf(class connector_factory *cf) { m_cf = cf; }
@@ -79,21 +95,24 @@ public:
 		}
 	}
 	world *create(world_id wid, int max_node, int max_replica) {
-		world *w = super::find(wid);
-		if (w) { return w; }
+		world *w = super::load(wid);
+		if (w) { 
+			w->set_cf(m_cf); 
+			return w; 
+		}
 		if (!(w = super::create(wid))) { return NULL; }
 		if (w->init(max_node, max_replica) < 0) {
-			super::destroy(w);
+			super::destroy(wid);
 			return NULL;
 		}
 		if (!w->set_id(wid)) {
-			super::destroy(w);
+			super::destroy(wid);
 			return NULL;
 		}
 		w->set_cf(m_cf);
 		return w;
 	}
-	void destroy(world_id wid) { super::erase(wid); }
+	void destroy(world_id wid) { super::destroy(wid); }
 	int request(world_id wid, MSGID msgid,
 		const UUID &uuid, serializer &sr) {
 		world *w = super::find(wid);

@@ -78,13 +78,13 @@ int ll_call_test(int argc, char *argv[])
 {
 	int r;
 	serializer sr;
-	world_factory wf(NULL);
+	char b[1024], path[1024];
+	world_factory wf(NULL, MAKEPATH(path, "rc/ll/wf.tch"));
 	object_factory of;
 	msgid_generator seed;
 	ll scr(of, wf, sr, NULL);
 	test_fiber fb("test_world"), fb2("test_world2");
 	test_coroutine co;
-	char b[1024], path[1024];
 	object *o1, *o2;
 	world *w1, *w2;
 	UUID uuid1, uuid2;
@@ -102,6 +102,7 @@ int ll_call_test(int argc, char *argv[])
 		return r;
 	}
 	of.clear();
+	wf.clear();
 	uuid1.assign();
 	if (!(o1 = of.create(uuid1, w1, &scr, "World"))) {
 		TTRACE("create world object for test_world fails (%p)\n", o1);
@@ -274,7 +275,8 @@ void *ll_resume_test_thread(THREAD th)
 int	ll_resume_test_thread_main(THREAD th, int argc, char *argv[])
 {
 	object_factory of;
-	world_factory wf(NULL);
+	char path[1024], buf[65536];
+	world_factory wf(NULL, MAKEPATH(path, "rc/ll/wf.tch"));
 	fiber_factory<testfiber> ff(of, wf);
 	serializer sr;
 	msgid_generator seed;
@@ -283,7 +285,7 @@ int	ll_resume_test_thread_main(THREAD th, int argc, char *argv[])
 	rpc::ll_exec_response res;
 	testfiber fb1("test_world"), fb2("test_world");
 	test_coroutine co1, co2;
-	int r; char path[1024], buf[65536];
+	int r;
 	object *o1, *o2;
 	test_object *to;
 	UUID uuid1, uuid2;
@@ -298,6 +300,7 @@ int	ll_resume_test_thread_main(THREAD th, int argc, char *argv[])
 	TEST(!of.init(10000, 1000, 0, MAKEPATH(path,"rc/ll/of.tch")),
 		"object factory creation fail (%d)\n", r = NBR_EINVAL);
 	of.clear();
+	wf.clear();
 	TEST((r = scr1.init_world("test_world", NULL,
 		MAKEPATH(path, "rc/ll/test_world/main.lua"))) < 0,
 		"scr1 init_world fail (%d)\n", r);

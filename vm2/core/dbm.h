@@ -51,6 +51,7 @@ public:
 		inline retval *operator -> () { return m_e->get(); }
 		inline operator retval *() { return m_e->get();}
 	};
+	static inline record to_r(retval *v) { return record(element::to_e(v)); }
 	int cachesize() const { return super::use(); }
 	int rnum() const { return m_db.rnum(); }
 	void clear() { m_db.clear(); }
@@ -80,6 +81,9 @@ public:
 		dbm::record r = m_db.select(key_traits::kp(k), key_traits::kl(k));
 		exist_on_disk = (r && rec.load(r.p<char>(), r.len()) >= 0);
 		return rec;
+	}
+	inline bool save(retval *v, key k, bool insertion = false) {
+		return save(to_r(v), k, insertion);
 	}
 	inline bool save(record &r, key k, bool insertion = false) {
 		char buffer[save_work_buffer_size];

@@ -12,6 +12,8 @@ namespace mstr {
 class session : public conn {
 public:
 	static class pfmm *m_daemon;
+	static bool m_test_mode;
+	static char m_test_world_id[];
 public:
 	typedef conn super;
 	session() : super() {}
@@ -20,11 +22,33 @@ public:
 public:
 	pollret poll(UTIME ut, bool from_worker) {
 		/* check timeout */
-		app().ff().poll(time(NULL));
+		if (from_worker) {
+			app().ff().poll(time(NULL));
+		}
 		return super::poll(ut, from_worker);
 	}
 	void fin()						{}
-	int on_open(const config &cfg) { return super::on_open(cfg); }
+	int on_open(const config &cfg) {
+		if (m_test_mode) {
+			int r;
+			UUID uuid;
+			serializer &sr = app().ff().sr();
+			if ((r = rpc::node_ctrl_cmd::add::pack_header(
+				sr, app().ff().new_msgid(),
+				m_test_world_id, 9/* rtkonline */,
+				(const char *)addr(), addr().len(),
+				"", uuid, "mstr/ll/rtkonline/main.lua",
+				0, NULL)) < 0) {
+				ASSERT(false);
+				return r;
+			}
+			if ((r = app().ff().run_fiber(sr.p(), sr.len())) < 0) {
+				ASSERT(false);
+				return r;
+			}
+		}
+		return super::on_open(cfg);
+	}
 	int on_close(int reason) { return super::on_close(reason); }
 	int on_recv(char *p, int l) {
 		return app().ff().recv((class conn *)this, p, l, true);
@@ -32,6 +56,11 @@ public:
 	int on_event(char *p, int l) {
 		return app().ff().recv((class conn *)this, p, l, true);
 	}
+};
+
+class msession : public session {
+public:
+	int on_open(const config &cfg) { return super::on_open(cfg); }
 };
 
 /* finder */
@@ -65,13 +94,15 @@ public:
 config::config(BASE_CONFIG_PLIST) : super(BASE_CONFIG_CALL) {}
 }
 pfmm *mstr::session::m_daemon = NULL;
+bool mstr::session::m_test_mode = false;
+char mstr::session::m_test_world_id[] = "rtkonline";
 }
 
 base::factory *
 pfmm::create_factory(const char *sname)
 {
 	if (strcmp(sname, "mstr") == 0) {
-		return new base::factory_impl<mstr::session>;
+		return new base::factory_impl<mstr::msession>;
 	}
 	if (strcmp(sname, "svnt") == 0) {
 		base::factory_impl<mstr::session> *fc =
@@ -145,6 +176,11 @@ int
 pfmm::boot(int argc, char *argv[])
 {
 	mstr::session::m_daemon = this;
+	if (argc > 1 && strncmp(argv[1], "--test", sizeof("--test"))) {
+		int tmode;
+		SAFETY_ATOI(argv[1] + sizeof("--test") + 1, tmode, int);
+		mstr::session::m_test_mode = (tmode != 0);
+	}
 	int r;
 	conn_pool_impl *fc;
 	mstr::finder_factory *fdr;
@@ -161,10 +197,10 @@ pfmm::boot(int argc, char *argv[])
 	INIT_OR_DIE((r = ff().wf().cf()->init(conn_pool::cast(fc), 100, 100, 100)) < 0, r, 
 		"init connector factory fails (%d)\n", r);
 	ff().set_finder(fdr);
-	INIT_OR_DIE((r = ff().of().init(10000, 1000, 0, "mstr/db/mof.tch")) < 0, r,
+	INIT_OR_DIE((r = ff().of().init(10000, 1000, 0, "mstr/db/of.tch")) < 0, r,
 		"object factory creation fail (%d)\n", r);
 	INIT_OR_DIE((r = ff().wf().init(
-		256, 256, -1, opt_threadsafe | opt_expandable)) < 0, r,
+		256, 256, opt_threadsafe | opt_expandable, "mstr/db/wf.tch")) < 0, r,
 		"object factory creation fail (%d)\n", r);
 	INIT_OR_DIE((r = ff().init(10000, 100, 10)) < 0, r,
 		"fiber_factory init fails(%d)\n", r);

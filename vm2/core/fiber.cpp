@@ -118,7 +118,7 @@ world *ffutil::world_new(world_id wid)
 void ffutil::world_destroy(const class world *w)
 {
 	m_vm->fin_world(w->id());
-	m_wf.destroy(w->id());
+	m_wf.unload(w->id());
 }
 
 world *ffutil::find_world(world_id wid)
@@ -142,6 +142,10 @@ world *ffutil::world_create(const rpc::node_ctrl_cmd::add &req)
 			return NULL;
 		}
 		LOG("add node (%s) for (%s)\n", (const char *)req.addr(i), w->id());
+	}
+	if (m_wf.save(w, (const char *)req.wid()) < 0) {
+		world_destroy(w);
+		return NULL;
 	}
 	return w;
 }
@@ -404,25 +408,31 @@ int mstr::fiber::call_node_inquiry(rpc::request &rq)
 	address a, da;
 	MSGID msgid = INVALID_MSGID;
 	rpc::node_inquiry_request &req = rpc::node_inquiry_request::cast(rq);
-	if (req.node_type() != rpc::node_inquiry_request::master_node) {
-		return NBR_OK;	/* no thank you guys! */
-	}
 	if (get_socket_address(da) >= 0) {
 		LOG("node_inquiry : from %s\n", (const char *)da);
 	}
-	msgid = new_msgid();
-	if (msgid == INVALID_MSGID) {
-		r = NBR_EEXPIRE;
-		goto error;
-	}
 	PREPARE_PACK(ff().sr());
 	a = ff().wf().cf()->pool().bind_addr(a);
-	rpc::node_inquiry_response::pack_header(ff().sr(),msgid,a,a.len());
-	if ((r = ff().finder().send(ff().sr().p(), ff().sr().len())) < 0) {
-		goto error;
+	if (req.node_type() == rpc::node_inquiry_request::master_node) {
+		/* master find another master */
+		msgid = new_msgid();
+		if (msgid == INVALID_MSGID) {
+			r = NBR_EEXPIRE;
+			goto error;
+		}
+		rpc::node_inquiry_response::pack_header(ff().sr(),msgid,a,a.len());
+		if ((r = ff().finder().send(ff().sr().p(), ff().sr().len())) < 0) {
+			goto error;
+		}
+		if ((r = yielding(msgid)) < 0) {
+			goto error;
+		}
 	}
-	if ((r = yielding(msgid)) < 0) {
-		goto error;
+	else {
+		rpc::node_inquiry_response::pack_header(ff().sr(),m_msgid,a,a.len());
+		if ((r = ff().finder().send(ff().sr().p(), ff().sr().len())) < 0) {
+			goto error;
+		}
 	}
 	return NBR_OK;
 error:
@@ -434,9 +444,11 @@ error:
 
 int mstr::fiber::resume_node_inquiry(rpc::response &r)
 {
-	rpc::node_inquiry_response &res = rpc::node_inquiry_response::cast(r);
-	/* FIXME : prepare another connector_factory to manage master connection */
-	LOG("node_inquiry : connect to (%s)\n", (const char *)res.node_addr());
+	if (r.success()) {
+		rpc::node_inquiry_response &res = rpc::node_inquiry_response::cast(r);
+		/* FIXME : prepare another connector_factory to manage master connection */
+		LOG("node_inquiry : connect to (%s)\n", (const char *)res.node_addr());
+	}
 	return NBR_OK;
 }
 
@@ -803,17 +815,13 @@ int svnt::fiber::call_node_inquiry(rpc::request &rq)
 {
 	int r;
 	rpc::node_inquiry_request &req = rpc::node_inquiry_request::cast(rq);
-	if (req.node_type() != rpc::node_inquiry_request::servant_node) {
-		return NBR_OK;	/* no thank you guys! */
-	}
 	MSGID msgid = new_msgid();
 	if (msgid == INVALID_MSGID) {
 		r = NBR_EEXPIRE;
 		goto error;
 	}
 	PREPARE_PACK(ff().sr());
-	rpc::node_inquiry_request::pack_header(ff().sr(), msgid,
-		rpc::node_inquiry_request::master_node);
+	rpc::node_inquiry_request::pack_header(ff().sr(), msgid, req.node_type());
 	if ((r = ff().finder().send(ff().sr().p(), ff().sr().len())) < 0) {
 		goto error;
 	}
@@ -832,13 +840,19 @@ int svnt::fiber::resume_node_inquiry(rpc::response &rs)
 {
 	int r;
 	connector *ct;
-	rpc::node_inquiry_response &res = rpc::node_inquiry_response::cast(rs);
-	if ((ct = ff().wf().cf()->backend_connect(address(res.node_addr()))) < 0) {
-		r = NBR_EEXPIRE;
-		LOG("node_inquiry : connect(%s) fail (%d)\n",
-			(const char *)res.node_addr(), r);
+	if (rs.success()) {
+		rpc::node_inquiry_response &res = rpc::node_inquiry_response::cast(rs);
+		if ((ct = ff().wf().cf()->backend_connect(address(res.node_addr()))) < 0) {
+			r = NBR_EEXPIRE;
+			LOG("node_inquiry : connect(%s) fail (%d)\n",
+				(const char *)res.node_addr(), r);
+		}
+		LOG("node_inquiry : connect to (%s)\n", (const char *)res.node_addr());
+		return NBR_OK;
 	}
-	LOG("node_inquiry : connect to (%s)\n", (const char *)res.node_addr());
+	else {
+		r = rs.err();
+	}
 	return r;
 }
 
