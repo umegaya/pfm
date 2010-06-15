@@ -12,6 +12,7 @@ namespace svnt {
 class session : public conn {
 public:
 	static class pfms *m_daemon;
+	static bool m_test_mode;
 public:
 	typedef conn super;
 	session() : super() {}
@@ -38,8 +39,47 @@ public:
 
 class csession : public session {
 public:
+	typedef session super;
 	int on_recv(char *p, int l) {
 		return app().ff().recv((class conn *)this, p, l, false);
+	}
+};
+
+class besession : public session {
+public:
+	typedef session super;
+	void fin() {
+		app().ff().wf().cf()->del_failover_chain(addr());
+	}
+	bool master_session() const { return !has_node_data(); }
+	int regist_node() {
+		if (!app().ff().ffutil::initialized() && !app().ff().init_tls()) {
+			ASSERT(false);
+			return NBR_EINVAL;
+		}
+		int r;
+		serializer &sr = app().ff().sr();
+		PREPARE_PACK(sr);
+		factory *f = app().find_factory<factory>("svnt");
+		if (!f) { return NBR_ENOTFOUND; }
+		if ((r = rpc::node_ctrl_cmd::regist::pack_header(
+			sr, app().ff().new_msgid(), f->ifaddr(), f->ifaddr().len(),
+			m_test_mode ? test_servant_node : servant_node)) < 0) {
+			ASSERT(false);
+			return r;
+		}
+		if ((r = app().ff().run_fiber(sr.p(), sr.len())) < 0) {
+			ASSERT(false);
+			return r;
+		}
+		return NBR_OK;
+	}
+	int on_open(const config &cfg) {
+		if (master_session()) {
+			int r = regist_node();
+			if (r < 0) { return r; }
+		}
+		return super::on_open(cfg);
 	}
 };
 
@@ -64,8 +104,7 @@ public:
 		serializer &sr = session::app().sr();
 		PREPARE_PACK(sr);
 		rpc::node_inquiry_request::pack_header(
-			sr, session::app().ff().new_msgid(), 
-			rpc::node_inquiry_request::servant_node);
+			sr, session::app().ff().new_msgid(), servant_node);
 		session::app().ff().run_fiber(sr.p(), sr.len());
 	}
 };
@@ -80,6 +119,11 @@ public:
 config::config(BASE_CONFIG_PLIST) : super(BASE_CONFIG_CALL) {}
 }
 pfms *svnt::session::m_daemon = NULL;
+#if defined(_DEBUG)
+bool svnt::session::m_test_mode = true;
+#else
+bool svnt::session::m_test_mode = false;
+#endif
 }
 
 base::factory *
@@ -92,8 +136,8 @@ pfms::create_factory(const char *sname)
 		return new base::factory_impl<svnt::session>;
 	}
 	if (strcmp(sname, "be") == 0) {
-		base::factory_impl<svnt::session> *fc =
-				new base::factory_impl<svnt::session>;
+		base::factory_impl<svnt::besession> *fc =
+				new base::factory_impl<svnt::besession>;
 		conn_pool_impl *cpi = (conn_pool_impl *)fc;
 		ff().wf().cf()->set_pool(conn_pool::cast(cpi));
 		return fc;
@@ -178,6 +222,11 @@ int
 pfms::boot(int argc, char *argv[])
 {
 	svnt::session::m_daemon = this;
+	if (argc > 1 && strncmp(argv[1], "--test=", sizeof("--test="))) {
+		int tmode;
+		SAFETY_ATOI(argv[1] + sizeof("--test="), tmode, int);
+		svnt::session::m_test_mode = (tmode != 0);
+	}
 	int r;
 	conn_pool_impl *fc;
 	svnt::finder_factory *fdr;
@@ -199,7 +248,7 @@ pfms::boot(int argc, char *argv[])
 	INIT_OR_DIE((r = ff().wf().init(
 		256, 256, opt_threadsafe | opt_expandable, "svnt/db/wf.tch")) < 0, r,
 		"object factory creation fail (%d)\n", r);
-	INIT_OR_DIE((r = ff().init(10000, 100, 10)) < 0, r,
+	INIT_OR_DIE((r = ff().init(100, 100, 10)) < 0, r,
 		"fiber_factory init fails(%d)\n", r);
 	return NBR_OK;
 }

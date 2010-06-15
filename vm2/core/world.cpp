@@ -67,7 +67,7 @@ const CHNODE *world::add_node(const char *a)
 		c->set_node_data(a, vnode_replicate_num);
 	}
 	ASSERT(strcmp(a, c->node_data()->iden) == 0);
-	TRACE("addnode: <%s:%p>\n", (const char *)c->node_data()->iden, c);
+	TRACE("addnode str: <%s:%p>\n", (const char *)c->node_data()->iden, c);
 	if ((n = m_nodes.find(a))) { return n; }
 	if ((i = m_nodes.insert(c->node_data(), a)) == m_nodes.end()) { return NULL; }
 	n = &(*i);
@@ -85,7 +85,8 @@ const CHNODE *world::add_node(const conn &c)
 {
 	const CHNODE *n;
 	map<const CHNODE *, const char *>::iterator i;
-	TRACE("addnode: <%s:%p>\n", (const char *)c.node_data()->iden, &c);
+	TRACE("addnode conn: <%s:%s:%p>\n", (const char *)c.node_data()->iden, 
+		(const char *)c.addr(), &c);
 	if ((n = m_nodes.find(c.addr()))) { return n; }
 	if ((i = m_nodes.insert(c.node_data(), c.addr())) == m_nodes.end()) { return NULL; }
 	n = &(*i);
@@ -101,13 +102,12 @@ const CHNODE *world::add_node(const conn &c)
 int world::del_node(const char *a)
 {
 	const CHNODE *n = m_nodes.find(a);
+	CHNODE tn;
 	if (!n) {
-		ASSERT(false);
-		return NBR_ENOTFOUND;
+		nbr_conhash_set_node(&tn, a, vnode_replicate_num);
+		n = &tn;
 	}
-	else {
-		del_node(*n);
-	}
+	del_node(*n);
 	m_nodes.erase(a);
 	return NBR_OK;
 }

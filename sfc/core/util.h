@@ -411,8 +411,8 @@ map<V,K>::erase(key k)
 	ASSERT(m_s && super::m_a);
 	if (m_lk) { nbr_rwlock_wrlock(m_lk); }
 	element	*e = kcont<V,K>::get(m_s, k);
+	kcont<V,K>::unregist(m_s, k);
 	if (e) { super::erase(e); }
 	else { TRACE("key not found\n"); }
-	kcont<V,K>::unregist(m_s, k);
 	if (m_lk) { nbr_rwlock_unlock(m_lk); }
 }

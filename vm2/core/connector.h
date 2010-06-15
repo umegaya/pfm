@@ -338,6 +338,7 @@ public:
 		return add_failover_chain(UUID::invalid_id(), a, p);
 	}
 	connector *get_by(const UUID &k) {
+		lock lk(m_lock, true);
 		return super::find(k);
 	}
 	connector *backend_conn() {

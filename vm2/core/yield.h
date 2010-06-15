@@ -16,6 +16,7 @@ protected:
 	MSGID m_msgid;
 	callback m_fn;
 	void *m_p;
+	THREAD m_thrd;
 public:
 	yield() {}
 	int init(class fiber *fb, MSGID id, int size,
@@ -27,6 +28,7 @@ public:
 		m_start = time(NULL);
 		m_fn = fn;
 		m_p = p;
+		m_thrd = get_current_thrd(fb);
 		return NBR_OK;
 	}
 	template <class FROM>
@@ -35,6 +37,7 @@ public:
 	}
 	template <class FROM>
 	int reply(FROM from, rpc::response &res) {
+		if (finished()) { return NBR_OK; }
 		ASSERT(m_reply < m_size);
 		/* failure -> quit waiting all reply */
 		if (!res.success()) {
@@ -47,11 +50,13 @@ public:
 		m_reply++;
 		return (m_reply >= m_size ? NBR_OK : NBR_ESHORT);
 	}
+	THREAD get_current_thrd(class fiber *fb);
 	bool finished() { return (m_reply >= m_size); }
 	void force_finish() { m_reply = m_size; }
 	class fiber *fb() { return m_fb; }
 	int size() const { return m_size; }
 	MSGID msgid() const { return m_msgid; }
+	THREAD attached() const { return m_thrd; }
 	inline bool timeout(time_t now, time_t span) const {
 		return (now >= (m_start + span)); }
 	template <typename T> T *p() { return (T *)m_p; }

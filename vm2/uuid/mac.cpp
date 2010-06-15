@@ -54,25 +54,28 @@ mac_uuid::load(dbm &db)
 		return NBR_ENOTFOUND;	/* initial. */
 	}
 	if (seedl != sizeof(UUID_SEED)) {
+		nbr_free(seed);
 		return NBR_EINVAL;
 	}
 	void *f = db.select("_flag_", 6, flagl);
 	if (flagl != sizeof(int)) {
+		nbr_free(seed);
 		return NBR_EINVAL;
 	}
 	UUID_SEED = *((mac_uuid *)seed);
 	nbr_free(seed);
 	if (*((int *)f)) {
-		nbr_free(f);
 		/* disaster recovery : add 1M to seed */
 		if (((U64)UUID_SEED.id2 + disaster_addid) > 0x00000000FFFFFFFF) {
 			UUID_SEED.id1++;
 		}
 		UUID_SEED.id2 += disaster_addid;
 		if (save(db) < 0) {
+			nbr_free(f);
 			return NBR_ESYSCALL;
 		}
 	}
+	nbr_free(f);
 	flagl = 1;
 	db.replace("_flag_", 6, (void *)&flagl, sizeof(flagl));
 	return NBR_OK;

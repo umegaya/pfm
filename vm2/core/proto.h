@@ -29,6 +29,11 @@ enum {
 	node_inquiry = 8,
 };
 } /* namespace rpc */
+enum node_type {
+	servant_node,
+	master_node,
+	test_servant_node,
+};
 
 /* classes */
 /* base */
@@ -44,6 +49,11 @@ public:
 		ASSERT(serializer::data::type() == datatype::BLOB); 
 		ASSERT(via.raw.size == sizeof(UUID));
 		return *((const UUID *)(const void *)*this);
+	}
+	operator UUID & () {
+		ASSERT(serializer::data::type() == datatype::BLOB);
+		ASSERT(via.raw.size == sizeof(UUID));
+		return *((UUID *)(const void *)*this); 
 	}
 	const data &elem(int n) const { return (const data &)serializer::data::elem(n); }
 	data &elem(int n) { return (data &)serializer::data::elem(n); }
@@ -181,10 +191,6 @@ public:
 class node_inquiry_request : public request {
 public:
 	typedef request super;
-	enum node_type {
-		servant_node,
-		master_node,
-	};
 	static inline int pack_header(serializer &sr, MSGID msgid, int node_type) {
 		super::pack_header(sr, msgid, node_inquiry, 1);
 		sr << node_type;
@@ -221,6 +227,7 @@ public:
 	const data &command() const { return super::argv(0); }
 	int argc() const { return super::argc() - 1; }
 	const data &argv(int n) const { return super::argv(n + 1); }
+	data &argv(int n) { return super::argv(n + 1); }
 	static inline int pack_header(
 			serializer &sr, MSGID msgid,
 			U8 cmd, world_id wid, size_t wlen, int n_arg);
@@ -235,6 +242,10 @@ public:
 	const data &node_addr() const { return super::argv(0); }
 	world_id from() const { return super::argv(1); }
 	const UUID &world_object_id() const { return super::argv(2); }
+	void assign_world_object_id() {
+		UUID &uuid = super::argv(2);
+		uuid.assign();
+	}
 	const data &srcfile() const { return super::argv(3); }
 	int n_node() const { return super::argc() - 4; }
 	const data &addr(int n) const { return super::argv(n+4); }
@@ -249,8 +260,9 @@ class regist : public node_ctrl_request {
 public:
 	typedef node_ctrl_request super;
 	const data &node_server_addr() const { return super::argv(0); }
+	const int node_type() const { return super::argv(1); }
 	static inline int pack_header(serializer &sr, MSGID msgid,
-		const char *address, size_t alen);
+		const char *address, size_t alen, U8 node_type);
 };
 
 
@@ -441,10 +453,11 @@ inline int node_ctrl_cmd::del::pack_header(serializer &sr, MSGID msgid,
 }
 
 inline int node_ctrl_cmd::regist::pack_header(serializer &sr, MSGID msgid,
-		const char *address, size_t alen)
+		const char *address, size_t alen, U8 node_type)
 {
-	super::pack_header(sr, msgid, super::regist, "", 0, 1);
+	super::pack_header(sr, msgid, super::regist, "", 0, 2);
 	sr.push_string(address, alen);
+	sr << node_type;
 	return sr.len();
 }
 

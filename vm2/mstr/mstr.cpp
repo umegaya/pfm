@@ -13,7 +13,6 @@ class session : public conn {
 public:
 	static class pfmm *m_daemon;
 	static bool m_test_mode;
-	static char m_test_world_id[];
 public:
 	typedef conn super;
 	session() : super() {}
@@ -28,35 +27,40 @@ public:
 		return super::poll(ut, from_worker);
 	}
 	void fin()						{}
-	int on_open(const config &cfg) {
-		if (m_test_mode) {
-			if (!app().ff().ffutil::initialized() && !app().ff().init_tls()) {
-				ASSERT(false);
-				return NBR_EINVAL;
-			}
-			int r;
-			UUID uuid;
-			address a;
-			serializer &sr = app().ff().sr();
-			PREPARE_PACK(sr);
-			if ((r = rpc::node_ctrl_cmd::add::pack_header(
-				sr, app().ff().new_msgid(),
-				m_test_world_id, 9/* rtkonline */,
-				super::node_data()->iden,
-				strlen(super::node_data()->iden),
-				"", uuid, "svnt/ll/rtkonline/main.lua",
-				0, NULL)) < 0) {
-				ASSERT(false);
-				return r;
-			}
-			if ((r = app().ff().run_fiber(sr.p(), sr.len())) < 0) {
-				ASSERT(false);
-				return r;
+	int on_open(const config &cfg) { return super::on_open(cfg); }
+	int on_close(int reason) {
+		if (has_node_data()) {
+			session::app().ff().wf().remove_node(addr());
+			world_factory::iterator wit =
+				session::app().ff().wf().begin(), tmp;
+			for (; wit != session::app().ff().wf().end(); ) {
+				if (wit->nodes().use() == 0) {
+					/* FIXME : need to notice other master nodes? */
+					tmp = wit;
+					wit = session::app().ff().wf().next(wit);
+					session::app().ff().wf().destroy(tmp->id());
+					continue;
+				}
+				int r;
+				serializer &sr = app().ff().sr();
+				PREPARE_PACK(sr);
+				if ((r = rpc::node_ctrl_cmd::del::pack_header(
+					sr, app().ff().new_msgid(),
+					wit->id(), nbr_str_length(wit->id(), max_wid),
+					node_data()->iden,
+					nbr_str_length(node_data()->iden, address::SIZE))) < 0) {
+					ASSERT(false);
+					continue;
+				}
+				if ((r = app().ff().run_fiber(sr.p(), sr.len())) < 0) {
+					ASSERT(false);
+					continue;
+				}
+				wit = session::app().ff().wf().next(wit);
 			}
 		}
-		return super::on_open(cfg);
+		return super::on_close(reason);
 	}
-	int on_close(int reason) { return super::on_close(reason); }
 	int on_recv(char *p, int l) {
 		return app().ff().recv((class conn *)this, p, l, true);
 	}
@@ -67,7 +71,29 @@ public:
 
 class msession : public session {
 public:
-	int on_open(const config &cfg) { return super::on_open(cfg); }
+	int on_open(const config &cfg) {
+		if (!app().ff().ffutil::initialized() && !app().ff().init_tls()) {
+			ASSERT(false);
+			return NBR_EINVAL;
+		}
+		int r;
+		serializer &sr = app().ff().sr();
+		PREPARE_PACK(sr);
+		factory *f = app().find_factory<factory>("mstr");
+		if (!f) { return NBR_ENOTFOUND; }
+		if ((r = rpc::node_ctrl_cmd::regist::pack_header(
+			sr, app().ff().new_msgid(),
+			f->ifaddr(), f->ifaddr().len(), master_node)) < 0) {
+			ASSERT(false);
+			return r;
+		}
+		if ((r = app().ff().run_fiber(sr.p(), sr.len())) < 0) {
+			ASSERT(false);
+			return r;
+		}
+		return super::on_open(cfg);
+	}
+	int on_close(int reason) { return super::on_close(reason); }
 };
 
 /* finder */
@@ -106,7 +132,6 @@ bool mstr::session::m_test_mode = true;
 #else
 bool mstr::session::m_test_mode = false;
 #endif
-char mstr::session::m_test_world_id[] = "rtkonline";
 }
 
 base::factory *
@@ -187,9 +212,9 @@ int
 pfmm::boot(int argc, char *argv[])
 {
 	mstr::session::m_daemon = this;
-	if (argc > 1 && strncmp(argv[1], "--test", sizeof("--test"))) {
+	if (argc > 1 && strncmp(argv[1], "--test=", sizeof("--test="))) {
 		int tmode;
-		SAFETY_ATOI(argv[1] + sizeof("--test") + 1, tmode, int);
+		SAFETY_ATOI(argv[1] + sizeof("--test="), tmode, int);
 		mstr::session::m_test_mode = (tmode != 0);
 	}
 	int r;
@@ -213,7 +238,7 @@ pfmm::boot(int argc, char *argv[])
 	INIT_OR_DIE((r = ff().wf().init(
 		256, 256, opt_threadsafe | opt_expandable, "mstr/db/wf.tch")) < 0, r,
 		"object factory creation fail (%d)\n", r);
-	INIT_OR_DIE((r = ff().init(10000, 100, 10)) < 0, r,
+	INIT_OR_DIE((r = ff().init(100, 100, 10)) < 0, r,
 		"fiber_factory init fails(%d)\n", r);
 	return NBR_OK;
 }

@@ -64,6 +64,7 @@ protected:
 	yield *m_yld;
 	class ffutil *m_ff;
 public:
+	friend class yield;
 	fiber() : m_status(start), m_yld(NULL), m_ff(NULL) {m_ctx.co = NULL;}
 	~fiber() {}
 	world_id wid() const { return m_wid; }
@@ -170,7 +171,7 @@ public:
 				ASSERT(false);
 				return NBR_EINVAL;
 			}
-			return custom_ff<FB>().resume(this, res);
+			return custom_ff<FB>().resume(this, res, sr.p(), sr.len());
 		}
 		default:
 			return fiber::respond(err, sr);
@@ -267,6 +268,9 @@ public:
 		return nbr_sock_worker_event(curr(),
 			m_workers[__sync_fetch_and_add(&m_widx, 1)], p, l);
 	}
+	int run_fiber(THREAD th, char *p, int l) {
+		return nbr_sock_worker_event(curr(), th, p, l);
+	}
 };
 
 template <class FB>
@@ -298,7 +302,10 @@ public:
 	void fiber_destroy(FB *f) { super::destroy(f); }
 	FB *find_fiber(MSGID msgid) { return (FB *)util::m_fm.find(msgid); }
 	template <typename FROM> int call(FROM from, rpc::request &req, bool trusted);
-	template <typename FROM> int resume(FROM from, rpc::response &res);
+	template <typename FROM> int resume_nofw(FROM from, rpc::response &res) {
+		return resume(from, res, NULL, 0); 
+	}
+	template <typename FROM> int resume(FROM from, rpc::response &res, char *p, int l);
 	template <typename FROM> int recv(FROM from, char *p, int l, bool trust) {
 		/* init TLS: jemalloc flaver */
 		if (!util::initialized() && !util::init_tls()) {
@@ -314,7 +321,7 @@ public:
 			case rpc::msg_request:
 				return call(from, (rpc::request &)d, trust);
 			case rpc::msg_response:
-				return resume(from, (rpc::response &)d);
+				return resume(from, (rpc::response &)d, p, l);
 			default:
 				ASSERT(false);
 				return NBR_EINVAL;
@@ -343,7 +350,8 @@ fiber_factory<FB>::call(FROM from, rpc::request &req, bool trusted)
 	TRACE("fiber new : %p\n", f);
 	f->set_from(from);
 	int r = f->call(*this, req, trusted);
-	if (!f->yielded()) {
+	if ((r < 0) || !f->yielded()) {
+		TRACE("finish: %u/%d/%p/%p/%p\n",req.msgid(),r,curr(),f,f->yld());
 		f->fin();
 		fiber_destroy(f);
 	}
@@ -352,21 +360,26 @@ fiber_factory<FB>::call(FROM from, rpc::request &req, bool trusted)
 
 template <class FB>
 template <typename FROM> int
-fiber_factory<FB>::resume(FROM from, rpc::response &res)
+fiber_factory<FB>::resume(FROM from, rpc::response &res, char *p, int l)
 {
 	FB *f = find_fiber(res.msgid());
 	if (!f) {	/* would be destroyed by timeout or error */
 		return NBR_ENOTFOUND;
 	}
-	//TRACE("resume: %u/%p/%p/%p\n", res.msgid(), &m_fm, f, f->yld());
+	TRACE("resume: %u/%p/%p/%p\n", res.msgid(), curr(), f, f->yld());
 	ASSERT(f->yld());
 	if (f->yld()->reply(from, res) < 0) {
 		return NBR_OK;	/* wait for reply */
 	}
+	THREAD attach = f->yld()->attached();
+	if (attach != curr()) {
+		TRACE("fw: %u/%p/%p/%p\n", res.msgid(), curr(), attach, f);
+		return run_fiber(f->yld()->attached(), p, l);
+	}
 	fiber_unregister(res.msgid());
 	int r = f->resume(*this, res);
-	if (!f->yielded()) {
-		//TRACE("finish: %u/%p/%p/%p\n", res.msgid(), &m_fm, f, f->yld());
+	if ((r < 0) || !f->yielded()) {
+		TRACE("finish: %u/%d/%p/%p/%p\n",res.msgid(),r,curr(),f,f->yld());
 		f->fin();
 		fiber_destroy(f);
 	}
@@ -432,7 +445,7 @@ fiber::yielding(MSGID msgid, int size, yield::callback fn, void *p)
 		m_yld = ff().yields().create(); 
 		if (!m_yld) { return NBR_EEXPIRE; }
 	}
-	//TRACE("yield: %u/%u/%p/%p/%p\n", msgid, size, &(ff().fm()), this, m_yld);
+	TRACE("yield: %u/%u/%p/%p/%p\n", msgid, size, ff().curr(), this, m_yld);
 	return m_yld->init(this, msgid, size, fn, p);
 }
 
@@ -451,11 +464,11 @@ fiber::timeout(fiber_factory<FB> &ff, rpc::response &res)
 {
 	switch(m_type) {
 	case from_socket:
-		return ff.resume(m_socket, res);
+		return ff.resume_nofw(m_socket, res);
 	case from_thread:
-		return ff.resume(m_thrd, res);
+		return ff.resume_nofw(m_thrd, res);
 	case from_fncall:
-		return ff.resume(m_cb, res);
+		return ff.resume_nofw(m_cb, res);
 	default:
 		ASSERT(false);
 		return NBR_EINVAL;
@@ -535,6 +548,7 @@ int fiber::call_node_ctrl(FB *fb, rpc::request &req)
 		PREPARE_PACK(ff().sr());
 		world *w = ff().find_world(wid());
 		m_ctx.nctrl.cmd = (U32)ncr.command();
+		TRACE("call_node_ctrl %u/%u/%p\n", m_msgid, m_ctx.nctrl.cmd, this);
 		switch(m_ctx.nctrl.cmd) {
 		case rpc::node_ctrl_request::add:
 			r = fb->node_ctrl_add(w, ncr, ff().sr());
@@ -633,6 +647,7 @@ fiber::fin()
 		ASSERT(false);
 		break;
 	}
+	m_cmd = 0;
 	if (m_yld) {
 		ff().yields().destroy(m_yld);
 		m_yld = NULL;

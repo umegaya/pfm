@@ -800,7 +800,8 @@ public: /* operation */
 	int writable() const			{ return nbr_sock_writable(m_sk); }
 	U32 msgid()						{ return f()->msgid(); }
 #if defined(_DEBUG)
-	int send(const char *p, int l) const	{ int r = cfg().m_fns(m_sk, (char *)p, l); ASSERT(r > 0); return r; }
+	int send(const char *p, int l) const	{ 
+		ASSERT(f()); int r = cfg().m_fns(m_sk, (char *)p, l); ASSERT(r > 0); return r; }
 	int event(const char *p, int l) const	{ int r = nbr_sock_event(m_sk, (char *)p, l); ASSERT(r > 0); return r; }
 #else
 	int send(const char *p, int l) const	{ return cfg().m_fns(m_sk, (char *)p, l); }

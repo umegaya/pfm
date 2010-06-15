@@ -367,12 +367,12 @@ int fiber_test_add_node(test_context &ctx, int argc, char *argv[], void *p)
 			/* it will send back reply to each vm_init fiber */
 			TEST((r = sresponse(nd->m_sff->sr(), resp)) <= 0,
 				"response unpack fails (%d)\n", r);
-			TEST((r = nd->m_sff->resume(c, resp)) < 0,
+			TEST((r = nd->m_sff->resume_nofw(c, resp)) < 0,
 				"resume servant add node fails (%d)\n", r);
 			/* it will reply to main add node fiber */
 			TEST((r = sresponse(nd->m_sff->sr(), resp)) <= 0,
 				"response unpack fails (%d)\n", r);
-			TEST((r = nd->m_sff->resume(ntpit->m_th, resp)) < 0,
+			TEST((r = nd->m_sff->resume_nofw(ntpit->m_th, resp)) < 0,
 				"resume servant add node fails (%d)\n", r);
 			m_thevmap.erase((U64)ntpit->m_th);
 		}
@@ -388,7 +388,7 @@ int fiber_test_add_node(test_context &ctx, int argc, char *argv[], void *p)
 			c, r = NBR_ENOTFOUND);
 		TEST((r = sresponse(nd->m_sff->sr(), resp)) <= 0,
 			"response unpack fails (%d)\n", r);
-		TEST((r = ctx.m_mnd.m_mff->resume(c, resp)) < 0,
+		TEST((r = ctx.m_mnd.m_mff->resume_nofw(c, resp)) < 0,
 			"resume add node master fails (%d)\n", r);
 	}
 	/* if add node finished, then global_commit will send to servants */
@@ -405,7 +405,7 @@ int fiber_test_add_node(test_context &ctx, int argc, char *argv[], void *p)
 		TEST(!(c = nd->m_cf.get_by("127.0.0.1:8000")), 
 			"cannot find conn (%p:%d)\n", c, r = NBR_ENOTFOUND);
 		init_thread_msg_wait(ctx);
-		TEST((r = nd->m_sff->resume(c, resp)) < 0, 
+		TEST((r = nd->m_sff->resume_nofw(c, resp)) < 0, 
 			"resume add node servant fails (%d)\n", r);
 		TEST((nd->m_sff->quorum_locked(test_world_id)),
 			"context still locked (%d)\n", r = NBR_EINVAL);
@@ -419,7 +419,7 @@ int fiber_test_add_node(test_context &ctx, int argc, char *argv[], void *p)
 			tpit = m_thevmap.next(tpit);
 			TEST((r = ntpit->unpack(nd->m_sff->sr(), resp)) <= 0,
 				"unpack packet fails (%d)\n", r);
-			TEST((r = nd->m_sff->resume(ntpit->m_th, resp)) < 0,
+			TEST((r = nd->m_sff->resume_nofw(ntpit->m_th, resp)) < 0,
 				"resume servant add node fails (%d)\n", r);
 			m_thevmap.erase((U64)ntpit->m_th);
 		}
@@ -488,7 +488,7 @@ int fiber_test_login(test_context &ctx, int argc, char *argv[])
 	a = ct->primary()->get_addr(a);
 	TEST(!(nd = ctx.m_snd.find(a)),
 			"node data which handle world object not found (%p)\n", nd);
-	TEST((r = svnt->m_sff->resume(&c, res)) < 0,
+	TEST((r = svnt->m_sff->resume_nofw(&c, res)) < 0,
 		"resume login response fails (%d)\n", r);
 	/* will call Player:new */
 	TEST((r = nd->m_sff->call(&c, get_cor(), true)) < 0,
@@ -508,12 +508,12 @@ int fiber_test_login(test_context &ctx, int argc, char *argv[])
 	/* resume Player:new */
 	TEST((r = sresponse(nd->m_sff->sr(), res2)) < 0,
 		"invalid login response from svnt (%d)\n", r);
-	TEST((r = nd->m_sff->resume(&c, res2)) < 0,
+	TEST((r = nd->m_sff->resume_nofw(&c, res2)) < 0,
 		"resume login response fails (%d)\n", r);
 	/* resume player login (now object creation finish) */
 	TEST((r = sresponse(svnt->m_sff->sr(), res2)) < 0,
 		"invalid login response from svnt (%d)\n", r);
-	TEST((r = svnt->m_sff->resume(&c, res2)) < 0,
+	TEST((r = svnt->m_sff->resume_nofw(&c, res2)) < 0,
 		"resume login response fails (%d)\n", r);
 	/* will call Player:login and will return 788 */
 	TEST((r = sresponse(svnt->m_sff->sr(), res2)) < 0,
@@ -584,7 +584,7 @@ int fiber_test_ll(test_context &ctx, int argc, char *argv[])
 		"resume object creation fails (call World:get_id) (%d)\n", r);
 	/* reply result to first fiber (msgid = 1) */
 	TEST((r = sresponse(ff.sr(), resp)) < 0, "response unpack fails (%d)\n", r);
-	TEST((r = ff.resume(t, resp)) < 0, "world_create resume fail (%d)\n", r);
+	TEST((r = ff.resume_nofw(t, resp)) < 0, "world_create resume fail (%d)\n", r);
 	TEST(!(o = ff.of().find(uuid)), "Player object not found (%p)\n", o);
 	TEST((0 != strcmp(o->klass(), "Player")),
 			"klass type invalid (%s)\n", o->klass());
@@ -678,7 +678,8 @@ int fiber_test_thread(test_context &ctx, int argc, char *argv[])
 		PREPARE_PACK(nd->m_sff->sr());
 		TEST((r = rpc::node_ctrl_cmd::regist::pack_header(
 			nd->m_sff->sr(), 1000007,
-			HOST_LIST[i], strlen(HOST_LIST[i]))) < 0,
+			HOST_LIST[i], strlen(HOST_LIST[i]),
+			servant_node)) < 0,
 			"pack nodereg command fails (%d)\n", r);
 		PREPARE_UNPACK(nd->m_sff->sr());
 		TEST((r = nd->m_sff->sr().unpack(req)) <= 0,
@@ -697,7 +698,7 @@ int fiber_test_thread(test_context &ctx, int argc, char *argv[])
 		test_conn::m_pktmap.erase("127.0.0.1:8000");
 		TEST((r = sresponse(nd->m_sff->sr(), resp)) < 0,
 			"response unpack fails (%d)\n", r);
-		TEST((r = nd->m_sff->resume(th, resp)) < 0,
+		TEST((r = nd->m_sff->resume_nofw(th, resp)) < 0,
 			"resume servant regnode fails (%d)\n", r);
 		TEST((r = nd->m_sff->use()) != 0,
 			"fiber not stopped (%d)\n", r);

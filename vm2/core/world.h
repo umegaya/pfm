@@ -80,6 +80,7 @@ protected:
 	class connector_factory *m_cf;
 public:
 	typedef pmap<world, world_id> super;
+	typedef super::iterator iterator;
 	world_factory(class connector_factory *cf, const char *dbmopt) :
 		pmap<world, world_id>(), m_cf(cf) {
 		bool b = super::init(64, 64, opt_expandable | opt_threadsafe, dbmopt);
@@ -89,10 +90,13 @@ public:
 	~world_factory() { super::fin(); }
 	class connector_factory *cf() { return m_cf; }
 	void set_cf(class connector_factory *cf) { m_cf = cf; }
-	void remove_node(const CHNODE *n) {
-		super::iterator it = begin();
-		for (; it != super::end(); it = super::next(it)) {
-			it->del_node(*n);
+	iterator begin() { return super::begin(); }
+	iterator end() { return super::end(); }
+	iterator next(iterator i) { return super::next(i); }
+	void remove_node(const char *addr) {
+		iterator it = begin();
+		for (; it != end(); it = next(it)) {
+			it->del_node(addr);
 		}
 	}
 	world *create(world_id wid, int max_node, int max_replica) {
