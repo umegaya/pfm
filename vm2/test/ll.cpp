@@ -90,8 +90,11 @@ int ll_call_test(int argc, char *argv[])
 	UUID uuid1, uuid2;
 
 	fiber::m_test_respond = test_fiber::test_respond;
-	TEST(!(w1 = wf.create("test_world", 10, 10)), "world1 create fail (%p)\n", w1);
-	TEST(!(w2 = wf.create("test_world2", 10, 10)), "world2 create fail (%p)\n", w2);
+	wf.clear();
+	TEST(!(w1 = wf.create("test_world", 10, 10)), "world1 create fail (%p:%d)\n",
+			w1, r = NBR_ESHORT);
+	TEST(!(w2 = wf.create("test_world2", 10, 10)), "world2 create fail (%p:%d)\n",
+			w2, r = NBR_ESHORT);
 	if ((r = of.init(1000000, 100000, opt_expandable | opt_threadsafe, 
 		MAKEPATH(path, "rc/ll/of.tch"))) < 0) {
 		TTRACE("init_object_factory fail (%d)\n", r);
@@ -102,7 +105,6 @@ int ll_call_test(int argc, char *argv[])
 		return r;
 	}
 	of.clear();
-	wf.clear();
 	uuid1.assign();
 	if (!(o1 = of.create(uuid1, w1, &scr, "World"))) {
 		TTRACE("create world object for test_world fails (%p)\n", o1);

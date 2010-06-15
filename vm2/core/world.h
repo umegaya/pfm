@@ -13,10 +13,10 @@ protected:
 	CONHASH m_ch;
 	world_id m_wid;
 	UUID m_world_object;
-	map<CHNODE, address> m_nodes;
+	map<const CHNODE *, address> m_nodes;
 	class connector_factory *m_cf;
 public:
-	typedef map<CHNODE, char*>::iterator iterator;
+	typedef map<const CHNODE *, char*>::iterator iterator;
 	static const U32 vnode_replicate_num = 30;
 	static const U32 object_multiplexity = 3;
 	static const U32 max_world = 1000;
@@ -37,12 +37,13 @@ public:
 		*n = nbr_conhash_lookup(m_ch, (const char *)&uuid, sizeof(uuid));
 		return (*n) ? 1 : NBR_ENOTFOUND;
 	}
-	static inline const char *node_addr(CHNODE &n) { return n.iden; }
-	map<CHNODE, address> &nodes() { return m_nodes; }
+	static inline const char *node_addr(const CHNODE &n) { return n.iden; }
+	map<const CHNODE *, address> &nodes() { return m_nodes; }
 	class connector_factory &cf() { return *m_cf; }
 	void set_cf(class connector_factory *cf) { m_cf = cf; }
-	CHNODE *add_node(const address &addr);
-	int del_node(const address &addr);
+	const CHNODE *add_node(const class conn &c);
+	const CHNODE *add_node(const char *a);
+	int del_node(const char *a);
 	int add_node(const CHNODE &n) {
 		return nbr_conhash_add_node(m_ch, (CHNODE *)&n); }
 	int del_node(const CHNODE &n) {
@@ -88,19 +89,15 @@ public:
 	~world_factory() { super::fin(); }
 	class connector_factory *cf() { return m_cf; }
 	void set_cf(class connector_factory *cf) { m_cf = cf; }
-	void remove_node(address &a) {
+	void remove_node(const CHNODE *n) {
 		super::iterator it = begin();
 		for (; it != super::end(); it = super::next(it)) {
-			it->del_node(a);
+			it->del_node(*n);
 		}
 	}
 	world *create(world_id wid, int max_node, int max_replica) {
 		world *w = super::load(wid);
-		if (w) { 
-			w->set_cf(m_cf); 
-			return w; 
-		}
-		if (!(w = super::create(wid))) { return NULL; }
+		if (!w && !(w = super::create(wid))) { return NULL; }
 		if (w->init(max_node, max_replica) < 0) {
 			super::destroy(wid);
 			return NULL;

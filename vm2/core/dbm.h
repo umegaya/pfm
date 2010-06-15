@@ -61,7 +61,7 @@ public:
 	inline record load(key k) {	/* find disk and load it and cache on memory */
 		bool exists;
 		element *e;
-		if (!(e = super::rawalloc(k, true, &exists))) { return record(NULL); }
+		if (!(e = super::rawalloc(k, false, &exists))) { return record(NULL); }
 		if (exists) { return record(e); }
 		record rec(e);
 		dbm::record r = m_db.select(key_traits::kp(k), key_traits::kl(k));
@@ -82,8 +82,9 @@ public:
 		exist_on_disk = (r && rec.load(r.p<char>(), r.len()) >= 0);
 		return rec;
 	}
-	inline bool save(retval *v, key k, bool insertion = false) {
-		return save(to_r(v), k, insertion);
+	inline bool save_from_ptr(retval *v, key k, bool insertion = false) {
+		record r = to_r(v);
+		return save(r, k, insertion);
 	}
 	inline bool save(record &r, key k, bool insertion = false) {
 		char buffer[save_work_buffer_size];

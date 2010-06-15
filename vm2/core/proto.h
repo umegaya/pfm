@@ -214,6 +214,7 @@ public:
 		vm_init = 5,
 		vm_fin = 6,
 		vm_deploy = 7,
+		regist = 8,
 	};
 public:
 	typedef world_request super;
@@ -243,6 +244,15 @@ public:
 			world_id from, const UUID &uuid,
 			const char *srcfile, int n_nodes, const char *node[]);
 };
+
+class regist : public node_ctrl_request {
+public:
+	typedef node_ctrl_request super;
+	const data &node_server_addr() const { return super::argv(0); }
+	static inline int pack_header(serializer &sr, MSGID msgid,
+		const char *address, size_t alen);
+};
+
 
 class vm_init : public node_ctrl_request {
 public:
@@ -426,6 +436,14 @@ inline int node_ctrl_cmd::del::pack_header(serializer &sr, MSGID msgid,
 		const char *address, size_t alen)
 {
 	super::pack_header(sr, msgid, super::del, wid, wlen, 1);
+	sr.push_string(address, alen);
+	return sr.len();
+}
+
+inline int node_ctrl_cmd::regist::pack_header(serializer &sr, MSGID msgid,
+		const char *address, size_t alen)
+{
+	super::pack_header(sr, msgid, super::regist, "", 0, 1);
 	sr.push_string(address, alen);
 	return sr.len();
 }

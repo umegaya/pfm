@@ -13,12 +13,15 @@ using namespace sfc::base;
 
 typedef session conn_impl;
 class conn : public conn_impl, public binprotocol {
+protected:
+	CHNODE m_node_data;
 #if defined(_TEST)
 public:
 	static int (*m_test_send)(class conn *, char *, int);
 	void set_addr(const address &a) { conn_impl::setaddr(a); }
 #endif
 public:
+	conn() { m_node_data.flag = 0; }
 	int writable() const { return conn_impl::writable(); }
 	int send(char *p, int l) {
 #if defined(_TEST)
@@ -28,6 +31,10 @@ public:
 	}
 	bool valid() const { return conn_impl::valid(); }
 	address &get_addr(address &a) { return conn_impl::addr(); }
+	void set_node_data(const char *a, int nvnode) {
+		nbr_conhash_set_node(&m_node_data, a, nvnode); }
+	const CHNODE *node_data() const { return &m_node_data; }
+	bool has_node_data() const { return m_node_data.flag != 0; }
 };
 
 typedef factory_impl<conn, mappool<conn> > conn_pool_impl;
@@ -293,7 +300,37 @@ public:
 	void set_pool(conn_pool *f) { m_pool = f; }
 	conn_pool &pool() { return *m_pool; }
 public:
-	conn *get_by(const address &a) { return pool().find(a); }
+	conn *get_by(const address &a) {
+		failover_chain *c = m_address_chain_map.find(a);
+		return c ? c->m_s : NULL;
+	}
+	failover_chain *insert(const address &na, conn *ct) {
+		failover_chain *c = m_address_chain_map.find(na);
+		if (c) { return c; }
+		else {
+			if (!(c = m_failover_chain_factory.create())) {
+				return NULL;
+			}
+			if (!ct) {
+				ct = pool().create(na);
+				if (!ct) {
+					m_failover_chain_factory.destroy(c);
+					return NULL;
+				}
+			}
+			c->m_s = ct;
+			if (m_address_chain_map.insert(c, na) ==
+					m_address_chain_map.end()) {
+				m_address_chain_map.erase(na);
+				m_failover_chain_factory.destroy(c);
+				return NULL;
+			}
+			return c;
+		}
+	}
+	conn *get_by_local(const address &a) {
+		return pool().find(a);
+	}
 	connector *connect(const UUID &k, const address &a, void *p = NULL) {
 		return add_failover_chain(k, a, p);
 	}
@@ -313,24 +350,29 @@ public:
 	connector *add_failover_chain(const UUID &k, const address &a, void *p) {
 		conn *s;
 		connector *ct;
-		failover_chain *c;
+		failover_chain *c, *vc;
 		lock lk(m_lock, false);
+		if (!(vc = m_address_chain_map.find(a))) {
+			if (!(s = pool().create(a))) {
+				return NULL;
+			}
+			if (!(vc = insert(a, s))) {
+				return NULL;
+			}
+		}
 		if (!(ct = super::create(k))) {
 			return NULL;
 		}
 		ct->set(&m_connector_resource);
-		if (!(s = pool().create(a))) {
-			return NULL;
-		}
-		if (ct->has_session(s)) { return ct; }
+		if (ct->has_session(vc->m_s)) { return ct; }
 		if (!(c = m_failover_chain_factory.create())) {
 			return NULL;
 		}
-		c->m_s = s;
-		m_address_chain_map.insert(c, a);
+		c->m_s = vc->m_s;
+		vc->insert(c);
 		((failover_chain *)ct)->insert(c);
-		if (!s->valid()) {
-			pool().connect(s, a, p);
+		if (!c->m_s->valid()) {
+			pool().connect(c->m_s, a, p);
 		}
 		return ct;
 	}
@@ -343,10 +385,14 @@ public:
 		if (!(c = m_address_chain_map.find(a))) {
 			return NBR_ENOTFOUND;
 		}
-		return del_failover_chain(c);
+		del_failover_chain(c->m_next);
+		m_address_chain_map.erase(a);
+		return NBR_OK;
 	}
 	int del_failover_chain(connector &c) {
-		return del_failover_chain(c.chain());
+		del_failover_chain(c.chain());
+		super::destroy(&c);
+		return NBR_OK;
 	}
 	int del_failover_chain(failover_chain *c) {
 		lock lk(m_lock, false);

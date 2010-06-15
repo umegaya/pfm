@@ -143,7 +143,7 @@ world *ffutil::world_create(const rpc::node_ctrl_cmd::add &req)
 		}
 		LOG("add node (%s) for (%s)\n", (const char *)req.addr(i), w->id());
 	}
-	if (m_wf.save(w, (const char *)req.wid()) < 0) {
+	if (m_wf.save_from_ptr(w, (const char *)req.wid()) < 0) {
 		world_destroy(w);
 		return NULL;
 	}
@@ -458,6 +458,7 @@ int mstr::fiber::node_ctrl_add(world *w,
 	int r;
 	MSGID msgid = INVALID_MSGID;
 	world::iterator i;
+	conn *c = NULL;
 	quorum_context *ctx = NULL;
 	if (!w) {
 		if (!(w = ff().world_create(req))) {
@@ -465,7 +466,11 @@ int mstr::fiber::node_ctrl_add(world *w,
 			goto error;
 		}
 	}
-	if (!w->add_node((const char *)req.node_addr())) {
+	if (!(c = w->cf().get_by((const char *)req.node_addr()))) {
+		r = NBR_ENOTFOUND;
+		goto error;
+	}
+	if (!w->add_node(*c)) {
 		r = NBR_EEXPIRE;
 		goto error;
 	}
@@ -487,7 +492,7 @@ error:
 		ff().fiber_unregister(msgid);
 	}
 	if (ctx) { ff().quorums().erase(w->id()); }
-	w->del_node((const char *)req.node_addr());
+	w->del_node(req.node_addr()); 
 	return r;
 }
 int mstr::fiber::node_ctrl_add_resume(world *w, rpc::response &res, serializer &sr)
@@ -499,7 +504,7 @@ int mstr::fiber::node_ctrl_add_resume(world *w, rpc::response &res, serializer &
 		rpc::response::pack_header(sr, m_msgid);
 		sr << NBR_OK;
 		sr.pushnil();
-		return NBR_OK;
+		return respond(false, sr);
 	}
 	else {
 		w->del_node(p->m_node_addr);
@@ -508,6 +513,38 @@ int mstr::fiber::node_ctrl_add_resume(world *w, rpc::response &res, serializer &
 	}
 }
 
+int mstr::fiber::node_ctrl_regist(world *w,
+		rpc::node_ctrl_cmd::regist &req, serializer &sr)
+{
+	int r;
+	address a;
+	conn *c;
+	ASSERT(!w);
+	if ((r = get_socket_address(a)) < 0) {
+		goto error;
+	}
+	if (!(c = ff().wf().cf()->get_by_local(a))) {
+		r = NBR_ENOTFOUND;
+		goto error;
+	}
+	if (!ff().wf().cf()->insert(address(req.node_server_addr()), c)) {
+		r = NBR_EINVAL;
+		goto error;
+	}
+	c->set_node_data(req.node_server_addr(),
+			world::vnode_replicate_num);
+	rpc::response::pack_header(sr, m_msgid);
+	sr << NBR_OK;
+	sr.pushnil();
+	return respond(false, sr);
+error:
+	if (r < 0) {
+		address a(req.node_server_addr());
+		ff().wf().cf()->del_failover_chain(a);
+		send_error(r);
+	}
+	return r;
+}
 
 int mstr::fiber::node_ctrl_del(world *w,
 		rpc::node_ctrl_cmd::del &req, serializer &sr)
@@ -548,7 +585,7 @@ int mstr::fiber::node_ctrl_del_resume(world *w, rpc::response &res, serializer &
 		rpc::response::pack_header(sr, m_msgid);
 		sr << NBR_OK;
 		sr.pushnil();
-		return NBR_OK;
+		return respond(false, sr);
 	}
 	else {
 		w->del_node(p->m_node_addr);
@@ -570,7 +607,7 @@ int mstr::fiber::node_ctrl_list_resume(world *w,
 		rpc::response::pack_header(sr, m_msgid);
 		sr << NBR_OK;
 		sr.pushnil();
-		return NBR_OK;
+		return respond(false, sr);
 	}
 	else {
 		/* TODO: rollback master node status */
@@ -618,7 +655,7 @@ int mstr::fiber::node_ctrl_deploy_resume(world *w,
 		rpc::response::pack_header(sr, m_msgid);
 		sr << NBR_OK;
 		sr.pushnil();
-		return NBR_OK;
+		return respond(false, sr);
 	}
 	else {
 		quorum_global_commit(w, p, res.err());
@@ -830,6 +867,7 @@ int svnt::fiber::call_node_inquiry(rpc::request &rq)
 	}
 	return NBR_OK;
 error:
+	if (msgid != INVALID_MSGID) { ff().fiber_unregister(msgid); }
 	if (r < 0) {
 		send_error(r);
 	}
@@ -985,6 +1023,49 @@ error:
 	quorum_global_commit(w, ctx, r);
 	w->del_node(ctx->m_node_addr);
 	return r;
+}
+
+
+int svnt::fiber::node_ctrl_regist(class world *w,
+		rpc::node_ctrl_cmd::regist &req, serializer &sr)
+{
+	int r;
+	MSGID msgid = INVALID_MSGID;
+	msgid = new_msgid();
+	if (msgid == INVALID_MSGID) {
+		r = NBR_EEXPIRE;
+		goto error;
+	}
+	PREPARE_PACK(ff().sr());
+	rpc::node_ctrl_cmd::regist::pack_header(
+		ff().sr(), msgid, req.node_server_addr(), 
+		req.node_server_addr().len());
+	if ((r = ff().wf().cf()->backend_conn()->send(msgid,
+		ff().sr().p(), ff().sr().len())) < 0) {
+		goto error;
+	}
+	if ((r = yielding(msgid)) < 0) {
+		goto error;
+	}
+	return NBR_OK;
+error:
+	if (msgid != INVALID_MSGID) { ff().fiber_unregister(msgid); }
+	if (r < 0) {
+		send_error(r);
+	}
+	return r;
+}
+int svnt::fiber::node_ctrl_regist_resume(class world *w,
+		rpc::response &res, serializer &sr)
+{
+	if (res.success()) {
+		return NBR_OK;
+	}
+	else {
+		ASSERT(false);
+		exit(1);
+		return res.err();
+	}
 }
 
 

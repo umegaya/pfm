@@ -78,7 +78,8 @@ struct node_data {
 	bool m_have_world;
 	node_data() : m_cp(), m_cf(), m_of(), m_wf(),
 		m_sff(NULL) {}
-	~node_data() {
+	~node_data() { fin(); }
+	void fin() {
 		switch (m_type) {
 		case type_servant: {
 			if (m_sff) { delete m_sff; }
@@ -93,6 +94,10 @@ struct node_data {
 			m_mff = NULL;
 		} break;
 		}
+		m_of.fin();
+		m_wf.fin();
+		m_cf.fin();
+		m_cp.fin();
 	}
 	enum type {
 		type_master,
@@ -322,9 +327,8 @@ int fiber_test_add_node(test_context &ctx, int argc, char *argv[], void *p)
 		test_world_id, sizeof(test_world_id) - 1, (const char *)a, a.len(),
 		"", ctx.wuuid, MAKEPATH(path, "rc/ll/test_world2/main.lua"),
 		0, NULL)) < 0, "pack world_create fail (%d)\n", r);
-	local_sr.unpack_start(local_sr.p(), local_sr.len());
-	TEST((r = local_sr.unpack(add_req)) <= 0, "unpack world_create fail (%d)\n", r);
-	TEST((r = ctx.m_mnd.m_mff->call(ctx.thrd, add_req, true)) < 0,
+	TEST((r = ctx.m_mnd.m_mff->recv(ctx.thrd,
+		local_sr.p(), local_sr.len(), true)) < 0,
 		"add node master fail(%d)\n", r);
 
 	/* master's add node will call servant's */
@@ -524,6 +528,14 @@ int fiber_test_login(test_context &ctx, int argc, char *argv[])
 /*------------------------------------------------------------------*/
 /* test : ll_exec, creat_object										*/
 /*------------------------------------------------------------------*/
+int fiber_test_reg(test_context &ctx, int argc, char *argv[])
+{
+	return NBR_OK;
+}
+
+/*------------------------------------------------------------------*/
+/* test : ll_exec, creat_object										*/
+/*------------------------------------------------------------------*/
 int fiber_test_ll(test_context &ctx, int argc, char *argv[])
 {
 	int r;
@@ -615,6 +627,7 @@ int fiber_test_thread(test_context &ctx, int argc, char *argv[])
 	conn *c;
 	node_data *nd;
 	dbm db;
+	packet *pkt;
 
 	/* set callback to emulate network IO */
 	object::m_test_request = test_object2::test_request;
@@ -622,7 +635,8 @@ int fiber_test_thread(test_context &ctx, int argc, char *argv[])
 	conn::m_test_send = test_conn::test_send;
 	conn_pool::m_test_connect = test_conn_pool::test_connect;
 	fiber::m_test_respond = testsfiber::test_respond;
-
+	rpc::response resp;
+	rpc::request req;
 
 	TEST((r = db.init(MAKEPATH(path, "rc/uuid/uuid.tch"))) < 0,
 		"uuid DB init fail (%d)\n",r);
@@ -638,6 +652,8 @@ int fiber_test_thread(test_context &ctx, int argc, char *argv[])
 	TEST((r = init_node_data(ctx.m_mnd, "127.0.0.1:8000",
 		node_data::type_master, argv)) < 0,
 		"create master connector factory fail (%d)\n", r);
+	TEST((r = ctx.m_mnd.m_mff->init_tls()) < 0,
+		"init TLS fails (%d)\n", r);
 	TEST((r = init_node_data(ctx.m_snd2, "127.0.0.1:9000",
 		node_data::type_servant2, argv)) < 0,
 		"create master connector factory fail (%d)\n", r);
@@ -659,6 +675,32 @@ int fiber_test_thread(test_context &ctx, int argc, char *argv[])
 			"backend connect fails (%p)\n", ct);
 		TEST(!(c = nd->m_cp.find("127.0.0.1:8000")),
 			"reg node fail (%s)\n", HOST_LIST[i]);
+		PREPARE_PACK(nd->m_sff->sr());
+		TEST((r = rpc::node_ctrl_cmd::regist::pack_header(
+			nd->m_sff->sr(), 1000007,
+			HOST_LIST[i], strlen(HOST_LIST[i]))) < 0,
+			"pack nodereg command fails (%d)\n", r);
+		PREPARE_UNPACK(nd->m_sff->sr());
+		TEST((r = nd->m_sff->sr().unpack(req)) <= 0,
+			"unpack login command fails (%d)\n", r);
+		THREAD th = NULL;
+		TEST((r = nd->m_sff->call(th, req, true)) < 0,
+			"call servant regnode fails (%d)\n", r);
+		TEST(!(pkt = test_conn::m_pktmap.find("127.0.0.1:8000")),
+			"packet not found (%d)\n", r = NBR_ENOTFOUND);
+		TEST((r = pkt->unpack(ctx.m_mnd.m_mff->sr(), req)) < 0,
+			"response unpack fails (%d)\n", r);
+		TEST(!(c = ctx.m_mnd.m_cp.find(HOST_LIST[i])),
+			"find node fail (%s)\n", HOST_LIST[i]);
+		TEST((r = ctx.m_mnd.m_mff->call(c, req, true)) < 0,
+			"call master reqnode fails (%d)\n", r);
+		test_conn::m_pktmap.erase("127.0.0.1:8000");
+		TEST((r = sresponse(nd->m_sff->sr(), resp)) < 0,
+			"response unpack fails (%d)\n", r);
+		TEST((r = nd->m_sff->resume(th, resp)) < 0,
+			"resume servant regnode fails (%d)\n", r);
+		TEST((r = nd->m_sff->use()) != 0,
+			"fiber not stopped (%d)\n", r);
 	}
 	for (int i = 0; i < ctx.n_thread; i++) {
 		nbr_sock_set_worker_data(ctx.workers[i], (void *)&ctx, thevent);
@@ -678,10 +720,6 @@ int fiber_test_thread(test_context &ctx, int argc, char *argv[])
 			"test_login fails (%d)\n", r);
 	TEST((r = fiber_test_ll(ctx, argc, argv)) < 0, "test_ll fails (%d)\n", r);
 
-	m_thevmap.fin();
-	test_conn::m_pktmap.fin();
-	mstr::fiber::fin_global();
-	svnt::fiber::fin_global();
 	return NBR_OK;
 }
 
@@ -698,6 +736,15 @@ int fiber_test(int argc, char *argv[])
 	TEST((r = EXEC_THREAD(thp, fiber_test_thread, ctx, true, NULL)) < 0,
 		"fiber test thread create fail (%d)\n", r);
 	nbr_thpool_destroy(thp);
+	
+	m_thevmap.fin();
+	test_conn::m_pktmap.fin();
+	mstr::fiber::fin_global();
+	svnt::fiber::fin_global();
+	ctx.m_mnd.fin();
+	ctx.m_snd2.fin();
+	ctx.m_snd.fin();
+
 	return ctx.result();
 }
 

@@ -20,7 +20,9 @@ public:
 public:
 	pollret poll(UTIME ut, bool from_worker) {
 		/* check timeout */
-		app().ff().poll(time(NULL));
+		if (from_worker) {
+			app().ff().poll(time(NULL));
+		}
 		return super::poll(ut, from_worker);
 	}
 	void fin()						{}
@@ -31,6 +33,13 @@ public:
 	}
 	int on_event(char *p, int l) {
 		return app().ff().recv((class conn *)this, p, l, true);
+	}
+};
+
+class csession : public session {
+public:
+	int on_recv(char *p, int l) {
+		return app().ff().recv((class conn *)this, p, l, false);
 	}
 };
 
@@ -77,9 +86,12 @@ base::factory *
 pfms::create_factory(const char *sname)
 {
 	if (strcmp(sname, "clnt") == 0) {
-		return new base::factory_impl<svnt::session>;
+		return new base::factory_impl<svnt::csession>;
 	}
 	if (strcmp(sname, "svnt") == 0) {
+		return new base::factory_impl<svnt::session>;
+	}
+	if (strcmp(sname, "be") == 0) {
 		base::factory_impl<svnt::session> *fc =
 				new base::factory_impl<svnt::session>;
 		conn_pool_impl *cpi = (conn_pool_impl *)fc;
@@ -113,7 +125,7 @@ pfms::create_config(config* cl[], int size)
 			nbr_sock_send_bin16,
 			util::config::cfg_flag_server));
 	CONF_ADD(svnt::config, (
-			"svnt",
+			"be",
 			"",
 			10,
 			60, opt_expandable,
@@ -127,6 +139,21 @@ pfms::create_config(config* cl[], int size)
 			nbr_sock_rparser_bin16,
 			nbr_sock_send_bin16,
 			util::config::cfg_flag_not_set));
+	CONF_ADD(svnt::config, (
+			"svnt",
+			"0.0.0.0:8200",
+			10,
+			60, opt_expandable,
+			64 * 1024, 64 * 1024,
+			100 * 1000 * 1000, 5 * 1000 * 1000,
+			10000,	-1,
+			"TCP", "eth0",
+			1 * 100 * 1000/* 100msec task span */,
+			1 * 1000 * 1000/* after 1s, again try to connect */,
+			kernel::INFO,
+			nbr_sock_rparser_bin16,
+			nbr_sock_send_bin16,
+			util::config::cfg_flag_server));
 	CONF_ADD(cluster::finder_property, (
 			"finder",
 			"0.0.0.0:9999",
@@ -160,7 +187,7 @@ pfms::boot(int argc, char *argv[])
 		"UUID init fail (%d)\n", r);
 	INIT_OR_DIE((r = svnt::fiber::init_global(10000)) < 0, r,
 		"svnt::fiber::init fails(%d)\n", r);
-	INIT_OR_DIE(!(fc = find_factory<conn_pool_impl>("svnt")), NBR_ENOTFOUND,
+	INIT_OR_DIE(!(fc = find_factory<conn_pool_impl>("be")), NBR_ENOTFOUND,
 		"conn_pool not found (%p)\n", fc);
 	INIT_OR_DIE(!(fdr = find_factory<svnt::finder_factory>("finder")), NBR_ENOTFOUND,
 		"conn_pool not found (%p)\n", fc);

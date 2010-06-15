@@ -30,14 +30,21 @@ public:
 	void fin()						{}
 	int on_open(const config &cfg) {
 		if (m_test_mode) {
+			if (!app().ff().ffutil::initialized() && !app().ff().init_tls()) {
+				ASSERT(false);
+				return NBR_EINVAL;
+			}
 			int r;
 			UUID uuid;
+			address a;
 			serializer &sr = app().ff().sr();
+			PREPARE_PACK(sr);
 			if ((r = rpc::node_ctrl_cmd::add::pack_header(
 				sr, app().ff().new_msgid(),
 				m_test_world_id, 9/* rtkonline */,
-				(const char *)addr(), addr().len(),
-				"", uuid, "mstr/ll/rtkonline/main.lua",
+				super::node_data()->iden,
+				strlen(super::node_data()->iden),
+				"", uuid, "svnt/ll/rtkonline/main.lua",
 				0, NULL)) < 0) {
 				ASSERT(false);
 				return r;
@@ -94,17 +101,21 @@ public:
 config::config(BASE_CONFIG_PLIST) : super(BASE_CONFIG_CALL) {}
 }
 pfmm *mstr::session::m_daemon = NULL;
+#if defined(_DEBUG)
+bool mstr::session::m_test_mode = true;
+#else
 bool mstr::session::m_test_mode = false;
+#endif
 char mstr::session::m_test_world_id[] = "rtkonline";
 }
 
 base::factory *
 pfmm::create_factory(const char *sname)
 {
-	if (strcmp(sname, "mstr") == 0) {
+	if (strcmp(sname, "be") == 0) {
 		return new base::factory_impl<mstr::msession>;
 	}
-	if (strcmp(sname, "svnt") == 0) {
+	if (strcmp(sname, "mstr") == 0) {
 		base::factory_impl<mstr::session> *fc =
 				new base::factory_impl<mstr::session>;
 		conn_pool_impl *cpi = (conn_pool_impl *)fc;
@@ -123,10 +134,10 @@ pfmm::create_config(config* cl[], int size)
 {
 	CONF_START(cl);
 	CONF_ADD(base::config, (
-			"mstr",
+			"be",
 			"",
 			10,
-			60, opt_not_set,
+			60, opt_expandable,
 			64 * 1024, 64 * 1024,
 			0, 0,
 			10000,	-1,
@@ -138,7 +149,7 @@ pfmm::create_config(config* cl[], int size)
 			nbr_sock_send_bin16,
 			util::config::cfg_flag_not_set));
 	CONF_ADD(mstr::config, (
-			"svnt",
+			"mstr",
 			"0.0.0.0:9000",
 			10,
 			60, opt_expandable,
@@ -190,7 +201,7 @@ pfmm::boot(int argc, char *argv[])
 		"UUID init fail (%d)\n", r);
 	INIT_OR_DIE((r = mstr::fiber::init_global(10000, "mstr/db/al.tch")) < 0, r,
 		"mstr::fiber::init fails(%d)\n", r);
-	INIT_OR_DIE(!(fc = find_factory<conn_pool_impl>("svnt")), NBR_ENOTFOUND, 
+	INIT_OR_DIE(!(fc = find_factory<conn_pool_impl>("mstr")), NBR_ENOTFOUND,
 		"conn_pool not found (%p)\n", fc);
 	INIT_OR_DIE(!(fdr = find_factory<mstr::finder_factory>("finder")), NBR_ENOTFOUND,
 		"conn_pool not found (%p)\n", fc);

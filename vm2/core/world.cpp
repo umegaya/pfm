@@ -54,26 +54,53 @@ retry:
 	return (void *)c;
 }
 
-CHNODE *world::add_node(const address &addr)
+/* for servant : from addr string (not active connection) */
+const CHNODE *world::add_node(const char *a)
 {
-	CHNODE *n;
-	TRACE("addnode: <%s>\n", (const char *)addr);
-	ASSERT(((const char *)addr)[0] != '\0');
-	if ((n = m_nodes.find(addr))) { return n; }
-	if (!(n = m_nodes.create(addr))) { return NULL; }
-	nbr_conhash_set_node(n, addr, vnode_replicate_num);
+	const CHNODE *n;
+	map<const CHNODE *,const char *>::iterator i;
+	connector_factory::failover_chain *ch;
+	conn *c;
+	if (!(ch = m_cf->insert(a, NULL))) { ASSERT(false); return NULL; }
+	c = ch->m_s;
+	if (!c->has_node_data()) {
+		c->set_node_data(a, vnode_replicate_num);
+	}
+	ASSERT(strcmp(a, c->node_data()->iden) == 0);
+	TRACE("addnode: <%s:%p>\n", (const char *)c->node_data()->iden, c);
+	if ((n = m_nodes.find(a))) { return n; }
+	if ((i = m_nodes.insert(c->node_data(), a)) == m_nodes.end()) { return NULL; }
+	n = &(*i);
 	int r = add_node(*n);
 	if (r < 0 && r != NBR_EALREADY) {
 		del_node(*n);
-		m_nodes.erase(addr);
+		m_nodes.erase(a);
 		return NULL;
 	}
 	return n;
 }
 
-int world::del_node(const address &addr)
+/* for master : from connection (active) */
+const CHNODE *world::add_node(const conn &c)
 {
-	CHNODE *n = m_nodes.find(addr);
+	const CHNODE *n;
+	map<const CHNODE *, const char *>::iterator i;
+	TRACE("addnode: <%s:%p>\n", (const char *)c.node_data()->iden, &c);
+	if ((n = m_nodes.find(c.addr()))) { return n; }
+	if ((i = m_nodes.insert(c.node_data(), c.addr())) == m_nodes.end()) { return NULL; }
+	n = &(*i);
+	int r = add_node(*n);
+	if (r < 0 && r != NBR_EALREADY) {
+		del_node(*n);
+		m_nodes.erase(c.addr());
+		return NULL;
+	}
+	return n;
+}
+
+int world::del_node(const char *a)
+{
+	const CHNODE *n = m_nodes.find(a);
 	if (!n) {
 		ASSERT(false);
 		return NBR_ENOTFOUND;
@@ -81,7 +108,7 @@ int world::del_node(const address &addr)
 	else {
 		del_node(*n);
 	}
-	m_nodes.erase(addr);
+	m_nodes.erase(a);
 	return NBR_OK;
 }
 

@@ -149,6 +149,10 @@ protected:	/** DUMMY CALLBACKS **/
 	{ ASSERT(0); return NBR_ENOTSUPPORT; }
 	int node_ctrl_vm_deploy_resume(class world *, rpc::response &, serializer &)
 	{ ASSERT(0); return NBR_ENOTSUPPORT; }
+	int node_ctrl_regist(class world *, rpc::node_ctrl_cmd::regist &, serializer &)
+	{ ASSERT(0); return NBR_ENOTSUPPORT; }
+	int node_ctrl_regist_resume(class world *, rpc::response &, serializer &)
+	{ ASSERT(0); return NBR_ENOTSUPPORT; }
 };
 namespace rpc {
 class basic_fiber : public fiber {
@@ -354,7 +358,7 @@ fiber_factory<FB>::resume(FROM from, rpc::response &res)
 	if (!f) {	/* would be destroyed by timeout or error */
 		return NBR_ENOTFOUND;
 	}
-	TRACE("resume: %u/%p/%p/%p\n", res.msgid(), &m_fm, f, f->yld());
+	//TRACE("resume: %u/%p/%p/%p\n", res.msgid(), &m_fm, f, f->yld());
 	ASSERT(f->yld());
 	if (f->yld()->reply(from, res) < 0) {
 		return NBR_OK;	/* wait for reply */
@@ -362,7 +366,7 @@ fiber_factory<FB>::resume(FROM from, rpc::response &res)
 	fiber_unregister(res.msgid());
 	int r = f->resume(*this, res);
 	if (!f->yielded()) {
-		TRACE("finish: %u/%p/%p/%p\n", res.msgid(), &m_fm, f, f->yld());
+		//TRACE("finish: %u/%p/%p/%p\n", res.msgid(), &m_fm, f, f->yld());
 		f->fin();
 		fiber_destroy(f);
 	}
@@ -553,6 +557,9 @@ int fiber::call_node_ctrl(FB *fb, rpc::request &req)
 		case rpc::node_ctrl_request::vm_deploy:
 			r = fb->node_ctrl_vm_deploy(w, ncr, ff().sr());
 			break;
+		case rpc::node_ctrl_request::regist:
+			r = fb->node_ctrl_regist(w, ncr, ff().sr());
+			break;
 		}
 		} break;
 	default:
@@ -594,6 +601,9 @@ int fiber::resume_node_ctrl(FB *fb, rpc::response &res)
 		break;
 	case rpc::node_ctrl_request::vm_deploy:
 		r = fb->node_ctrl_vm_deploy_resume(w, res, ff().sr());
+		break;
+	case rpc::node_ctrl_request::regist:
+		r = fb->node_ctrl_regist_resume(w, res, ff().sr());
 		break;
 	}
 	if (r < 0) {
@@ -691,6 +701,7 @@ public:
 	int node_ctrl_list_resume(class world *, rpc::response &, serializer &);
 	int node_ctrl_deploy(class world *, rpc::node_ctrl_cmd::deploy &, serializer &);
 	int node_ctrl_deploy_resume(class world *, rpc::response &, serializer &);
+	int node_ctrl_regist(class world *, rpc::node_ctrl_cmd::regist &, serializer &);
 };
 }
 
@@ -740,7 +751,8 @@ public:
 	int node_ctrl_vm_deploy(class world *,
 		rpc::node_ctrl_cmd::vm_deploy &, serializer &);
 	int node_ctrl_vm_deploy_resume(class world *, rpc::response &, serializer &);
-
+	int node_ctrl_regist(class world *, rpc::node_ctrl_cmd::regist &, serializer &);
+	int node_ctrl_regist_resume(class world *, rpc::response &, serializer &);
 };
 }
 
