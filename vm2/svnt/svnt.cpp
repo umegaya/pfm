@@ -49,6 +49,7 @@ class besession : public session {
 public:
 	typedef session super;
 	void fin() {
+		TRACE("be session destroyed (%s)\n", (const char *)addr());
 		app().ff().wf().cf()->del_failover_chain(addr());
 	}
 	bool master_session() const { return !has_node_data(); }

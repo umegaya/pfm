@@ -88,6 +88,7 @@ public:
 	}
 	world_factory() : pmap<world, world_id>() {}
 	~world_factory() { super::fin(); }
+	inline bool load(int max_node, int max_replica);
 	class connector_factory *cf() { return m_cf; }
 	void set_cf(class connector_factory *cf) { m_cf = cf; }
 	iterator begin() { return super::begin(); }
@@ -121,6 +122,26 @@ public:
 		return w->request(msgid, uuid, sr);
 	}
 };
+class world_loader {
+	class world_factory &m_wf;
+	int m_max_node, m_max_replica;
+public:
+	world_loader(class world_factory &wf,
+		int max_node, int max_replica) :
+		m_wf(wf), m_max_node(max_node),
+		m_max_replica(max_replica) {}
+	int operator () (const char *k, int ksz) {
+		world *w = m_wf.create(k, m_max_node, m_max_replica);
+		if (!w) { return NBR_ENOTFOUND; }
+		return NBR_OK;
+	}
+};
+
+inline bool world_factory::load(int max_node, int max_replica) {
+	world_loader ldr(*this, max_node, max_replica);
+	return super::iterate(ldr);
+}
+
 }
 
 #endif

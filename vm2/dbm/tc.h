@@ -3,6 +3,7 @@
 
 #include <tchdb.h>
 #include "nbr.h"
+#include <tcutil.h>
 
 /* tokyocabinet */
 class tc {
@@ -76,6 +77,18 @@ public:
 	inline bool del(const void *k, int kl) {
 		ASSERT(m_db);
 		return tchdbout(m_db, k, kl);
+	}
+	template <class FUNC>
+	bool iterate(FUNC fn) {
+		if (!tchdbiterinit(m_db)) { return false; }
+		char *k; int ksz;
+		while ((k = (char *)tchdbiternext(m_db, &ksz))) {
+			if (fn(k, ksz) < 0) {
+				return false;
+			}
+			tcfree(k);
+		}
+		return true;
 	}
 };
 

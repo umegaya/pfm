@@ -129,6 +129,10 @@ public:
 			super::erase(k);
 		}
 	}
+	template <class FUNC>
+	bool iterate(FUNC fn) {
+		return m_db.iterate<FUNC>(fn);
+	}
 };
 
 }
