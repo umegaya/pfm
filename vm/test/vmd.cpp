@@ -739,9 +739,10 @@ vmd::create_config(config *cl[], int sz)
 }
 
 void
-vmd::on_worker_event(THREAD from, THREAD to, char *p, size_t l)
+vmd::on_worker_event(SWKFROM *f, THREAD to, char *p, size_t l)
 {
 	int ntype = vmdmstr::vm_msg::stype(*p);
+	THREAD from = f->p;
 	ASSERT(ntype >= 0);
 	switch(ntype) {
 	case vmd_session_master:

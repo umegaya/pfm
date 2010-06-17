@@ -18,6 +18,7 @@ public:
 	session() : super() {}
 	~session() {}
 	static class pfmm &app() { return *m_daemon; }
+	static int node_delete_cb(serializer &) { return NBR_OK; }
 public:
 	pollret poll(UTIME ut, bool from_worker) {
 		/* check timeout */
@@ -52,7 +53,7 @@ public:
 					ASSERT(false);
 					continue;
 				}
-				if ((r = app().ff().run_fiber(sr.p(), sr.len())) < 0) {
+				if ((r = app().ff().run_fiber(node_delete_cb, sr.p(), sr.len())) < 0) {
 					ASSERT(false);
 					continue;
 				}
@@ -71,6 +72,14 @@ public:
 
 class msession : public session {
 public:
+	static int node_regist_cb(serializer &sr) {
+		rpc::response res;
+		PREPARE_UNPACK(sr);
+		if (sr.unpack(res) > 0 && res.success()) {
+			TRACE("node regist success\n");
+		}
+		return NBR_OK;
+	}
 	int on_open(const config &cfg) {
 		if (!app().ff().ffutil::initialized() && !app().ff().init_tls()) {
 			ASSERT(false);
@@ -87,7 +96,7 @@ public:
 			ASSERT(false);
 			return r;
 		}
-		if ((r = app().ff().run_fiber(sr.p(), sr.len())) < 0) {
+		if ((r = app().ff().run_fiber(node_regist_cb, sr.p(), sr.len())) < 0) {
 			ASSERT(false);
 			return r;
 		}
@@ -212,7 +221,7 @@ int
 pfmm::boot(int argc, char *argv[])
 {
 	mstr::session::m_daemon = this;
-	if (argc > 1 && strncmp(argv[1], "--test=", sizeof("--test="))) {
+	if (argc > 1 && 0 == strncmp(argv[1], "--test=", sizeof("--test="))) {
 		int tmode;
 		SAFETY_ATOI(argv[1] + sizeof("--test="), tmode, int);
 		mstr::session::m_test_mode = (tmode != 0);

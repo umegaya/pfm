@@ -274,14 +274,15 @@ public:
 		add_stype(p, m_type);
 		//ASSERT(((U8)(*p)) != 0xCC && ((U8)(*p)) != 0x33);
 		ASSERT(m_type == ((U32)S::vmd_session_type));
+		SWKFROM from = { 0, m_from };
 #if defined(_DEBUG)
-		int r = m_to ? nbr_sock_worker_event(m_from, m_to, p, l) :
-				nbr_sock_worker_bcast_event(m_from, p, l);
+		int r = m_to ? nbr_sock_worker_event(&from, m_to, p, l) :
+				nbr_sock_worker_bcast_event(&from, p, l);
 		ASSERT(r > 0);
 		return r;
 #else
-		return m_to ? nbr_sock_worker_event(m_from, m_to, p, l) :
-				nbr_sock_worker_bcast_event(m_from, p, l);
+		return m_to ? nbr_sock_worker_event(&from, m_to, p, l) :
+				nbr_sock_worker_bcast_event(&from, p, l);
 #endif
 	}
 };

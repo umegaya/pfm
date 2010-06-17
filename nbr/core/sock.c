@@ -146,7 +146,7 @@ typedef struct 	sockevent
 	union {
 		SOCK		sk;
 		skmdata_t 	*skm;
-		struct { THREAD thrd; void *p; } th;
+		SWKFROM		wkd;
 	};
 	U16			type, padd;
 	char		data[0];
@@ -157,7 +157,7 @@ typedef struct 	sockjob
 	THREAD		thrd;		/* thread object to process this queue */
 	MUTEX		lk;		/* inter thread data exchange */
 	void		*p;			/* application defined parameter to worker */
-	void		(*on_event)(THREAD, THREAD, char *, size_t);/* thread event cb */
+	void		(*on_event)(SWKFROM*, THREAD, char *, size_t);/* thread event cb */
 	int			active,sleep;/* thread need to active/now sleep? */
 	sockdata_t	*exec;		/* list of sockdata which should handle with this task */
 	sockdata_t	*free;		/* list of sockdata which should free by main thread */
@@ -466,7 +466,7 @@ sockbuf_set_mgrevent(sockbuf_t *skb, SOCKMGR skm, int type, char *data, int len)
 }
 
 NBR_INLINE int
-sockbuf_worker_event(sockbuf_t *skb, THREAD from, char *data, int len)
+sockbuf_worker_event(sockbuf_t *skb, SWKFROM *from, char *data, int len)
 {
 	/* caution: len is not actual length of data. but it should be
 	 * the length which is written by ccb func (if ccb != NULL) */
@@ -476,8 +476,8 @@ sockbuf_worker_event(sockbuf_t *skb, THREAD from, char *data, int len)
 		SOCK_ERROUT(ERROR,SHORT,"setevent:%d,%d,%d",dlen,skb->blen,skb->mlen);
 		return NBR_ESHORT;
 	}
-	e->th.p = NULL;	/* hack. separate normal sock event(in sock_process_event) */
-	e->th.thrd = from;
+	e->wkd.type = from->type;
+	e->wkd.p = from->p;
 	e->type = SOCK_EVENT_WORKER;
 	e->len = dlen;
 	nbr_mem_copy(e->data, data, len);
@@ -610,7 +610,7 @@ error:
 }
 
 NBR_INLINE int
-sock_push_worker_event(THREAD from, THREAD to, char *data, int len)
+sock_push_worker_event(SWKFROM *from, THREAD to, char *data, int len)
 {
 	sockjob_t *j;
 	int r;
@@ -885,21 +885,17 @@ sock_handshake(sockdata_t *skd)
 NBR_INLINE void
 sockjob_process_event(sockjob_t *j, sockevent_t *e)
 {
+#define INVALIDATE_SOCK(__skd, __e) if (!__skd || __skd->serial != __e->sk.s) { \
+								goto invalid_sock; }
 	int dlen;
 	sockdata_t *skd = e->sk.p;
-	if (!skd || skd->serial != e->sk.s) {
-		if (e->type == SOCK_EVENT_WORKER && j->on_event) {
-			j->on_event(e->th.thrd, j->thrd, e->data, (e->len - sizeof(*e)));
-			return;
-		}
-		TRACE("old event %p %p %u %u\n", skd, skd->thrd, skd->serial, e->sk.s);
-		return;
-	}
 	switch(e->type) {
 	case SOCK_EVENT_CLOSE:
+		INVALIDATE_SOCK(skd, e);
 		sock_set_close(skd, GET_32(e->data));
 		break;
 	case SOCK_EVENT_ADDSOCK:
+		INVALIDATE_SOCK(skd, e);
 		skd->next = j->exec;
 		j->exec = skd;
 		ASSERT(skd->thrd == j->thrd);
@@ -908,6 +904,7 @@ sockjob_process_event(sockjob_t *j, sockevent_t *e)
 		}
 		break;
 	case SOCK_EVENT_SEND:
+		INVALIDATE_SOCK(skd, e);
 		dlen = (e->len - sizeof(*e));
 		if (sock_wb_remain(skd->skm, skd) >= dlen) {
 //			TRACE("%u: sock_event_send: to %p, wb: %u->", getpid(), skd, skd->nwb);
@@ -919,11 +916,13 @@ sockjob_process_event(sockjob_t *j, sockevent_t *e)
 		else { sock_set_close(skd, CLOSED_BY_ERROR); }
 		break;
 	case SOCK_EVENT_APP:
+		INVALIDATE_SOCK(skd, e);
 		dlen = (e->len - sizeof(*e));
 		//TRACE("sock_event_app: to %p, %ubyte\n", skd, dlen);
 		skd->skm->on_event(e->sk, (char *)e->data, dlen);
 		break;
 	case SOCK_EVENT_EPOLL:
+		INVALIDATE_SOCK(skd, e);
 		ASSERT((e->len - sizeof(*e)) == sizeof(U32));
 		skd->events |= GET_32(e->data);
 		if (sock_error(skd)) {
@@ -936,6 +935,7 @@ sockjob_process_event(sockjob_t *j, sockevent_t *e)
 //		TRACE("%u: epoll skd(%p):ev=%08x %08x\n", getpid(), skd, skd->events, GET_32(e->data));
 		break;
 	case SOCK_EVENT_DGRAM:
+		INVALIDATE_SOCK(skd, e);
 		dlen = (e->len - sizeof(*e));
 		skd->access = nbr_clock();
 		if (sock_rb_remain(skd->skm, skd) >= dlen) {
@@ -948,7 +948,16 @@ sockjob_process_event(sockjob_t *j, sockevent_t *e)
 			sock_set_close(skd, CLOSED_BY_ERROR);
 		}
 		break;
+	case SOCK_EVENT_WORKER:
+		if (j->on_event) {
+			j->on_event(&(e->wkd), j->thrd, e->data, (e->len - sizeof(*e)));
+		}
+		break;
 	}
+	return;
+invalid_sock:
+	TRACE("old event %p %p %u %u\n", skd, skd->thrd, skd->serial, e->sk.s);
+	return;
 }
 
 void *
@@ -1208,7 +1217,7 @@ nbr_sock_get_worker_data(THREAD th)
 
 NBR_API int
 nbr_sock_set_worker_data(THREAD th, void *p,
-		void (*on_event)(THREAD, THREAD, char *, size_t))
+		void (*on_event)(SWKFROM*, THREAD, char *, size_t))
 {
 	ASSERT(th);
 	sockjob_t *j = nbr_thread_get_data(th);
@@ -1221,7 +1230,7 @@ nbr_sock_set_worker_data(THREAD th, void *p,
 }
 
 NBR_API int
-nbr_sock_worker_bcast_event(THREAD from, char *p, size_t l)
+nbr_sock_worker_bcast_event(SWKFROM *from, char *p, size_t l)
 {
 	int i, r;
 	for (i = 0; i < g_sock.jobmax; i++) {
@@ -1234,7 +1243,7 @@ nbr_sock_worker_bcast_event(THREAD from, char *p, size_t l)
 
 
 NBR_API int
-nbr_sock_worker_event(THREAD from, THREAD to, char *p, size_t l)
+nbr_sock_worker_event(SWKFROM *from, THREAD to, char *p, size_t l)
 {
 	return sock_push_worker_event(from, to, p, l);
 }

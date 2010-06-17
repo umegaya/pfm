@@ -119,7 +119,7 @@ struct test_context {
 	}
 };
 
-static void thevent(THREAD from, THREAD to, char *p, size_t l);
+static void thevent(SWKFROM *frm, THREAD to, char *p, size_t l);
 int init_node_data(node_data &d, const char *a, int type, char *argv[])
 {
 	int r;
@@ -242,7 +242,7 @@ static void emit_msg_return() {
 	TRACE("emit: %p: cnt = %u\n", g_context, g_context->n_return);
 }
 static map<packet, U64> m_thevmap;
-static void thevent(THREAD from, THREAD to, char *p, size_t l) {
+static void thevent(SWKFROM *f, THREAD to, char *p, size_t l) {
 	packet *pkt = m_thevmap.create((U64)to);
 	if (!pkt) { return; }
 	TTRACE("thev %u byte to %p\n", l, pkt->m_th = to);

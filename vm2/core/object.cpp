@@ -2,6 +2,7 @@
 #include "connector.h"
 #include "world.h"
 #include "ll.h"
+#include "fiber.h"
 
 using namespace pfm;
 
@@ -25,8 +26,9 @@ int object::request(MSGID msgid, ll *vm, serializer &sr)
 			ASSERT(false);
 			return NBR_EINVAL;
 		}
+		SWKFROM from = { fiber::from_thread, vm->thrd() };
 		return nbr_sock_worker_event(
-			vm->thrd(), m_vm->thrd(), sr.p(), sr.len());
+			&from, m_vm->thrd(), sr.p(), sr.len());
 	}
 	return m_wld->request(msgid, uuid(), sr);
 }

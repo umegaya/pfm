@@ -32,6 +32,7 @@ enum {
 enum node_type {
 	servant_node,
 	master_node,
+	client_node,
 	test_servant_node,
 };
 

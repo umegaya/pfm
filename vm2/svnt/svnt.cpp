@@ -52,6 +52,10 @@ public:
 		TRACE("be session destroyed (%s)\n", (const char *)addr());
 		app().ff().wf().cf()->del_failover_chain(addr());
 	}
+	static int node_regist_cb(serializer &sr) { 
+		TRACE("node regist finish\n"); 
+		return NBR_OK; 
+	}
 	bool master_session() const { return !has_node_data(); }
 	int regist_node() {
 		if (!app().ff().ffutil::initialized() && !app().ff().init_tls()) {
@@ -69,7 +73,7 @@ public:
 			ASSERT(false);
 			return r;
 		}
-		if ((r = app().ff().run_fiber(sr.p(), sr.len())) < 0) {
+		if ((r = app().ff().run_fiber(node_regist_cb, sr.p(), sr.len())) < 0) {
 			ASSERT(false);
 			return r;
 		}
@@ -98,6 +102,10 @@ public:
 	int init(const config &cfg) {
 		return cluster::finder_factory::init(cfg, on_recv<finder>);
 	}
+	static int node_inquiry_cb(serializer &sr) { 
+		TRACE("node_inquery finish \n");
+		return NBR_OK;
+	}
 	void poll(UTIME ut) {
 		if (session::app().ff().wf().cf()->backend_enable()) {
 			return;
@@ -106,7 +114,7 @@ public:
 		PREPARE_PACK(sr);
 		rpc::node_inquiry_request::pack_header(
 			sr, session::app().ff().new_msgid(), servant_node);
-		session::app().ff().run_fiber(sr.p(), sr.len());
+		session::app().ff().run_fiber(node_inquiry_cb, sr.p(), sr.len());
 	}
 };
 
@@ -223,7 +231,7 @@ int
 pfms::boot(int argc, char *argv[])
 {
 	svnt::session::m_daemon = this;
-	if (argc > 1 && strncmp(argv[1], "--test=", sizeof("--test="))) {
+	if (argc > 1 && 0 == strncmp(argv[1], "--test=", sizeof("--test="))) {
 		int tmode;
 		SAFETY_ATOI(argv[1] + sizeof("--test="), tmode, int);
 		svnt::session::m_test_mode = (tmode != 0);

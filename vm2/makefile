@@ -24,9 +24,10 @@ NBRCOREDIR = $(NBRDIR)/core
 SFCCOREDIR = $(SFCDIR)/core
 SFCLIBDIR = $(SFCDIR)/lib
 LIBPFX = pfm
+SVPFX = pfm
 COREFILE = core.*
 LIBS = -L. -L./lib -L$(NBRDIR) -L$(SFCDIR) -lsfc -lnbr
-INCS = -I. -Icore -Ilib -Itest -I$(NBRCOREDIR) -I$(SFCCOREDIR) -I$(SFCLIBDIR)
+INCS = -I. -Icore -Ilib -Itest -Iclnt -I$(NBRCOREDIR) -I$(SFCCOREDIR) -I$(SFCLIBDIR)
 DEPS = dep
 OBJS = obj
 TOBJS = tobj
@@ -47,7 +48,7 @@ MOBJS = $(MSRCS:%.cpp=$(OBJS)/%.o)
 MDEPS = $(MSRCS:%.cpp=$(DEPS)/%.d)
 MREQLIBS = tokyocabinet z bz2 pthread rt m ssl crypto $(LUA) msgpack
 MLIBS = $(foreach lib,$(MREQLIBS),$(shell echo "-l$(lib)"))
-MASTER = pfmm
+MASTER = $(SVPFX)m
 
 #-----------------------------------------------------------------------
 #	servant
@@ -58,7 +59,20 @@ SOBJS = $(SSRCS:%.cpp=$(OBJS)/%.o)
 SDEPS = $(SSRCS:%.cpp=$(DEPS)/%.d)
 SREQLIBS = tokyocabinet z bz2 pthread rt m ssl crypto $(LUA) msgpack
 SLIBS = $(foreach lib,$(SREQLIBS),$(shell echo "-l$(lib)"))
-SERVANT = pfms
+SERVANT = $(SVPFX)s
+
+#-----------------------------------------------------------------------
+#	client
+#-----------------------------------------------------------------------
+CDIR = clnt
+CLIENT = $(SVPFX)c
+CLIBSRCS = $(CDIR)/clnt.cpp
+CSRCS = $(CDIR)/main.cpp
+CLIBOBJS = $(CLIBSRCS:%.cpp=$(OBJS)/%.o)
+COBJS = $(CSRCS:%.cpp=$(OBJS)/%.o)
+CDEPS = $(CSRCS:%.cpp=$(DEPS)/%.d) $(CLIBSRCS:%.cpp=$(DEPS)/%.d)
+CREQLIBS = tokyocabinet z bz2 pthread rt m ssl crypto $(LUA) msgpack
+CLIBS = $(foreach lib,$(CREQLIBS),$(shell echo "-l$(lib)"))
 
 #-----------------------------------------------------------------------
 #	test
@@ -108,6 +122,10 @@ $(OBJS)/$(MDIR)/%.o: $(MDIR)/%.cpp
 $(OBJS)/$(SDIR)/%.o: $(SDIR)/%.cpp
 	@mkdir -p $(OBJS)/$(SDIR)
 	$(CC) $(CFLAG) $(INCS) -c -o $@ $<
+	
+$(OBJS)/$(CDIR)/%.o: $(CDIR)/%.cpp
+	@mkdir -p $(OBJS)/$(CDIR)
+	$(CC) $(CFLAG) $(INCS) -c -o $@ $<
 
 $(TOBJS)/$(TESTDIR)/%.o: $(TESTDIR)/%.cpp
 	@mkdir -p $(TOBJS)/$(TESTDIR)
@@ -154,6 +172,11 @@ $(DEPS)/$(MDIR)/%.d: $(MDIR)/%.cpp
 	@mkdir -p $(DEPS)/$(MDIR)
 	@$(CC) $(CFLAG) $(INCS) $< -M |         \
 		sed 's:.*\.o:${OBJS}/${MDIR}/\0:' > $@
+		
+$(DEPS)/$(CDIR)/%.d: $(CDIR)/%.cpp
+	@mkdir -p $(DEPS)/$(CDIR)
+	@$(CC) $(CFLAG) $(INCS) $< -M |         \
+		sed 's:.*\.o:${OBJS}/${CDIR}/\0:' > $@
 
 $(OBJS)/%.a: 
 	@mkdir -p $(OBJS)/$(dir $<)
@@ -176,7 +199,7 @@ $(DEPS)/%.d: $(dir %)/$(notdir %).cpp
 #-----------------------------------------------------------------------
 #	make target
 #-----------------------------------------------------------------------
-all: module $(UNITTEST) $(MASTER) $(SERVANT)
+all: module $(UNITTEST) $(MASTER) $(SERVANT) $(CLIENT)
 
 test: all
 	./$(TESTDIR)/$(UNITTEST) $(RUNTEST)
@@ -186,6 +209,12 @@ $(MASTER): $(COREOBJS) $(MOBJS)
 
 $(SERVANT) : $(COREOBJS) $(SOBJS)
 	$(CC) -o $(SDIR)/$(SERVANT) $(CFLAG) $(LNKOPT) $(INCS) $(COREOBJS) $(SOBJS) $(MODULES) $(LIBS) $(SLIBS)
+	
+lib$(CLIENT).a : $(COREOBJS) $(CLIBOBJS)
+	$(AR) lib$(CLIENT).a $(COREOBJS) $(CLIBOBJS)
+	
+$(CLIENT) : lib$(CLIENT).a $(COBJS)
+	$(CC) -o $(CDIR)/$(CLIENT) $(CFLAG) $(LNKOPT) $(INCS) $(COREOBJS) $(COBJS) $(MODULES) -l$(CLIENT) $(LIBS) $(CLIBS)
 
 module: $(MODULES)
 

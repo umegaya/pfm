@@ -226,7 +226,7 @@ public:
 		vmdclnt::script *m_clnt_vm;
 	} *m_wkp;
 	int m_wks;
-	static void on_worker_event(THREAD, THREAD, char *, size_t);
+	static void on_worker_event(SWKFROM*, THREAD, char *, size_t);
 	void fin_mstr_vm();
 	void fin_svnt_vm();
 	void fin_clnt_vm();

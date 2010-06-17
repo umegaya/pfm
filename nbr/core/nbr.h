@@ -144,6 +144,11 @@ typedef struct	nbr_sock_t
 	int		s;
 	void	*p;
 }							SOCK, VSCK;
+typedef struct 	nbr_sock_worker_addr_t
+{
+	int 	type;
+	void	*p;
+}							SWKFROM;
 typedef struct	nbr_nioconf
 {
 	int epoll_timeout_ms;
@@ -382,9 +387,9 @@ NBR_API int		nbr_sock_get_worker(THREAD ths[], int n_th);
 NBR_API void	*nbr_sock_get_worker_data(THREAD th);
 NBR_API void	*nbr_sock_get_worker_data_from(SOCK sk);
 NBR_API int		nbr_sock_set_worker_data(THREAD th, void *p,
-					void (*on_event)(THREAD, THREAD, char *, size_t));
-NBR_API int		nbr_sock_worker_event(THREAD from, THREAD to, char *p, size_t l);
-NBR_API int		nbr_sock_worker_bcast_event(THREAD from, char *p, size_t l);
+					void (*on_event)(SWKFROM*, THREAD, char *, size_t));
+NBR_API int		nbr_sock_worker_event(SWKFROM *from, THREAD to, char *p, size_t l);
+NBR_API int		nbr_sock_worker_bcast_event(SWKFROM *from, char *p, size_t l);
 NBR_API int		nbr_sock_worker_is_current(SOCK sk);
 
 

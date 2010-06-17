@@ -27,7 +27,7 @@ void ffutil::clear_tls() {
 
 /* ffutil */
 int ffutil::init(int max_node, int max_replica,
-		void (*wkev)(THREAD,THREAD,char*,size_t)) {
+		void (*wkev)(SWKFROM*,THREAD,char*,size_t)) {
 	m_max_node = max_node;
 	m_max_replica = max_replica;
 	if (!m_quorums.init(world::max_world, world::max_world,
@@ -110,6 +110,11 @@ void ffutil::fin_tls()
 	m_curr = NULL;
 }
 
+int ffutil::run_fiber(conn *c, char *p, int l)
+{
+	return c->event(p, l);
+}
+
 world *ffutil::world_new(world_id wid)
 {
 	return m_wf.create(wid, m_max_node, m_max_replica);
@@ -158,8 +163,10 @@ int fiber::respond(bool err, serializer &sr)
 	if (m_test_respond) { return m_test_respond(this, err, sr); }
 #endif
 	switch(m_type) {
-	case from_thread:
-		return nbr_sock_worker_event(ff().curr(), m_thrd, sr.p(), sr.len());
+	case from_thread: {
+		SWKFROM from = { from_thread, ff().curr() };
+		return nbr_sock_worker_event(&from, m_thrd, sr.p(), sr.len());
+	}
 	case from_socket:
 		return m_socket->send(sr.p(), sr.len());
 	case from_fncall:
@@ -560,7 +567,7 @@ int mstr::fiber::node_ctrl_regist(world *w,
 				ASSERT(false);
 				goto error;
 			}
-			if ((r = ff().run_fiber(sr.p(), sr.len())) < 0) {
+			if ((r = ff().run_fiber(ff().curr(), sr.p(), sr.len())) < 0) {
 				ASSERT(false);
 				goto error;
 			}
@@ -707,7 +714,8 @@ int svnt::fiber::quorum_vote_commit(MSGID msgid,
 		yield::get_cb(quorum_vote_callback), ctx)) < 0) {
 		return r;
 	}
-	if ((r = nbr_sock_worker_bcast_event(ff().curr(), sr.p(), sr.len())) < 0) {
+	SWKFROM from = { from_thread, ff().curr() };
+	if ((r = nbr_sock_worker_bcast_event(&from, sr.p(), sr.len())) < 0) {
 		return r;
 	}
 	return NBR_OK;
@@ -752,7 +760,8 @@ int svnt::fiber::quorum_global_commit(world *w, quorum_context *ctx, int result)
 			ff().sr() << NBR_OK;
 			ff().sr().pushnil();
 		}
-		if (nbr_sock_worker_event(ff().curr(), ctx->m_reply[i].thrd,
+		SWKFROM from = { from_thread, ff().curr() };
+		if (nbr_sock_worker_event(&from, ctx->m_reply[i].thrd,
 			ff().sr().p(), ff().sr().len()) < 0) {
 			continue;
 		}
@@ -762,9 +771,11 @@ int svnt::fiber::quorum_global_commit(world *w, quorum_context *ctx, int result)
 	return NBR_OK;
 }
 
-int svnt::fiber::quorum_vote_callback(rpc::response &r, THREAD t, void *p)
+int svnt::fiber::quorum_vote_callback(rpc::response &r, SWKFROM *from, void *p)
 {
 	quorum_context *ctx = (quorum_context *)p;
+	ASSERT(from->type == fiber::from_thread);
+	THREAD t = from->p;
 	if (!r.success()) {
 		return NBR_OK;
 	}
