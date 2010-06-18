@@ -8,11 +8,11 @@ if (argc < 2 || strcmp("any", argv[1]) == 0 || 	\
 	fprintf(stderr, #type "_test: start\n");		\
 	if ((r = type##_test(argc, argv)) < 0) { 		\
 		fprintf(stderr, #type "_test: fail (%d)\n", r); 	\
+		return r;					\
 	} 	\
 	else {	\
 		fprintf(stderr, #type "_test: pass\n"); \
 	}	\
-	return r;						\
 }							\
 
 int main(int argc, char *argv[])

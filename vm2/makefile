@@ -43,9 +43,12 @@ endif
 #	master
 #-----------------------------------------------------------------------
 MDIR = mstr
-MSRCS = $(shell find $(MDIR) -regex .*\\.cpp$$)
-MOBJS = $(MSRCS:%.cpp=$(OBJS)/%.o)
-MDEPS = $(MSRCS:%.cpp=$(DEPS)/%.d)
+MSRCS = $(shell find $(MDIR) -regex .*\\.cpp$$ -and ! -regex .*main\\.cpp$$)
+MMAIN = $(shell find $(MDIR) -regex .*main\\.cpp$$)
+MOBJS = $(MSRCS:%.cpp=$(OBJS)/%.o) $(MMAIN:%.cpp=$(OBJS)/%.o)
+MDEPS = $(MSRCS:%.cpp=$(DEPS)/%.d) $(MMAIN:%.cpp=$(DEPS)/%.d)
+TMOBJS = $(MSRCS:%.cpp=$(TOBJS)/%.o)
+TMDEPS = $(MSRCS:%.cpp=$(TDEPS)/%.d)
 MREQLIBS = tokyocabinet z bz2 pthread rt m ssl crypto $(LUA) msgpack
 MLIBS = $(foreach lib,$(MREQLIBS),$(shell echo "-l$(lib)"))
 MASTER = $(SVPFX)m
@@ -54,9 +57,12 @@ MASTER = $(SVPFX)m
 #	servant
 #-----------------------------------------------------------------------
 SDIR = svnt
-SSRCS = $(shell find $(SDIR) -regex .*\\.cpp$$)
-SOBJS = $(SSRCS:%.cpp=$(OBJS)/%.o)
-SDEPS = $(SSRCS:%.cpp=$(DEPS)/%.d)
+SSRCS = $(shell find $(SDIR) -regex .*\\.cpp$$ -and ! -regex .*main\\.cpp$$)
+SMAIN = $(shell find $(SDIR) -regex .*main\\.cpp$$)
+SOBJS = $(SSRCS:%.cpp=$(OBJS)/%.o) $(SMAIN:%.cpp=$(OBJS)/%.o)
+SDEPS = $(SSRCS:%.cpp=$(DEPS)/%.d) $(SMAIN:%.cpp=$(DEPS)/%.d)
+TSOBJS = $(SSRCS:%.cpp=$(TOBJS)/%.o)
+TSDEPS = $(SSRCS:%.cpp=$(TDEPS)/%.d)
 SREQLIBS = tokyocabinet z bz2 pthread rt m ssl crypto $(LUA) msgpack
 SLIBS = $(foreach lib,$(SREQLIBS),$(shell echo "-l$(lib)"))
 SERVANT = $(SVPFX)s
@@ -91,8 +97,12 @@ RUNTEST = any
 #	core
 #-----------------------------------------------------------------------
 COREDIR = core
-CORESRCS = $(shell find $(COREDIR) -regex .*\\.cpp$$)
+CORECMSRCS = $(shell find $(COREDIR) -maxdepth 1 -regex .*\\.cpp$$)
+CORESVSRCS = $(shell find $(COREDIR) -mindepth 2 -regex .*\\.cpp$$)
+CORESRCS = $(CORECMSRCS) $(CORESVSRCS)
 COREOBJS = $(CORESRCS:%.cpp=$(OBJS)/%.o)
+CORECMOBJS = $(CORECMSRCS:%.cpp=$(OBJS)/%.o)
+CORESVOBJS = $(CORESVOBJS:%.cpp=$(OBJS)/%.o)
 TCOREOBJS = $(CORESRCS:%.cpp=$(TOBJS)/%.o)
 COREDEPS = $(CORESRCS:%.cpp=$(DEPS)/%.d)
 TCOREDEPS = $(CORESRCS:%.cpp=$(TDEPS)/%.d)
@@ -122,7 +132,7 @@ $(OBJS)/$(MDIR)/%.o: $(MDIR)/%.cpp
 $(OBJS)/$(SDIR)/%.o: $(SDIR)/%.cpp
 	@mkdir -p $(OBJS)/$(SDIR)
 	$(CC) $(CFLAG) $(INCS) -c -o $@ $<
-	
+
 $(OBJS)/$(CDIR)/%.o: $(CDIR)/%.cpp
 	@mkdir -p $(OBJS)/$(CDIR)
 	$(CC) $(CFLAG) $(INCS) -c -o $@ $<
@@ -133,6 +143,14 @@ $(TOBJS)/$(TESTDIR)/%.o: $(TESTDIR)/%.cpp
 
 $(TOBJS)/$(COREDIR)/%.o: $(COREDIR)/%.cpp
 	@mkdir -p $(TOBJS)/$(COREDIR)
+	$(CC) $(CFLAG) -D_TEST $(INCS) -c -o $@ $<
+
+$(TOBJS)/$(MDIR)/%.o: $(MDIR)/%.cpp
+	@mkdir -p $(TOBJS)/$(MDIR)
+	$(CC) $(CFLAG) -D_TEST $(INCS) -c -o $@ $<
+
+$(TOBJS)/$(SDIR)/%.o: $(SDIR)/%.cpp
+	@mkdir -p $(TOBJS)/$(SDIR)
 	$(CC) $(CFLAG) -D_TEST $(INCS) -c -o $@ $<
 
 $(TOBJS)/%.o:
@@ -153,10 +171,10 @@ $(DEPS)/$(COREDIR)/%.d: $(COREDIR)/%.cpp
 	@$(CC) $(CFLAG) $(INCS) $< -M |         \
 		sed 's:.*\.o:${OBJS}/${COREDIR}/\0:' > $@
 
-$(TDEPS)/$(COREDIR)/%.d: $(COREDIR)/%.cpp
-	@mkdir -p $(TDEPS)/$(COREDIR)
-	@$(CC) $(CFLAG) -D_TEST $(INCS) $< -M | 	\
-		sed 's:.*\.o:$(TOBJS)/$(COREDIR)/\0:' > $@
+$(TDEPS)/$(COREDIR)/$(MDIR)/%.d: $(COREDIR)/$(MDIR)/%.cpp
+	@mkdir -p $(DEPS)/$(COREDIR)$(MDIR)/
+	@$(CC) $(CFLAG) -D_TEST $(INCS) $< -M |         \
+		sed 's:.*\.o:${OBJS}/${COREDIR}/\0:' > $@
 
 $(TDEPS)/$(TESTDIR)/%.d: $(TESTDIR)/%.cpp
 	@mkdir -p $(TDEPS)/$(TESTDIR)
@@ -171,6 +189,16 @@ $(DEPS)/$(SDIR)/%.d: $(SDIR)/%.cpp
 $(DEPS)/$(MDIR)/%.d: $(MDIR)/%.cpp
 	@mkdir -p $(DEPS)/$(MDIR)
 	@$(CC) $(CFLAG) $(INCS) $< -M |         \
+		sed 's:.*\.o:${OBJS}/${MDIR}/\0:' > $@
+
+$(TDEPS)/$(SDIR)/%.d: $(SDIR)/%.cpp
+	@mkdir -p $(TDEPS)/$(SDIR)
+	@$(CC) $(CFLAG) -D_TEST $(INCS) $< -M |         \
+		sed 's:.*\.o:${OBJS}/${SDIR}/\0:' > $@
+
+$(TDEPS)/$(MDIR)/%.d: $(MDIR)/%.cpp
+	@mkdir -p $(TDEPS)/$(MDIR)
+	@$(CC) $(CFLAG) -D_TEST $(INCS) $< -M |         \
 		sed 's:.*\.o:${OBJS}/${MDIR}/\0:' > $@
 		
 $(DEPS)/$(CDIR)/%.d: $(CDIR)/%.cpp
@@ -210,16 +238,16 @@ $(MASTER): $(COREOBJS) $(MOBJS)
 $(SERVANT) : $(COREOBJS) $(SOBJS)
 	$(CC) -o $(SDIR)/$(SERVANT) $(CFLAG) $(LNKOPT) $(INCS) $(COREOBJS) $(SOBJS) $(MODULES) $(LIBS) $(SLIBS)
 	
-lib$(CLIENT).a : $(COREOBJS) $(CLIBOBJS)
-	$(AR) lib$(CLIENT).a $(COREOBJS) $(CLIBOBJS)
+lib$(CLIENT).a : $(CORECMOBJS) $(CLIBOBJS)
+	$(AR) lib$(CLIENT).a $(CORECMOBJS) $(CLIBOBJS)
 	
 $(CLIENT) : lib$(CLIENT).a $(COBJS)
 	$(CC) -o $(CDIR)/$(CLIENT) $(CFLAG) $(LNKOPT) $(INCS) $(COREOBJS) $(COBJS) $(MODULES) -l$(CLIENT) $(LIBS) $(CLIBS)
 
 module: $(MODULES)
 
-$(UNITTEST) : $(TESTOBJS) $(TCOREOBJS)
-	$(CC) -o $(TESTDIR)/$(UNITTEST) $(CFLAG) $(LNKOPT) $(INCS) $(TESTOBJS) $(TCOREOBJS) $(MODULES) $(LIBS) $(TESTLIBS)
+$(UNITTEST) : $(TESTOBJS) $(TCOREOBJS) $(TMOBJS) $(TSOBJS)
+	$(CC) -o $(TESTDIR)/$(UNITTEST) $(CFLAG) $(LNKOPT) $(INCS) $(TESTOBJS) $(TMOBJS) $(TSOBJS) $(TCOREOBJS) $(MODULES) $(LIBS) $(TESTLIBS)
 
 clean:
 	rm -f $(TESTOBJS) $(TESTDIR)/$(UNITTEST) $(MODULES) $(COREFILE) $(MOBJS) $(SOBJS) $(MDIR)/$(MASTER) $(SDIR)/$(SERVANT)

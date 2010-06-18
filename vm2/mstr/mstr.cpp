@@ -8,103 +8,6 @@ using namespace pfm;
 
 namespace pfm {
 namespace mstr {
-/* session */
-class session : public conn {
-public:
-	static class pfmm *m_daemon;
-	static bool m_test_mode;
-public:
-	typedef conn super;
-	session() : super() {}
-	~session() {}
-	static class pfmm &app() { return *m_daemon; }
-	static int node_delete_cb(serializer &) { return NBR_OK; }
-public:
-	pollret poll(UTIME ut, bool from_worker) {
-		/* check timeout */
-		if (from_worker) {
-			app().ff().poll(time(NULL));
-		}
-		return super::poll(ut, from_worker);
-	}
-	void fin()						{}
-	int on_open(const config &cfg) { return super::on_open(cfg); }
-	int on_close(int reason) {
-		if (has_node_data()) {
-			session::app().ff().wf().remove_node(addr());
-			world_factory::iterator wit =
-				session::app().ff().wf().begin(), tmp;
-			for (; wit != session::app().ff().wf().end(); ) {
-				if (wit->nodes().use() == 0) {
-					/* FIXME : need to notice other master nodes? */
-					tmp = wit;
-					wit = session::app().ff().wf().next(wit);
-					session::app().ff().wf().destroy(tmp->id());
-					continue;
-				}
-				int r;
-				serializer &sr = app().ff().sr();
-				PREPARE_PACK(sr);
-				if ((r = rpc::node_ctrl_cmd::del::pack_header(
-					sr, app().ff().new_msgid(),
-					wit->id(), nbr_str_length(wit->id(), max_wid),
-					node_data()->iden,
-					nbr_str_length(node_data()->iden, address::SIZE))) < 0) {
-					ASSERT(false);
-					continue;
-				}
-				if ((r = app().ff().run_fiber(node_delete_cb, sr.p(), sr.len())) < 0) {
-					ASSERT(false);
-					continue;
-				}
-				wit = session::app().ff().wf().next(wit);
-			}
-		}
-		return super::on_close(reason);
-	}
-	int on_recv(char *p, int l) {
-		return app().ff().recv((class conn *)this, p, l, true);
-	}
-	int on_event(char *p, int l) {
-		return app().ff().recv((class conn *)this, p, l, true);
-	}
-};
-
-class msession : public session {
-public:
-	static int node_regist_cb(serializer &sr) {
-		rpc::response res;
-		PREPARE_UNPACK(sr);
-		if (sr.unpack(res) > 0 && res.success()) {
-			TRACE("node regist success\n");
-		}
-		return NBR_OK;
-	}
-	int on_open(const config &cfg) {
-		if (!app().ff().ffutil::initialized() && !app().ff().init_tls()) {
-			ASSERT(false);
-			return NBR_EINVAL;
-		}
-		int r;
-		serializer &sr = app().ff().sr();
-		PREPARE_PACK(sr);
-		factory *f = app().find_factory<factory>("mstr");
-		if (!f) { return NBR_ENOTFOUND; }
-		if ((r = rpc::node_ctrl_cmd::regist::pack_header(
-			sr, app().ff().new_msgid(),
-			f->ifaddr(), f->ifaddr().len(), master_node)) < 0) {
-			ASSERT(false);
-			return r;
-		}
-		if ((r = app().ff().run_fiber(node_regist_cb, sr.p(), sr.len())) < 0) {
-			ASSERT(false);
-			return r;
-		}
-		return super::on_open(cfg);
-	}
-	int on_close(int reason) { return super::on_close(reason); }
-};
-
 /* finder */
 class finder : public cluster::finder_session {
 public:
@@ -262,5 +165,450 @@ pfmm::shutdown()
 	ff().of().fin();
 	ff().wf().fin();
 	ff().fin();
+}
+
+/* fiber logic (master mode) */
+mstr::fiber::account_list mstr::fiber::m_al;
+
+int mstr::fiber::init_global(int max_account, const char *dbpath)
+{
+	if (!m_al.init(max_account, max_account,
+		opt_threadsafe | opt_expandable, dbpath)) {
+		return NBR_EMALLOC;
+	}
+	return NBR_OK;
+}
+
+int mstr::fiber::quorum_vote_commit(world *w, MSGID msgid,
+		quorum_context *ctx, serializer &sr)
+{
+	conn *c;
+	const char *addr;
+	quorum_context::reply *rep;
+	rep = ctx->m_reply;
+	int r;
+	world::iterator i;
+	if ((r = yielding(msgid, ctx->m_rep_size,
+			yield::get_cb(quorum_vote_callback), ctx)) < 0) {
+		return r;
+	}
+	for (i = w->nodes().begin();
+		i != w->nodes().end(); i = w->nodes().next(i)) {
+		if (((U32)(rep - ctx->m_reply)) >= ctx->m_rep_size) {
+			/* during commit, new node is added */
+			return NBR_ESHORT;
+		}
+		addr = world::node_addr(*i);
+		rep->node_addr.from(addr);
+		rep++;
+		if (!(c = w->cf().get_by(addr))) {
+			return NBR_EEXPIRE;
+		}
+		if ((r = c->send(sr.p(), sr.len())) < 0) {
+			return r;
+		}
+	}
+	return NBR_OK;
+}
+mstr::fiber::quorum_context *mstr::fiber::init_context(world *w)
+{
+	quorum_context *ctx;
+	if (!(ctx = ff().quorums().create_if_not_exist(w->id()))) {
+		return NULL; /* already used */
+	}
+	TRACE("mstr::init_conext %p\n", ctx);
+	int size = w->nodes().use();
+	if (!(ctx->m_reply = new quorum_context::reply[size])) {
+		ff().quorums().erase(w->id());
+		return NULL;
+	}
+	ctx->m_rep_size = size;
+	return ctx;
+}
+
+int mstr::fiber::quorum_global_commit(world *w, quorum_context *ctx, int result)
+{
+	if (!w) {
+		ASSERT(false);
+		return NBR_ENOTFOUND;
+	}
+	for (int i = 0; i < (int)ctx->m_rep_size; i++) {
+		conn *c = w->cf().get_by(ctx->m_reply[i].node_addr);
+		/* remove from member ship? */
+		if (!c) { continue; }
+		rpc::response::pack_header(ff().sr(), ctx->m_reply[i].msgid);
+		if (result < 0) {
+			ff().sr().pushnil();
+			ff().sr() << result;
+		}
+		else {
+			ff().sr() << NBR_OK;
+			ff().sr().pushnil();
+		}
+		if (c->send(ff().sr().p(), ff().sr().len()) < 0) {
+			continue;
+		}
+	}
+	TRACE("quorum released %p/%p/%s\n", &ff().quorums(), ctx, w->id());
+	ff().quorums().erase(w->id());
+	return NBR_OK;
+}
+
+int mstr::fiber::quorum_vote_callback(rpc::response &r, class conn *c, void *p)
+{
+	quorum_context *ctx = (quorum_context *)p;
+	address a;
+	if (!r.success()) {
+		return NBR_OK;
+	}
+	for (U32 i = 0; i < ctx->m_rep_size; i++) {
+		if (0 == nbr_str_cmp(c->node_data()->iden, address::SIZE,
+			ctx->m_reply[i].node_addr, address::SIZE)) {
+			ctx->m_reply[i].msgid = r.ret();
+			ASSERT(ctx->m_reply[i].msgid != 0);
+			return NBR_OK;
+		}
+	}
+	ASSERT(false);
+	return NBR_ENOTFOUND;
+}
+
+int mstr::fiber::call_login(rpc::request &p)
+{
+	int r;
+	bool exist;
+	rpc::login_request &req = rpc::login_request::cast(p);
+	account_list::record rec = m_al.load(req.account(), exist);
+	LOG("login attempt : %s/%u\n", (const char *)req.account(), req.authdata().len());
+	if (!rec) {
+		r = NBR_ENOTFOUND;
+		goto error;
+	}
+	if (exist) {
+		/* already have an entry or login by another thread */
+		if (!rec->login(req.wid())) {
+			r = NBR_EALREADY;
+			goto error;
+		}
+	}
+	else {
+		if (!rec->login(req.wid())) {
+			r = NBR_EALREADY;
+			goto error;
+		}
+		rec->m_uuid.assign();
+		if ((r = m_al.save(rec, req.account(), true)) < 0) {
+			m_al.unload(req.account());
+			goto error;
+		}
+	}
+	char b[256];
+	LOG("login success : UUID=<%s>\n", rec->uuid().to_s(b, sizeof(b)));
+	PREPARE_PACK(ff().sr());
+	rpc::login_response::pack_header(ff().sr(), m_msgid, rec->uuid());
+	if ((r = respond(false, ff().sr())) < 0) {
+		m_al.unload(req.account());
+		goto error;
+	}
+	return NBR_OK;
+error:
+	if (r < 0) {
+		send_error(r);
+	}
+	return r;
+}
+
+int mstr::fiber::resume_login(rpc::response &res)
+{
+	return NBR_OK;
+}
+
+int mstr::fiber::call_node_inquiry(rpc::request &rq)
+{
+	int r;
+	address a, da;
+	MSGID msgid = INVALID_MSGID;
+	rpc::node_inquiry_request &req = rpc::node_inquiry_request::cast(rq);
+	if (get_socket_address(da) >= 0) {
+		LOG("node_inquiry : from %s\n", (const char *)da);
+	}
+	PREPARE_PACK(ff().sr());
+	a = ff().wf().cf()->pool().bind_addr(a);
+	if (req.node_type() == master_node) {
+		/* master find another master */
+		msgid = new_msgid();
+		if (msgid == INVALID_MSGID) {
+			r = NBR_EEXPIRE;
+			goto error;
+		}
+		if ((r = yielding(msgid)) < 0) {
+			goto error;
+		}
+		rpc::node_inquiry_response::pack_header(ff().sr(),msgid,a,a.len());
+		if ((r = ff().finder().send(ff().sr().p(), ff().sr().len())) < 0) {
+			goto error;
+		}
+	}
+	else {
+		rpc::node_inquiry_response::pack_header(ff().sr(),m_msgid,a,a.len());
+		if ((r = ff().finder().send(ff().sr().p(), ff().sr().len())) < 0) {
+			goto error;
+		}
+	}
+	return NBR_OK;
+error:
+	if (r < 0) {
+		send_error(r);
+	}
+	return r;
+}
+
+int mstr::fiber::resume_node_inquiry(rpc::response &r)
+{
+	if (r.success()) {
+		rpc::node_inquiry_response &res = rpc::node_inquiry_response::cast(r);
+		/* FIXME : prepare another connector_factory to manage master connection */
+		LOG("node_inquiry : connect to (%s)\n", (const char *)res.node_addr());
+	}
+	return NBR_OK;
+}
+
+int mstr::fiber::node_ctrl_add(world *w,
+		rpc::node_ctrl_cmd::add &req, serializer &sr)
+{
+	int r;
+	MSGID msgid = INVALID_MSGID;
+	world::iterator i;
+	conn *c = NULL;
+	char b[256];
+	quorum_context *ctx = NULL;
+	if (!w) {
+		if (!req.world_object_id().valid()) {
+			req.assign_world_object_id();
+			LOG("world UUID assigned(%s/%s)\n", (const char *)req.wid(),
+				req.world_object_id().to_s(b, sizeof(b)));
+		}
+		if (!(w = ff().world_create(req))) {
+			r = NBR_EEXPIRE;
+			goto error;
+		}
+	}
+	if (!(c = w->cf().get_by((const char *)req.node_addr()))) {
+		r = NBR_ENOTFOUND;
+		goto error;
+	}
+	if (!w->add_node(*c)) {
+		r = NBR_EEXPIRE;
+		goto error;
+	}
+	if ((r = pack_cmd_add(sr, w, req, msgid)) < 0) {
+		goto error;
+	}
+	if (!(ctx = init_context(w))) {
+		r = NBR_EMALLOC;
+		goto error;
+	}
+	ctx->m_node_addr.from(req.node_addr(), req.node_addr().len());
+	/* it will yields inside of it (if possible) */
+	if ((r = quorum_vote_commit(w, msgid, ctx, sr)) < 0) {
+		goto error;
+	}
+	return NBR_OK;
+error:
+	if (msgid != INVALID_MSGID) {
+		ff().fiber_unregister(msgid);
+	}
+	if (ctx) { ff().quorums().erase(w->id()); }
+	w->del_node(req.node_addr());
+	return r;
+}
+int mstr::fiber::node_ctrl_add_resume(world *w, rpc::response &res, serializer &sr)
+{
+	quorum_context *p = yld()->p<quorum_context>();
+
+	if (res.success()) {
+		quorum_global_commit(w, p, NBR_OK);
+		rpc::response::pack_header(sr, m_msgid);
+		sr << NBR_OK;
+		sr.pushnil();
+		return respond(false, sr);
+	}
+	else {
+		w->del_node(p->m_node_addr);
+		quorum_global_commit(w, p, res.err());
+		return res.err();
+	}
+}
+
+int mstr::fiber::node_ctrl_regist(world *w,
+		rpc::node_ctrl_cmd::regist &req, serializer &sr)
+{
+	int r;
+	address a;
+	conn *c;
+	ASSERT(!w);
+	if ((r = get_socket_address(a)) < 0) {
+		goto error;
+	}
+	if (req.node_type() != master_node) {
+		if (!(c = ff().wf().cf()->get_by_local(a))) {
+			r = NBR_ENOTFOUND;
+			goto error;
+		}
+		if (!ff().wf().cf()->insert(address(req.node_server_addr()), c)) {
+			r = NBR_EINVAL;
+			goto error;
+		}
+		c->set_node_data(req.node_server_addr(),
+				world::vnode_replicate_num);
+		/* for test, node is attached to rtkonline immediately. */
+		if (req.node_type() == test_servant_node) {
+			serializer &sr = ff().sr();
+			UUID uuid;
+			PREPARE_PACK(sr);
+			if ((r = rpc::node_ctrl_cmd::add::pack_header(
+				sr, ff().new_msgid(),
+				"rtkonline", sizeof("rtkonline") - 1,
+				c->node_data()->iden,
+				strlen(c->node_data()->iden),
+				"", uuid, "svnt/ll/rtkonline/main.lua",
+				0, NULL)) < 0) {
+				ASSERT(false);
+				goto error;
+			}
+			if ((r = ff().run_fiber(ff().curr(), sr.p(), sr.len())) < 0) {
+				ASSERT(false);
+				goto error;
+			}
+		}
+	}
+	rpc::response::pack_header(sr, m_msgid);
+	sr << NBR_OK;
+	sr.pushnil();
+	return respond(false, sr);
+error:
+	if (r < 0) {
+		address a(req.node_server_addr());
+		ff().wf().cf()->del_failover_chain(a);
+		send_error(r);
+	}
+	return r;
+}
+
+int mstr::fiber::node_ctrl_del(world *w,
+		rpc::node_ctrl_cmd::del &req, serializer &sr)
+{
+	int r;
+	quorum_context *ctx = NULL;
+	world::iterator i;
+	MSGID msgid = INVALID_MSGID;
+	if (!w) {
+		r = NBR_ENOTFOUND;
+		goto error;
+	}
+	if ((r = pack_cmd_del(sr, w, req, msgid)) < 0) {
+		goto error;
+	}
+	if (!(ctx = init_context(w))) {
+		r = NBR_EMALLOC;
+		goto error;
+	}
+	ctx->m_node_addr.from(req.node_addr(), req.node_addr().len());
+	/* it will yields inside of it (if possible) */
+	if ((r = quorum_vote_commit(w, msgid, ctx, sr)) < 0) {
+		goto error;
+	}
+	return NBR_OK;
+error:
+	if (msgid != INVALID_MSGID) {
+		ff().fiber_unregister(msgid);
+	}
+	if (ctx) { ff().quorums().erase(w->id()); }
+	return r;
+}
+int mstr::fiber::node_ctrl_del_resume(world *w, rpc::response &res, serializer &sr)
+{
+	quorum_context *p = yld()->p<quorum_context>();
+	if (res.success()) {
+		quorum_global_commit(w, p, NBR_OK);
+		rpc::response::pack_header(sr, m_msgid);
+		sr << NBR_OK;
+		sr.pushnil();
+		return respond(false, sr);
+	}
+	else {
+		w->del_node(p->m_node_addr);
+		quorum_global_commit(w, p, res.err());
+		return res.err();
+	}
+}
+
+
+int mstr::fiber::node_ctrl_list(world *w,
+		rpc::node_ctrl_cmd::list &req, serializer &sr)
+{
+	return NBR_OK;
+}
+int mstr::fiber::node_ctrl_list_resume(world *w,
+		rpc::response &res, serializer &sr)
+{
+	if (res.success()) {
+		rpc::response::pack_header(sr, m_msgid);
+		sr << NBR_OK;
+		sr.pushnil();
+		return respond(false, sr);
+	}
+	else {
+		/* TODO: rollback master node status */
+		return res.err();
+	}
+}
+
+
+int mstr::fiber::node_ctrl_deploy(world *w,
+		rpc::node_ctrl_cmd::deploy &req, serializer &sr)
+{
+	int r;
+	world::iterator i;
+	quorum_context *ctx = NULL;
+	MSGID msgid = INVALID_MSGID;
+	if (!w) {
+		r = NBR_ENOTFOUND;
+		goto error;
+	}
+	if ((r = pack_cmd_deploy(sr, w, req, msgid)) < 0) {
+		goto error;
+	}
+	if (!(ctx = init_context(w))) {
+		r = NBR_EMALLOC;
+		goto error;
+	}
+	/* it will yields inside of it (if possible) */
+	if ((r = quorum_vote_commit(w, msgid, ctx, sr)) < 0) {
+		goto error;
+	}
+	return NBR_OK;
+error:
+	if (msgid != INVALID_MSGID) {
+		ff().fiber_unregister(msgid);
+	}
+	if (ctx) { ff().quorums().erase(w->id()); }
+	return r;
+}
+int mstr::fiber::node_ctrl_deploy_resume(world *w,
+		rpc::response &res, serializer &sr)
+{
+	quorum_context *p = yld()->p<quorum_context>();
+	if (res.success()) {
+		quorum_global_commit(w, p, NBR_OK);
+		rpc::response::pack_header(sr, m_msgid);
+		sr << NBR_OK;
+		sr.pushnil();
+		return respond(false, sr);
+	}
+	else {
+		quorum_global_commit(w, p, res.err());
+		return res.err();
+	}
 }
 

@@ -645,6 +645,9 @@ public:
 	S *create(SOCK sk) {
 		return m_pool.create();
 	}
+	S *create(address &a) {
+		return m_pool.create();
+	}
 	bool init(const config &cfg, int size) {
 		if (size < 0) { size = sizeof(S); }
 		return m_pool.init(cfg.m_max_connection,

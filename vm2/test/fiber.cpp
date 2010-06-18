@@ -4,6 +4,8 @@
 #include "testutil.h"
 #include "world.h"
 #include "connector.h"
+#include "mstr/mstr.h"
+#include "svnt/svnt.h"
 
 using namespace pfm;
 
@@ -372,7 +374,8 @@ int fiber_test_add_node(test_context &ctx, int argc, char *argv[], void *p)
 			/* it will reply to main add node fiber */
 			TEST((r = sresponse(nd->m_sff->sr(), resp)) <= 0,
 				"response unpack fails (%d)\n", r);
-			TEST((r = nd->m_sff->resume_nofw(ntpit->m_th, resp)) < 0,
+			SWKFROM from = { fiber::from_thread, ntpit->m_th };
+			TEST((r = nd->m_sff->resume_nofw(&from, resp)) < 0,
 				"resume servant add node fails (%d)\n", r);
 			m_thevmap.erase((U64)ntpit->m_th);
 		}
