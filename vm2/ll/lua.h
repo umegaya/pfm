@@ -28,6 +28,10 @@ public:
 	static const char player_klass_name[];/* Player */
 	static const U32 player_klass_name_len = 6;
 	static const char world_object_name[];
+	static const U32 enter_world_proc_name_len = 5;/* enter */
+	static const char enter_world_proc_name[];
+	static const U32 login_proc_name_len = 5;/* login */
+	static const char login_proc_name[];
 public:
 	struct method {
 		const char *m_name;
@@ -46,11 +50,15 @@ public:
 		int init(class fiber *f, class lua *scr);
 		int call(rpc::ll_exec_request &req, bool trusted);
 		int call(rpc::create_object_request &req);
+		int call(rpc::authentication_request &req);
 		int call(rpc::ll_exec_response &res, const char *method);
 		int resume(rpc::ll_exec_response &res, bool packobj = false);
 		int push_world_object(class object *o);
 		static int pack_object(serializer &sr, class object &o,
 			bool packobj = false);
+		int to_stack(rpc::create_object_response &res) {
+			return to_stack(rpc::ll_exec_response::cast(res));
+		}
 	protected:
 		int respond(bool err, serializer &sr);
 		int dispatch(int argc, bool packobj);
@@ -58,12 +66,14 @@ public:
 		int to_stack(rpc::ll_exec_response &res);
 		int to_stack(rpc::ll_exec_response &res, const char *method);
 		int to_stack(rpc::create_object_request &res);
+		int to_stack(rpc::authentication_request &req);
 		int to_stack(const rpc::data &d);
 		int to_func(const rpc::data &d);
 		int from_stack(int start_id, serializer &sr, bool packobj = false);
 		int from_stack(serializer &sr, int stkid, bool packobj = false);
 		int from_func(serializer &sr);
 		int push_object(class object *o);
+		bool callable(int stkid);
 		class object *to_o(int stkid);
 		method *to_m(int stkid);
 		static class coroutine *to_co(VM vm);

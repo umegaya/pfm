@@ -28,6 +28,10 @@ public:
 		return NBR_OK;
 	}
 	static void fin_global() { m_sm.fin(); };
+	static int register_session(class csession *s, const UUID &uuid) {
+		return m_sm.insert(s, uuid) == m_sm.end() ? NBR_EEXPIRE : NBR_OK;
+	}
+	static void unregister_session(const UUID &uuid) { m_sm.erase(uuid); }
 public:
 	int respond(bool err, serializer &sr) {
 		return basic_fiber::respond<svnt::fiber>(err, sr);
@@ -112,12 +116,27 @@ public:
 };
 
 class csession : public sfc::base::session, public binprotocol {
+protected:
+	char *m_authdata;
+	int m_alen;
+	UUID m_uuid;
+	char m_acc[rpc::login_request::max_account];
 public:
 	typedef sfc::base::session super;
-	int on_recv(char *p, int l) {
-		return pfm::svnt::session::app().ff().recv(
-			(class conn *)this, p, l, false);
+	csession() : super(), m_authdata(NULL), m_alen(0), m_uuid() {}
+	~csession() { if (m_authdata) { nbr_free(m_authdata); m_authdata = NULL; } }
+	void set_account_info(const char *acc, const char *auth, int alen) {
+		nbr_str_copy(m_acc, sizeof(m_acc), acc, sizeof(m_acc));
+		m_authdata = (char *)nbr_malloc(alen);
+		memcpy(m_authdata, auth, alen);
+		m_alen = alen;
 	}
+	const char *authdata() const { return m_authdata; }
+	int alen() const { return m_alen; }
+	const UUID &player_id() const { return m_uuid; }
+	const char *account() const { return m_acc; }
+	void set_uuid(const UUID &uuid) { m_uuid = uuid; }
+	inline int on_recv(char *p, int l);
 };
 
 class besession : public session {
@@ -163,6 +182,18 @@ public:
 	}
 };
 }
+class svnt_csession : public svnt::csession {
+public:
+	static svnt_csession *cast(svnt::csession *s) {
+		return (svnt_csession *)s; }
+private:
+	svnt_csession() {}
+};
+inline int svnt::csession::on_recv(char *p, int l) {
+	return pfm::svnt::session::app().ff().recv(
+		svnt_csession::cast(this), p, l, false);
+}
+
 
 }
 

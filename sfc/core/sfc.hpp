@@ -645,7 +645,7 @@ public:
 	S *create(SOCK sk) {
 		return m_pool.create();
 	}
-	S *create(address &a) {
+	S *create(const address &a) {
 		return m_pool.create();
 	}
 	bool init(const config &cfg, int size) {
@@ -675,6 +675,7 @@ public:
 		address a;
 		return a.from(sk) > 0 ? m_pool.create(a) : NULL;
 	}
+	S *create(const address &a) { return m_pool.create(a); }
 	bool init(const config &cfg, int size) {
 		if (size < 0) { size = sizeof(S); }
 		return m_pool.init(cfg.m_max_connection, cfg.m_max_connection,
@@ -697,6 +698,7 @@ public:
 	~factory_impl() { fin(); }
 	sspool &pool() { return m_container.pool(); }
 	S* create(SOCK sk) { return m_container.create(sk); }
+	S* create(const address &a) { return m_container.create(a); }
 	bool init_pool(const config &cfg, int size = -1) {
 		return m_container.init(cfg, size); }
 	int broadcast(char *p, int l);
@@ -819,7 +821,7 @@ public: /* callback */
 		return NBR_OK;
 	}
 	int on_close(int reason)		{
-		ASSERT(reason != CLOSED_BY_TIMEOUT);
+//		ASSERT(reason != CLOSED_BY_TIMEOUT);
 		log(INFO, "%s %s(%d)\n",
 			cfg().client() ? "disconnected from" : "close",
 			(const char *)addr(), reason);

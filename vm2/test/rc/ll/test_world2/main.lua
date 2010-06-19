@@ -27,6 +27,12 @@ function Player:get_id()
 	assert(self.hoge == 123)
 	return self.id
 end
-function Player:login()
-	return self.hoge + self.id -- should be 123 + 665 => 788
+function Player:login(account, authdata)
+	print("acc = <" .. account .. ">: pass = <" .. authdata .. ">")
+	assert(account == "user")
+	assert(authdata == "password")
+end
+function Player:enter()
+	print("enter world")
+	return self.hoge + self.id -- should be 123 + 665 = 788
 end

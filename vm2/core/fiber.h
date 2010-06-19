@@ -15,6 +15,13 @@ using namespace pfm::cluster;
 template <class FB>
 class fiber_factory;
 
+typedef class __thread_object {
+	operator THREAD() { return (THREAD)this; }
+private:
+	__thread_object() {}
+	__thread_object(const __thread_object&) {}
+} *thread_ptr;
+
 class fiber {
 public:
 	enum {
@@ -24,7 +31,9 @@ public:
 		/* create_world  */
 			create_world_object = 1,
 		/* login */
-			login_wait_object_create = 1,
+			login_authentication = 1,
+			login_wait_object_create = 2,
+			login_enter_world = 3,
 		/* replicate */
 			/* no sub status */
 		/* node_ctrl */
@@ -39,6 +48,7 @@ public:
 			/* vm_init */
 	};
 	enum {
+		from_invalid = 0,
 		from_thread = 1,
 		from_socket = 2,
 		from_fncall = 3,
@@ -46,18 +56,26 @@ public:
 		from_mcasts = 5,
 		from_fiber = 6,
 		from_app = 7,
+		from_client = 8,
 	};
 	typedef int (*callback)(serializer &sr);
+	typedef U64 app_param;
 protected:
 	union {
-		THREAD		m_thrd;
+		void *p;
+		thread_ptr m_thrd;
 		class conn 	*m_socket;
+		class svnt_csession *m_client;
 		callback	m_cb;
 		class finder_session *m_finder_r;
 		class finder_factory *m_finder_s;
 		class fiber *m_fiber;
-		U64	m_param;
+		app_param	m_param;
 	};
+	union {
+		SOCK m_sk;		/* socket,client,mcastr */
+		MSGID m_msgid;	/* fiber */
+	} m_validity;
 	union {
 		ll::coroutine *co;	/* ll_exec, creat_object */
 		struct { U8 cmd, padd[3]; } nctrl; /* node ctrl */
@@ -74,6 +92,7 @@ public:
 	world_id wid() const { return m_wid; }
 	yield *yld() { return m_yld; }
 	MSGID msgid() const { return m_msgid; }
+	int type() const { return m_type; }
 #if defined(_TEST)
 	static int (*m_test_respond)(fiber *, bool, serializer &);
 	void set_msgid(MSGID msgid) { m_msgid = msgid; }
@@ -83,6 +102,7 @@ public:
 	inline MSGID new_msgid();
 	inline int yielding(MSGID msgid, int size = 1,
 		yield::callback cb = NULL, void *p = NULL);
+	bool valid() const;
 	static int noop(serializer &) { return NBR_OK; }
 	template <class FB>
 		void terminate(fiber_factory<FB> &ff, int err);
@@ -97,27 +117,43 @@ protected:
 	template <class FB> int call_node_ctrl(FB *fb, rpc::request &req);
 	template <class FB> int resume_node_ctrl(FB *fb, rpc::response &res);
 public:
-	static int respond_type(THREAD) { return from_thread; }
+	template <typename DATA> static app_param to_prm(DATA d) { 
+		return (app_param)d; }
+	static thread_ptr to_thrd(THREAD th) { return (thread_ptr)th; } 
 	static int respond_type(class conn *) { return from_socket; }
 	static int respond_type(callback) { return from_fncall; }
 	static int respond_type(class finder_session *) { return from_mcastr; }
 	static int respond_type(class finder_factory *) { return from_mcasts; }
-	static int respond_type(class fiber *f) { return from_fiber; }
-	static int respond_type(U64 p)  { return from_app; }
-	void set_responder(SWKFROM *f) { m_thrd = f->p; m_type = (U8)f->type; }
-	template <class FROM> void set_responder(FROM from) { 
-		m_thrd = from; m_type = (U8)respond_type(from); }
+	static int respond_type(class fiber *) { return from_fiber; }
+	static int respond_type(U64) { return from_app; }
+	static int respond_type(class svnt_csession *) { return from_client; }
+	static int respond_type(thread_ptr) { return from_thread; }
+	void set_validity(class conn *c);
+	void set_validity(callback) {}
+	void set_validity(class finder_session *s);
+	void set_validity(class finder_factory *) {}
+	void set_validity(class fiber *f) { m_validity.m_msgid = f->msgid(); }
+	void set_validity(U64)  {}
+	void set_validity(class svnt_csession *s);
+	void set_validity(thread_ptr) {}
+	void set_responder(SWKFROM *f) { m_thrd = to_thrd(f->p); m_type = (U8)f->type; }
+	template <class FROM> void set_responder(FROM from) {
+		set_validity(from);
+		p = from;
+		m_type = (U8)respond_type(from);
+	}
 	inline bool yielded() const { return m_yld != NULL && !m_yld->finished(); }
 protected:
 	world_id get_world_id(rpc::request &req) {
 		return rpc::world_request::cast(req).wid();
 	}
 	int get_socket_address(address &a);
+	class svnt_csession *get_client_conn() {return m_type==from_client?m_client:NULL;}
 	inline int send_error(int err);
 	class ffutil &ff() { return *m_ff; }
-	int pack_cmd_add(serializer &, class world *, rpc::node_ctrl_cmd::add &, MSGID &);
-	int pack_cmd_del(serializer &, class world *, rpc::node_ctrl_cmd::del &, MSGID &);
-	int pack_cmd_deploy(serializer &, class world *, rpc::node_ctrl_cmd::deploy &, MSGID &);
+	int pack_cmd_add(serializer &,class world *, rpc::node_ctrl_cmd::add &, MSGID &);
+	int pack_cmd_del(serializer &,class world *, rpc::node_ctrl_cmd::del &, MSGID &);
+	int pack_cmd_deploy(serializer&,class world *,rpc::node_ctrl_cmd::deploy&,MSGID&);
 
 
 protected:	/** DUMMY CALLBACKS **/
@@ -226,6 +262,7 @@ protected:
 	class object_factory &m_of;
 	class world_factory &m_wf;
 	class finder_factory *m_finder;
+	class conn_pool *m_cp;
 	/* FIXME : now 1 world only do 1 quorum based replication concurrently */
 	map<quorum_context,world_id> m_quorums;
 	THREAD *m_workers;
@@ -236,7 +273,7 @@ public:
 	ffutil(class object_factory &of, class world_factory &wf) :
 		m_seed(), m_max_rpc(0), m_timeout(10),
 		m_max_node(0), m_max_replica(0),
-		m_of(of), m_wf(wf), m_finder(NULL), m_widx(0) { clear_tls(); }
+		m_of(of), m_wf(wf), m_finder(NULL), m_cp(NULL), m_widx(0) { clear_tls(); }
 	~ffutil() {}
  	inline bool initialized() { return m_vm != NULL; }
 	int init(int max_node, int max_replica,
@@ -249,6 +286,7 @@ public:
 public:
 	class object_factory &of() { return m_of; }
 	class world_factory &wf() { return m_wf; }
+	class conn_pool *cp() { return m_cp; }
 	ll *vm() { return m_vm; }
 	THREAD curr() { return m_curr; }
 	serializer &sr() { return *m_sr; }
@@ -382,20 +420,26 @@ fiber_factory<FB>::resume(FROM from, rpc::response &res, char *p, int l)
 	if (!f) {	/* would be destroyed by timeout or error */
 		return NBR_ENOTFOUND;
 	}
-//	TRACE("resume: %u/%p/%p/%p\n", res.msgid(), curr(), f, f->yld());
+	if (!f->valid()) {
+		LOG("fiber invalid : %p %u %u\n", f, f->msgid(), f->type());
+		f->fin();
+		fiber_destroy(f);
+		return NBR_EINVAL;
+	}
+	TRACE("resume: %u/%p/%p/%p\n", res.msgid(), curr(), f, f->yld());
 	ASSERT(f->yld());
 	if (f->yld()->reply(from, res) < 0) {
 		return NBR_OK;	/* wait for reply */
 	}
 	THREAD attach = f->yld()->attached();
 	if (attach != curr()) {
-//		TRACE("fw: %u/%p/%p/%p\n", res.msgid(), curr(), attach, f);
+		TRACE("fw: %u/%p/%p/%p\n", res.msgid(), curr(), attach, f);
 		return run_fiber(f->yld()->attached(), p, l);
 	}
 	fiber_unregister(res.msgid());
 	int r = f->resume(*this, res);
 	if ((r < 0) || !f->yielded()) {
-//		TRACE("finish r: %u/%d/%p/%p/%p\n",res.msgid(),r,curr(),f,f->yld());
+		TRACE("finish r: %u/%d/%p/%p/%p\n",res.msgid(),r,curr(),f,f->yld());
 		f->fin();
 		fiber_destroy(f);
 	}
@@ -504,6 +548,10 @@ fiber::call(fiber_factory<FB> &ff, rpc::request &req, bool trusted)
 	case rpc::login:
 		m_wid = get_world_id(req);
 		return ((FB*)this)->call_login(req);
+	case rpc::authentication:
+		m_wid = get_world_id(req);
+		if (!(m_ctx.co = ff.co_create(this))) { return NBR_EEXPIRE; }
+		return m_ctx.co->call(rpc::authentication_request::cast(req));
 	default:
 		if (trusted) {
 			switch(m_cmd) {
@@ -535,6 +583,7 @@ fiber::resume(fiber_factory<FB> &ff, rpc::response &res)
 	switch(m_cmd) {
 	case rpc::ll_exec:
 	case rpc::create_object:
+	case rpc::authentication:
 		return m_ctx.co->resume(rpc::ll_exec_response::cast(res), false);
 	case rpc::load_object:
 		return m_ctx.co->resume(rpc::ll_exec_response::cast(res), true);
@@ -651,6 +700,7 @@ fiber::fin()
 	case rpc::ll_exec:
 	case rpc::create_object:
 	case rpc::load_object:
+	case rpc::authentication:
 		ff().vm()->co_destroy(m_ctx.co);
 		m_ctx.co = NULL;
 		break;

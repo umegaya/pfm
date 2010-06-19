@@ -2,6 +2,7 @@
 #include "proto.h"
 #include "world.h"
 #include "connector.h"
+#include "cp.h"
 
 using namespace pfm;
 

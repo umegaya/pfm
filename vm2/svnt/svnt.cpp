@@ -3,6 +3,7 @@
 #include "world.h"
 #include "object.h"
 #include "connector.h"
+#include "cp.h"
 
 using namespace pfm;
 
@@ -65,11 +66,7 @@ pfms::create_factory(const char *sname)
 		return new base::factory_impl<svnt::session>;
 	}
 	if (strcmp(sname, "be") == 0) {
-		base::factory_impl<svnt::besession> *fc =
-				new base::factory_impl<svnt::besession>;
-		conn_pool_impl *cpi = (conn_pool_impl *)fc;
-		ff().wf().cf()->set_pool(conn_pool::cast(cpi));
-		return fc;
+		return new base::factory_impl<svnt::besession>;
 	}
 	if (strcmp(sname, "finder") == 0) {
 		return new svnt::finder_factory;
@@ -157,7 +154,7 @@ pfms::boot(int argc, char *argv[])
 		svnt::session::m_test_mode = (tmode != 0);
 	}
 	int r;
-	conn_pool_impl *fc;
+	conn_pool::svnt_cp *fc;
 	svnt::finder_factory *fdr;
 	INIT_OR_DIE((r = m_db.init("svnt/db/uuid.tch")) < 0, r,
 		"uuid DB init fail (%d)\n", r);
@@ -165,11 +162,14 @@ pfms::boot(int argc, char *argv[])
 		"UUID init fail (%d)\n", r);
 	INIT_OR_DIE((r = svnt::fiber::init_global(10000)) < 0, r,
 		"svnt::fiber::init fails(%d)\n", r);
-	INIT_OR_DIE(!(fc = find_factory<conn_pool_impl>("be")), NBR_ENOTFOUND,
+	INIT_OR_DIE((r = ff().init(100, 100, 10)) < 0, r,
+		"fiber_factory init fails(%d)\n", r);
+	INIT_OR_DIE(!(fc = find_factory<conn_pool::svnt_cp>("be")), NBR_ENOTFOUND,
 		"conn_pool not found (%p)\n", fc);
 	INIT_OR_DIE(!(fdr = find_factory<svnt::finder_factory>("finder")), NBR_ENOTFOUND,
 		"conn_pool not found (%p)\n", fc);
-	INIT_OR_DIE((r = ff().wf().cf()->init(conn_pool::cast(fc), 100, 100, 100)) < 0, r,
+	ff().cp()->set_pool(fc);
+	INIT_OR_DIE((r = ff().wf().cf()->init(ff().cp(), 100, 100, 100)) < 0, r,
 		"init connector factory fails (%d)\n", r);
 	ff().set_finder(fdr);
 	INIT_OR_DIE((r = ff().of().init(10000, 1000, 0, "svnt/db/of.tch")) < 0, r,
@@ -177,8 +177,6 @@ pfms::boot(int argc, char *argv[])
 	INIT_OR_DIE((r = ff().wf().init(
 		256, 256, opt_threadsafe | opt_expandable, "svnt/db/wf.tch")) < 0, r,
 		"object factory creation fail (%d)\n", r);
-	INIT_OR_DIE((r = ff().init(100, 100, 10)) < 0, r,
-		"fiber_factory init fails(%d)\n", r);
 	return NBR_OK;
 }
 
@@ -285,6 +283,7 @@ int svnt::fiber::call_login(rpc::request &p)
 	int r;
 	world *w;
 	MSGID msgid = INVALID_MSGID;
+	csession *c;
 	rpc::login_request &req = rpc::login_request::cast(p);
 	switch(m_status) {
 	case start:
@@ -292,6 +291,13 @@ int svnt::fiber::call_login(rpc::request &p)
 			r = NBR_ENOTFOUND;
 			goto error;
 		}
+		if (!(c = get_client_conn())) {
+			r = NBR_EINVAL;
+			goto error;
+		}
+		c->set_account_info(req.account(), req.authdata(), req.authdata().len());
+		LOG("login attempt : %s/%u\n",
+			(const char *)req.account(), req.authdata().len());
 		msgid = new_msgid();
 		if (msgid == INVALID_MSGID) {
 			r = NBR_EEXPIRE;
@@ -329,21 +335,50 @@ int svnt::fiber::resume_login(rpc::response &p)
 	int r;
 	MSGID msgid = INVALID_MSGID;
 	world *w;
+	csession *c;
+	ll::coroutine *co = NULL;
 	if (!(w = ff().find_world(wid()))) {
 		r = NBR_ENOTFOUND;
+		goto error;
+	}
+	if (!(c = get_client_conn())) {
+		r = NBR_EINVAL;
 		goto error;
 	}
 	if (p.success()) {
 		switch(m_status) {
 		case start: {
 			rpc::login_response &res = rpc::login_response::cast(p);
+			c->set_uuid(res.object_id());
+			msgid = new_msgid();
+			if (msgid == INVALID_MSGID) {
+				r = NBR_EEXPIRE;
+				goto error;
+			}
+			if ((r = rpc::authentication_request::pack_header(
+				ff().sr(), msgid, w->id(), nbr_str_length(w->id(), max_wid),
+				c->account(), c->authdata(), c->alen())) < 0) {
+				goto error;
+			}
+			if ((r = yielding(msgid)) < 0) {
+				goto error;
+			}
+			if ((r = ff().run_fiber(this, ff().sr().p(), ff().sr().len())) < 0) {
+				goto error;
+			}
+			m_status = login_authentication;
+		} break;
+		case login_authentication: {
+			if ((r = svnt::fiber::register_session(c, c->player_id())) < 0) {
+				goto error;
+			}
 			msgid = new_msgid();
 			if (msgid == INVALID_MSGID) {
 				r = NBR_EEXPIRE;
 				goto error;
 			}
 			if ((r = rpc::create_object_request::pack_header(
-				ff().sr(), msgid, res.object_id(),
+				ff().sr(), msgid, c->player_id(),
 				ll::player_klass_name, ll::player_klass_name_len,
 				w->id(), nbr_str_length(w->id(), max_wid), true, 0)) < 0) {
 				goto error;
@@ -351,18 +386,52 @@ int svnt::fiber::resume_login(rpc::response &p)
 			if ((r = yielding(msgid)) < 0) {
 				goto error;
 			}
-			if ((r = w->request(msgid, res.object_id(), ff().sr())) < 0) {
+			if ((r = w->request(msgid, c->player_id(), ff().sr())) < 0) {
 				goto error;
 			}
 			m_status = login_wait_object_create;
 		} break;
 		case login_wait_object_create: {
-			rpc::ll_exec_response &res = rpc::ll_exec_response::cast(p);
-			if (!(m_ctx.co = ff().co_create(this))) {
+			rpc::create_object_response &res = 
+				rpc::create_object_response::cast(p);
+			if (!(co = ff().co_create(this))) {
 				r = NBR_EEXPIRE;
 				goto error;
 			}
-			if ((r = m_ctx.co->call(res, "login")) < 0) {
+			if ((r = co->to_stack(res)) < 0) {
+				goto error;
+			}
+			object *o;
+			if (!(o = ff().of().find(c->player_id()))) {
+				r = NBR_ENOTFOUND;
+				goto error;
+			}
+//			o->set_flag(object::flag_loaded, false);
+			msgid = new_msgid();
+			if (msgid == INVALID_MSGID) {
+				r = NBR_EEXPIRE;
+				goto error;
+			}
+			if ((r = rpc::ll_exec_request::pack_header(
+				ff().sr(), msgid, *o,
+				ll::enter_world_proc_name, ll::enter_world_proc_name_len,
+				w->id(), nbr_str_length(w->id(), max_wid), 0)) < 0) {
+				goto error;
+			}
+			if ((r = yielding(msgid)) < 0) {
+				goto error;
+			}
+			if ((r = ff().run_fiber(this, ff().sr().p(), ff().sr().len())) < 0) {
+				goto error;
+			}
+			ff().vm()->co_destroy(co);
+			m_status = login_enter_world;
+		} break;
+		case login_enter_world: {
+			rpc::response::pack_header(ff().sr(), m_msgid);
+			ff().sr() << NBR_OK;
+			ff().sr().pushnil();
+			if ((r = respond(false, ff().sr())) < 0) {
 				goto error;
 			}
 		} break;
@@ -373,18 +442,26 @@ int svnt::fiber::resume_login(rpc::response &p)
 		}
 		return NBR_OK;
 	}
-	else {
+	else if (m_status != login_wait_object_create) {
 		r = p.err();
-		goto error;
+	}
+	else {
+		const char *error = p.err();
+		rpc::response::pack_header(ff().sr(), m_msgid);
+		ff().sr().pushnil();
+		ff().sr() << error;
+		if ((r = respond(true, ff().sr())) < 0) {
+		}
 	}
 error:
-	if (m_ctx.co) {
-		ff().vm()->co_destroy(m_ctx.co);
-		m_ctx.co = NULL;
-	}
 	if (msgid != INVALID_MSGID) { ff().fiber_unregister(msgid); }
-	if (r < 0) {
-		send_error(r);
+	if (r < 0) { send_error(r); }
+	if (co) { ff().vm()->co_destroy(co); }
+	if (c) {
+		if (c->valid()) { c->close(); }
+		if (c->player_id().valid()) {
+			svnt::fiber::unregister_session(c->player_id());
+		}
 	}
 	return r;
 }

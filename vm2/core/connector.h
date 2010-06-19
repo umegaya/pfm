@@ -37,25 +37,6 @@ public:
 	bool has_node_data() const { return m_node_data.flag != 0; }
 };
 
-typedef factory_impl<conn, mappool<conn> > conn_pool_impl;
-class conn_pool : public conn_pool_impl {
-public:
-#if defined(_TEST)
-	static int (*m_test_connect)(class conn_pool *, 
-		conn *, const address &, void *);
-#endif
-	int connect(conn *c, const address &a, void *p = NULL) {
-#if defined(_TEST)
-	if (m_test_connect) { return m_test_connect(this, c, a, p); }
-#endif
-		return conn_pool_impl::connect(c, a, p); }
-	conn *create(const address &a) { return conn_pool_impl::pool().create(a); }
-	conn *find(const address &a) { return conn_pool_impl::pool().find(a); }
-	const address &bind_addr(const address &a) { return conn_pool_impl::ifaddr(); }
-	static inline class conn_pool *cast(conn_pool_impl *cpi) { 
-		return (class conn_pool *)cpi; }
-};
-
 class connector_impl {
 public:
 	struct failover_chain {
@@ -247,13 +228,13 @@ public:
 	connector_factory() : super(), m_pool(NULL) {}
 	~connector_factory() { fin(); }
 protected:
-	conn_pool				*m_pool;
+	class conn_pool			*m_pool;
 	array<failover_chain>	m_failover_chain_factory;
 	map<failover_chain*, address>	m_address_chain_map;
 	connector_resource		m_connector_resource;
 	RWLOCK					m_lock;
 public:
-	int init(conn_pool *cp, int max_chain, int max_node, int querysize) {
+	int init(class conn_pool *cp, int max_chain, int max_node, int querysize) {
 		int r;
 		m_pool = cp;
 		if (!(m_lock = nbr_rwlock_create())) {
@@ -297,8 +278,11 @@ public:
 			pc->remove_processed_packet(last_msgid);
 		}
 	}
-	void set_pool(conn_pool *f) { m_pool = f; }
-	conn_pool &pool() { return *m_pool; }
+	void set_pool(class conn_pool *f) { m_pool = f; }
+	class conn_pool &pool() { return *m_pool; }
+	inline conn *create(const address &a);
+	inline conn *find(const address &a);
+	inline int connect(conn *c, const address &a, void *p);
 public:
 	conn *get_by(const address &a) {
 		failover_chain *c = m_address_chain_map.find(a);
@@ -312,7 +296,7 @@ public:
 				return NULL;
 			}
 			if (!ct) {
-				ct = pool().create(na);
+				ct = create(na);
 				if (!ct) {
 					m_failover_chain_factory.destroy(c);
 					return NULL;
@@ -329,7 +313,7 @@ public:
 		}
 	}
 	conn *get_by_local(const address &a) {
-		return pool().find(a);
+		return find(a);
 	}
 	connector *connect(const UUID &k, const address &a, void *p = NULL) {
 		return add_failover_chain(k, a, p);
@@ -354,7 +338,7 @@ public:
 		failover_chain *c, *vc;
 		lock lk(m_lock, false);
 		if (!(vc = m_address_chain_map.find(a))) {
-			if (!(s = pool().create(a))) {
+			if (!(s = create(a))) {
 				return NULL;
 			}
 			if (!(vc = insert(a, s))) {
@@ -373,7 +357,7 @@ public:
 		vc->insert(c);
 		((failover_chain *)ct)->insert(c);
 		if (!c->m_s->valid()) {
-			pool().connect(c->m_s, a, p);
+			connect(c->m_s, a, p);
 		}
 		return ct;
 	}
@@ -509,7 +493,6 @@ error:
 #endif
 	return NBR_OK;
 }
-
 typedef connector_factory::connector connector;
 
 }//namespace pfm

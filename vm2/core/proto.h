@@ -27,6 +27,8 @@ enum {
 	vote = 6,			/* for commit protocol */
 	load_object = 7,
 	node_inquiry = 8,
+	authentication = 9,
+	logout = 10,
 };
 } /* namespace rpc */
 enum node_type {
@@ -186,6 +188,18 @@ public:
 	static inline int pack_header(serializer &sr, MSGID msgid,
 			const UUID &uuid);
 	RESPONSE_CASTER(login);
+};
+
+/* authentication */
+class authentication_request : public world_request {
+public:
+	typedef world_request super;
+	const data &account() const { return super::argv(0); }
+	const data &authdata() const { return super::argv(1); }
+	static inline int pack_header(serializer &sr, MSGID msgid,
+			world_id wid, size_t wlen,
+			const char *account, const char *authdata, size_t dlen);
+	REQUEST_CASTER(authentication);
 };
 
 /* node_inquery */
@@ -398,6 +412,17 @@ inline int login_request::pack_header(serializer &sr, MSGID msgid,
 	sr.push_raw(authdata, dlen);
 	return sr.len();
 }
+
+inline int authentication_request::pack_header(serializer &sr, MSGID msgid,
+		world_id wid, size_t wlen,
+		const char *account, const char *authdata, size_t dlen)
+{
+	super::pack_header(sr, msgid, authentication, wid, wlen, 2);
+	sr.push_string(account, nbr_str_length(account, login_request::max_account));
+	sr.push_raw(authdata, dlen);
+	return sr.len();
+}
+
 
 inline int login_response::pack_header(serializer &sr, MSGID msgid,
 		const UUID &uuid)

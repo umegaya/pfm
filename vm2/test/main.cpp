@@ -29,7 +29,7 @@ int main(int argc, char *argv[])
 	TEST(world);
 	TEST(fiber);
 	extern int server_test(int argc, char *argv[]);
-	if (strcmp("server", argv[1]) == 0) {
+	if (argc > 1 && strcmp("server", argv[1]) == 0) {
 		if ((r = server_test(argc, argv)) < 0) {
 			fprintf(stderr, "server_test: fail (%d)\n", r);
 			return r;

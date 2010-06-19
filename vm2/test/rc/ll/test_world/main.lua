@@ -3,7 +3,7 @@ assert(World._name_ == "World")
 function World:new()
 end
 function World:test_function(map, array, n, str)
-	-- print("map[a] = " .. map['key_a'] .. " array[1] = " .. array[1] .. " n = " .. n .. " #str = " .. #str)
+	print("map[a] = " .. map['key_a'] .. " array[1] = " .. array[1] .. " n = " .. n .. " #str = " .. #str)
 	return map['key_a'] + array[1] + n + #str 
 end
 

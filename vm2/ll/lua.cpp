@@ -64,6 +64,13 @@ int lua::coroutine::call(ll_exec_request &req, bool trusted)
 	return dispatch(r, false);
 }
 
+int lua::coroutine::call(rpc::authentication_request &req)
+{
+	int r;
+	if ((r = to_stack(req)) < 0) { return r; }
+	return dispatch(r, false);
+}
+
 int lua::coroutine::call(ll_exec_response &res, const char *method)
 {
 	int r;
@@ -160,6 +167,7 @@ int lua::coroutine::respond(bool err, serializer &sr)
 int lua::coroutine::from_stack(int start_id, serializer &sr, bool packobj)
 {
 	int top = lua_gettop(m_exec), r;
+	if (top == 0) { sr.pushnil(); return sr.len(); }
 	ASSERT(start_id <= top);
 	for (int i = start_id; i <= top; i++) {
 		if ((r = from_stack(sr, i, packobj)) < 0) { return r; }
@@ -300,6 +308,10 @@ int lua::coroutine::to_stack(const rpc::data &d)
 				object *o = m_scr->of().load(d.elem(2), w, 
 					ll::cast(m_scr), d.elem(1));
 				if (!o) { ASSERT(false); return NBR_EINVAL; }
+				if (d.size() > 3 && o->remote()) {
+					o->set_flag((object::flag_local | object::flag_loaded |
+						object::flag_cached_local), true);
+				}
 				if ((r = push_object(o)) < 0) { return r; }	
 				if (d.size() > 3) {
 					/* actual data loaded. */
@@ -311,9 +323,6 @@ int lua::coroutine::to_stack(const rpc::data &d)
 						lua_settable(m_exec, -3);
 					}
 					lua_pop(m_exec, 1);	/* remove metatable */
-					o->set_flag((object::flag_local | 
-						object::flag_cached_local), 
-						true);
 				}
 			}
 			else {
@@ -334,6 +343,8 @@ int lua::coroutine::to_stack(const rpc::data &d)
 		}
 		break;
 	case datatype::BLOB:
+		/* last null character should be removed */
+		//lua_pushlstring(m_exec, d, d.len() - 1);
 		lua_pushstring(m_exec, d);
 		break;
 	case datatype::DOUBLE:
@@ -349,13 +360,18 @@ int lua::coroutine::to_stack(const rpc::data &d)
 	return NBR_OK;
 }
 
+bool lua::coroutine::callable(int stkid)
+{
+	return lua_isfunction(m_exec, stkid) || to_m(stkid) != NULL;
+}
+
 int lua::coroutine::to_stack(ll_exec_request &req, bool trusted)
 {
 	int r, i, an;
 	if ((r = to_stack(req.rcvr())) < 0) { return r; }
 	if ((r = to_stack(req.method())) < 0) { return r; }
 	lua_gettable(m_exec, -2);	/* load function */
-	if (!lua_isfunction(m_exec, -1)) { ASSERT(false); return NBR_EINVAL; }
+	if (!callable(-1)) { ASSERT(false); return NBR_EINVAL; }
 	lua_pushvalue(m_exec, -2);
 	ASSERT(lua_gettop(m_exec) == 3);
 	lua_remove(m_exec, 1); /* remove object on bottom of stack */
@@ -374,7 +390,7 @@ int lua::coroutine::to_stack(create_object_request &req)
 	lua_getfield(m_exec, LUA_GLOBALSINDEX, req.klass());	/* load class method tbl */
 	lua_getfield(m_exec, -1, lua::klass_method_table);
 	lua_getfield(m_exec, -1, lua::ctor_string);	/* load constructor */
-	if (!lua_isfunction(m_exec, -1)) { ASSERT(false); return NBR_EINVAL; }
+	if (!callable(-1)) { ASSERT(false); return NBR_EINVAL; }
 	ASSERT(lua_gettop(m_exec) == 3);
 	lua_remove(m_exec, 2); lua_remove(m_exec, 1);	/* remove tables */
 	world *w = m_scr->wf().find(req.wid());
@@ -419,11 +435,29 @@ int lua::coroutine::to_stack(rpc::ll_exec_response &res, const char *method)
 	if ((r = to_stack(res)) < 0) { return r; }
 	lua_pushstring(m_exec, method);
 	lua_gettable(m_exec, -2);	/* load function */
-	if (!lua_isfunction(m_exec, -1)) { ASSERT(false); return NBR_EINVAL; }
+	if (!callable(-1)) { ASSERT(false); return NBR_EINVAL; }
 	lua_pushvalue(m_exec, -2);
 	ASSERT(lua_gettop(m_exec) == 3);
 	lua_remove(m_exec, 1); /* remove object on bottom of stack */
 	return 1;
+}
+
+int lua::coroutine::to_stack(rpc::authentication_request &req)
+{
+	int r;
+	lua_getfield(m_exec, LUA_GLOBALSINDEX, lua::player_klass_name);
+	lua_getfield(m_exec, -1, lua::klass_method_table);
+	lua_remove(m_exec, 1);
+	lua_pushstring(m_exec, lua::login_proc_name);
+	/* table class.Klass has __index metamethod */
+	lua_rawget(m_exec, -2);
+	lua_remove(m_exec, 1);
+	if (!callable(-1)) { ASSERT(false); return NBR_EINVAL; }
+	lua_pushnil(m_exec);	/* cannot access to player object */
+	if ((r = to_stack(req.account())) < 0) { return r; }
+	if ((r = to_stack(req.authdata())) < 0) { return r; }
+	ASSERT(lua_gettop(m_exec) == 4);	
+	return 3;
 }
 
 
@@ -621,12 +655,12 @@ int lua::coroutine::method_call(VM vm)
 				lua_error(vm);
 			}
 		}
-		if ((r = o->request(msgid, ll::cast(&(co->scr())), co->scr())) < 0) {
-			lua_pushfstring(vm, "send request to object fail (%d)", r);
-			lua_error(vm);
-		}
 		if (co->fb().yielding(msgid) < 0) {
 			lua_pushstring(vm, "cannot yield fiber");
+			lua_error(vm);
+		}
+		if ((r = o->request(msgid, ll::cast(&(co->scr())), co->scr())) < 0) {
+			lua_pushfstring(vm, "send request to object fail (%d)", r);
 			lua_error(vm);
 		}
 		return lua_yield(vm, 0);
@@ -664,12 +698,12 @@ int lua::coroutine::ctor_call(VM vm)
 			lua_error(vm);
 		}
 	}
-	if (co->scr().wf().request(wid, msgid, uuid, co->scr()) < 0) {
-		lua_pushfstring(vm, "send request object creation fail (%d)", r);
-		lua_error(vm);
-	}
 	if (co->fb().yielding(msgid) < 0) {
 		lua_pushstring(vm, "cannot yield fiber");
+		lua_error(vm);
+	}
+	if (co->scr().wf().request(wid, msgid, uuid, co->scr()) < 0) {
+		lua_pushfstring(vm, "send request object creation fail (%d)", r);
 		lua_error(vm);
 	}
 	return lua_yield(vm, 0);
@@ -683,6 +717,8 @@ const char lua::klass_name_key[] = "_name_";
 const char lua::world_klass_name[] = "World";
 const char lua::player_klass_name[] = "Player";
 const char lua::world_object_name[] = "world";
+const char lua::enter_world_proc_name[] = "enter";
+const char lua::login_proc_name[] = "login";
 
 int lua::init(int max_rpc_ongoing)
 {

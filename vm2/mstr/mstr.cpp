@@ -3,6 +3,7 @@
 #include "world.h"
 #include "object.h"
 #include "connector.h"
+#include "cp.h"
 
 using namespace pfm;
 
@@ -53,11 +54,7 @@ pfmm::create_factory(const char *sname)
 		return new base::factory_impl<mstr::msession>;
 	}
 	if (strcmp(sname, "mstr") == 0) {
-		base::factory_impl<mstr::session> *fc =
-				new base::factory_impl<mstr::session>;
-		conn_pool_impl *cpi = (conn_pool_impl *)fc;
-		ff().wf().cf()->set_pool(conn_pool::cast(cpi));
-		return fc;
+		return new base::factory_impl<mstr::session>;
 	}
 	if (strcmp(sname, "finder") == 0) {
 		return new mstr::finder_factory;
@@ -130,7 +127,7 @@ pfmm::boot(int argc, char *argv[])
 		mstr::session::m_test_mode = (tmode != 0);
 	}
 	int r;
-	conn_pool_impl *fc;
+	conn_pool::mstr_cp *fc;
 	mstr::finder_factory *fdr;
 	INIT_OR_DIE((r = m_db.init("mstr/db/uuid.tch")) < 0, r,
 		"uuid DB init fail (%d)\n", r);
@@ -138,11 +135,14 @@ pfmm::boot(int argc, char *argv[])
 		"UUID init fail (%d)\n", r);
 	INIT_OR_DIE((r = mstr::fiber::init_global(10000, "mstr/db/al.tch")) < 0, r,
 		"mstr::fiber::init fails(%d)\n", r);
-	INIT_OR_DIE(!(fc = find_factory<conn_pool_impl>("mstr")), NBR_ENOTFOUND,
+	INIT_OR_DIE((r = ff().init(100, 100, 10)) < 0, r,
+		"fiber_factory init fails(%d)\n", r);
+	INIT_OR_DIE(!(fc = find_factory<conn_pool::mstr_cp>("mstr")), NBR_ENOTFOUND,
 		"conn_pool not found (%p)\n", fc);
 	INIT_OR_DIE(!(fdr = find_factory<mstr::finder_factory>("finder")), NBR_ENOTFOUND,
 		"conn_pool not found (%p)\n", fc);
-	INIT_OR_DIE((r = ff().wf().cf()->init(conn_pool::cast(fc), 100, 100, 100)) < 0, r, 
+	ff().cp()->set_pool(fc);
+	INIT_OR_DIE((r = ff().wf().cf()->init(ff().cp(), 100, 100, 100)) < 0, r,
 		"init connector factory fails (%d)\n", r);
 	ff().set_finder(fdr);
 	INIT_OR_DIE((r = ff().of().init(10000, 1000, 0, "mstr/db/of.tch")) < 0, r,
@@ -150,8 +150,6 @@ pfmm::boot(int argc, char *argv[])
 	INIT_OR_DIE((r = ff().wf().init(
 		256, 256, opt_threadsafe | opt_expandable, "mstr/db/wf.tch")) < 0, r,
 		"object factory creation fail (%d)\n", r);
-	INIT_OR_DIE((r = ff().init(100, 100, 10)) < 0, r,
-		"fiber_factory init fails(%d)\n", r);
 	return NBR_OK;
 }
 

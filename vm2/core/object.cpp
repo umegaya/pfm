@@ -3,6 +3,7 @@
 #include "world.h"
 #include "ll.h"
 #include "fiber.h"
+#include "cp.h"
 
 using namespace pfm;
 

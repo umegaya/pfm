@@ -3,6 +3,7 @@
 #include "world.h"
 #include "object.h"
 #include "connector.h"
+#include "cp.h"
 
 using namespace pfm;
 using namespace pfm::cluster;
@@ -28,6 +29,9 @@ void ffutil::clear_tls() {
 /* ffutil */
 int ffutil::init(int max_node, int max_replica,
 		void (*wkev)(SWKFROM*,THREAD,char*,size_t)) {
+	if (!(m_cp = new conn_pool)) {
+		return NBR_EMALLOC;
+	}
 	m_max_node = max_node;
 	m_max_replica = max_replica;
 	if (!m_quorums.init(world::max_world, world::max_world,
@@ -91,6 +95,7 @@ void ffutil::fin()
 {
 	m_fm.fin();
 	m_quorums.fin();
+	if (m_cp) { delete m_cp; m_cp = NULL; }
 }
 
 void ffutil::fin_tls()
@@ -255,5 +260,33 @@ fiber::get_socket_address(address &a)
 		return NBR_EINVAL;
 	}
 	return NBR_OK;
+}
+
+#include "svnt/svnt.h"
+void fiber::set_validity(class conn *c){ m_validity.m_sk = c->sk(); }
+void fiber::set_validity(class finder_session *s){ m_validity.m_sk = s->sk(); }
+void fiber::set_validity(class svnt_csession *s){ m_validity.m_sk = s->sk(); }
+bool fiber::valid() const
+{
+	switch(m_type) {
+	case from_thread:
+		return true;
+	case from_socket:
+		return nbr_sock_is_same(m_socket->sk(), m_validity.m_sk);
+	case from_fncall:
+		return true;
+	case from_mcastr:
+		return nbr_sock_is_same(m_finder_r->sk(), m_validity.m_sk);
+	case from_mcasts:
+		return true;
+	case from_fiber:
+		return m_fiber->msgid() == m_validity.m_msgid;
+	case from_app:
+		return true;
+	case from_client:
+		return nbr_sock_is_same(m_client->sk(), m_validity.m_sk);
+	default:
+		return false;
+	}
 }
 
