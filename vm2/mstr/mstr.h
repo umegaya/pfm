@@ -22,7 +22,7 @@ public:
 			return __sync_bool_compare_and_swap(&m_login_wid, NULL, wid);
 		}
 		const UUID &uuid() const { return m_uuid; }
-		int save(char *&p, int &l) {
+		int save(char *&p, int &l, void *) {
 			int thissz = (int)sizeof(*this);
 			if (l <= thissz) {
 				ASSERT(false);
@@ -34,16 +34,16 @@ public:
 			memcpy(p, (void *)&m_uuid, sizeof(UUID));
 			return sizeof(UUID);
 		}
-		int load(const char *p, int l) {
+		int load(const char *p, int l, void *) {
 			m_uuid = *(UUID *)p;
 			return NBR_OK;
 		}
 	};
-	typedef pmap<account_info, const char*>
-		account_list;
+	typedef pmap<account_info, const char*> account_list;
+	typedef rpc::basic_fiber super;
 	static account_list m_al;
 public:	/* master quorum base replication */
-	typedef ffutil::quorum_context quorum_context;
+	typedef super::quorum_context quorum_context;
 	int quorum_vote_commit(world *w, MSGID msgid, quorum_context *ctx, serializer &sr);
 	int quorum_global_commit(world *w, quorum_context *ctx, int result);
 	quorum_context *init_context(world *w);
@@ -55,8 +55,11 @@ public:
 	int respond(bool err, serializer &sr) {
 		return basic_fiber::respond<mstr::fiber>(err, sr);
 	}
+	int send_error(int r) { return basic_fiber::send_error<mstr::fiber>(r); }
 	int call_login(rpc::request &req);
 	int resume_login(rpc::response &res);
+	int call_logout(rpc::request &req);
+	int resume_logout(rpc::response &res);
 	int call_replicate(rpc::request &req) { ASSERT(false); return NBR_ENOTSUPPORT; }
 	int resume_replicate(rpc::response &res) {
 		ASSERT(false); return NBR_ENOTSUPPORT; }
@@ -71,7 +74,7 @@ public:
 	int node_ctrl_list_resume(class world *, rpc::response &, serializer &);
 	int node_ctrl_deploy(class world *, rpc::node_ctrl_cmd::deploy &, serializer &);
 	int node_ctrl_deploy_resume(class world *, rpc::response &, serializer &);
-	int node_ctrl_regist(class world *, rpc::node_ctrl_cmd::regist &, serializer &);
+	int call_node_regist(rpc::request &);
 };
 }
 
@@ -151,7 +154,8 @@ public:
 		return super::on_close(reason);
 	}
 	int on_recv(char *p, int l) {
-		return app().ff().recv((class conn *)this, p, l, true);
+		app().ff().recv((class conn *)this, p, l, true);
+		return NBR_OK;
 	}
 	int on_event(char *p, int l) {
 		return app().ff().recv((class conn *)this, p, l, true);
@@ -163,7 +167,7 @@ public:
 	static int node_regist_cb(serializer &sr) {
 		rpc::response res;
 		PREPARE_UNPACK(sr);
-		if (sr.unpack(res) > 0 && res.success()) {
+		if (sr.unpack(res, sr.p(), sr.len()) > 0 && res.success()) {
 			TRACE("node regist success\n");
 		}
 		return NBR_OK;

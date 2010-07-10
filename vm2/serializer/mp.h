@@ -96,6 +96,11 @@ protected:
 public:
 	__mp() : m_p(NULL), m_s(0), m_c(0) {}
 	void start(char *p, size_t s) { m_p = p; m_s = s; m_c = 0; }
+#if defined(_DEBUG)
+	inline void end() { m_p = NULL; }
+#else
+	inline void end() {}
+#endif
 #if defined(CHECK_LENGTH)
 #undef CHECK_LENGTH
 #endif
@@ -489,7 +494,14 @@ public:
 #define CHECK(require)	\
 	(((int)msgpack::object::type) == ((int)require))
 	class data : public msgpack::object {
+//		msgpack::zone *m_z;
 	public:
+//		data() : m_z(NULL) {}
+//		~data() { if (m_z) { delete m_z; } }
+//		void set_zone(msgpack::zone *z) {
+//			if (m_z) { delete m_z; }
+//			m_z = z;
+//		}
 		data &elem(int n) { ASSERT(CHECK(ARRAY)); return (data &)via.array.ptr[n]; }
 		const data &elem(int n) const { ASSERT(CHECK(ARRAY)); return (const data &)via.array.ptr[n]; }
 		data &key(int n) { ASSERT(CHECK(MAP)); return (data &)via.map.ptr[n].key; }
@@ -520,8 +532,11 @@ public:
 #undef CHECK_TYPE
 protected:
 	unpacker m_upk;
+	msgpack_zone *m_zone;
 public:
-	mp() : __mp(), m_upk() {}
+	mp() : __mp(), m_upk(), m_zone(NULL) {
+		m_zone = msgpack_zone_new(64 * 1024);
+	}
 	~mp() {}
 public:
 	char *p() { 
@@ -537,30 +552,39 @@ public:
 	void pack_start(char *p, size_t l) { __mp::start(p, l); }
 	size_t unpack_remain() const { return m_upk.nonparsed_size(); }
 	size_t pack_remain() const { return (__mp::m_s - __mp::m_c); }
-	void unpack_start(const char *p, size_t l) { 
+	void unpack_start(const char *p, size_t l) {
+#if 0
 		data d;
-		while(unpack(d) > 0);	/* read all unread data */
+		while(unpack(d, p, l) > 0);	/* read all unread data */
 		m_upk.reset_zone();
 		if (l > m_upk.buffer_capacity()) {
+			TRACE("expand buffer %u to %u\n",
+				m_upk.buffer_capacity(), (U32)l);
 			try {
 				m_upk.reserve_buffer(l);
 			} catch (const std::bad_alloc e) {
 				ASSERT(false);
 				return;
 			}
-			TRACE("expand buffer upto %u\n", (U32)l);
 		}
 		if (l > 0) {
 			memcpy(m_upk.buffer(), p, l);
 			m_upk.buffer_consumed(l);
 		}
+#endif
 	}
-	int unpack(data &d) { 
+	int unpack(data &d, const char *p, size_t l) {
+#if 1
+		msgpack_zone_clear(m_zone);
+		return msgpack_unpack(p, l, NULL, m_zone, 
+			reinterpret_cast<msgpack_object *>(&d));
+#else
 		try {
 			int r = m_upk.execute();
 //			TRACE("msgpack:unpacker:result:%d\n", r);
 			if (r > 0) {
 				d = m_upk.data();
+//				d.set_zone(m_upk.release_zone());
 				m_upk.reset();
 				return 1;
 			}
@@ -570,7 +594,8 @@ public:
 		} catch (const msgpack::type_error e) {
 			return -1;
 		}
-	}	
+#endif
+	}
 };
 
 inline __mp::datatype mp::data::type() const {

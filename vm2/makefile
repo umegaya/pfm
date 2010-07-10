@@ -24,7 +24,7 @@ NBRCOREDIR = $(NBRDIR)/core
 SFCCOREDIR = $(SFCDIR)/core
 SFCLIBDIR = $(SFCDIR)/lib
 LIBPFX = pfm
-SVPFX = pfm
+SVPFX = yue
 COREFILE = core.*
 LIBS = -L. -L./lib -L$(NBRDIR) -L$(SFCDIR) -lsfc -lnbr
 INCS = -I. -Icore -Ilib -Itest -Iclnt -I$(NBRCOREDIR) -I$(SFCCOREDIR) -I$(SFCLIBDIR)
@@ -244,13 +244,13 @@ lib$(CLIENT).a : $(CORECMOBJS) $(CLIBOBJS)
 $(CLIENT) : lib$(CLIENT).a $(COBJS)
 	$(CC) -o $(CDIR)/$(CLIENT) $(CFLAG) $(LNKOPT) $(INCS) $(COREOBJS) $(COBJS) $(MODULES) -l$(CLIENT) $(LIBS) $(CLIBS)
 
-module: $(MODULES)
+module: $(MODULES) lib$(CLIENT).a
 
-$(UNITTEST) : $(TESTOBJS) $(TCOREOBJS) $(TMOBJS) $(TSOBJS)
+$(UNITTEST) : $(TESTOBJS) $(TCOREOBJS) $(TMOBJS) $(TSOBJS) $(CLIBOBJS)
 	$(CC) -o $(TESTDIR)/$(UNITTEST) $(CFLAG) $(LNKOPT) $(INCS) $(TESTOBJS) $(TMOBJS) $(TSOBJS) $(TCOREOBJS) $(MODULES) $(LIBS) $(TESTLIBS)
 
 clean:
-	rm -f $(TESTOBJS) $(TESTDIR)/$(UNITTEST) $(MODULES) $(COREFILE) $(MOBJS) $(SOBJS) $(MDIR)/$(MASTER) $(SDIR)/$(SERVANT)
+	rm -f $(TESTOBJS) $(TESTDIR)/$(UNITTEST) $(MODULES) $(COREFILE) $(MOBJS) $(SOBJS) $(COBJS) $(CLIBOBJS) $(MDIR)/$(MASTER) $(SDIR)/$(SERVANT) lib$(CLIENT).a $(CDIR)/$(CLIENT) 
 	
 cleanup: clean
 	rm -rf $(OBJS) $(DEPS) $(TOBJS) $(TDEPS)
@@ -265,3 +265,4 @@ cleanup: clean
 -include $(TCOREDEPS)
 -include $(SDEPS)
 -include $(MDEPS)
+-include $(CDEPS)

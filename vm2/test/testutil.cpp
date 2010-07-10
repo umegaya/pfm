@@ -42,7 +42,7 @@ int pack_rpc_reqheader(serializer &sr, class object &o,
 	int r;
 	MSGID msgid = 11;
 	TEST((r = rpc::ll_exec_request::pack_header(sr, msgid, 
-		o, method, strlen(method), wid, strlen(wid), n_arg)) < 0, 
+		o, method, strlen(method), wid, strlen(wid), false, n_arg)) < 0, 
 		"push_array_len fail (%d)\n", r);
 	return sr.len();
 }

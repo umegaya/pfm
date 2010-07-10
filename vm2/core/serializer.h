@@ -5,6 +5,12 @@
 namespace pfm {
 typedef mp serializer_impl;
 class serializer : public serializer_impl {};
+class sr_disposer {
+	serializer &m_sr;
+public:
+	sr_disposer(serializer &sr) : m_sr(sr) {}
+	~sr_disposer() { m_sr.end(); }
+};
 namespace rpc {
 namespace datatype {
 static const U32 NIL = serializer::NIL;

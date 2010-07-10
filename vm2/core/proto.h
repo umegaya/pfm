@@ -29,6 +29,8 @@ enum {
 	node_inquiry = 8,
 	authentication = 9,
 	logout = 10,
+	ll_exec_local = 11,
+	node_regist = 12,
 };
 } /* namespace rpc */
 enum node_type {
@@ -48,6 +50,8 @@ namespace rpc {
 /* protocol class base */
 class data : public serializer::data {
 public:
+	data() : serializer::data() {}
+	~data() {}
 	operator const UUID & () const { 
 		ASSERT(serializer::data::type() == datatype::BLOB); 
 		ASSERT(via.raw.size == sizeof(UUID));
@@ -122,8 +126,12 @@ public:
 	const data &argv(int n) const { return super::argv(n+2); }
 	static inline int pack_header(serializer &sr, MSGID msgid,
 			pfmobj &o, const char *method, size_t mlen,
-			world_id wid, size_t wlen, int n_arg);
-	REQUEST_CASTER(ll_exec);
+			world_id wid, size_t wlen, bool local, int n_arg);
+	static inline ll_exec_request &cast(request &r) {
+		ASSERT((U32)r.method() == ll_exec ||
+				(U32)r.method() == ll_exec_local);
+		return (ll_exec_request &)r;
+	}
 };
 class ll_exec_response : public response {
 public:
@@ -188,6 +196,17 @@ public:
 	static inline int pack_header(serializer &sr, MSGID msgid,
 			const UUID &uuid);
 	RESPONSE_CASTER(login);
+};
+
+/* logout */
+class logout_request : public world_request {
+public:
+	typedef world_request super;
+	const data &account() const { return super::argv(0); }
+	static inline int pack_header(serializer &sr, MSGID msgid,
+			world_id wid, size_t wlen,
+			const char *account);
+	REQUEST_CASTER(logout);
 };
 
 /* authentication */
@@ -271,9 +290,9 @@ public:
 			const char *srcfile, int n_nodes, const char *node[]);
 };
 
-class regist : public node_ctrl_request {
+class regist : public request {
 public:
-	typedef node_ctrl_request super;
+	typedef request super;
 	const data &node_server_addr() const { return super::argv(0); }
 	const int node_type() const { return super::argv(1); }
 	static inline int pack_header(serializer &sr, MSGID msgid,
@@ -372,9 +391,10 @@ inline int world_request::pack_header(serializer &sr, MSGID msgid, U8 reqtype,
 
 inline int ll_exec_request::pack_header(serializer &sr, MSGID msgid,
 		pfmobj &o, const char *method, size_t mlen,
-		world_id wid, size_t wlen, int n_arg)
+		world_id wid, size_t wlen, bool local, int n_arg)
 {
-	super::pack_header(sr, msgid, ll_exec, wid, wlen, n_arg + 2);
+	super::pack_header(sr, msgid,
+		local ? ll_exec_local : ll_exec, wid, wlen, n_arg + 2);
 	sr.push_string(method, mlen);
 	super::pack_object(sr, o);
 	return sr.len();
@@ -410,6 +430,14 @@ inline int login_request::pack_header(serializer &sr, MSGID msgid,
 	super::pack_header(sr, msgid, login, wid, wlen, 2);
 	sr.push_string(account, nbr_str_length(account, max_account));
 	sr.push_raw(authdata, dlen);
+	return sr.len();
+}
+
+inline int logout_request::pack_header(serializer &sr, MSGID msgid,
+		world_id wid, size_t wlen, const char *account)
+{
+	super::pack_header(sr, msgid, logout, wid, wlen, 1);
+	sr.push_string(account, nbr_str_length(account, login_request::max_account));
 	return sr.len();
 }
 
@@ -481,7 +509,7 @@ inline int node_ctrl_cmd::del::pack_header(serializer &sr, MSGID msgid,
 inline int node_ctrl_cmd::regist::pack_header(serializer &sr, MSGID msgid,
 		const char *address, size_t alen, U8 node_type)
 {
-	super::pack_header(sr, msgid, super::regist, "", 0, 2);
+	super::pack_header(sr, msgid, node_regist, 2);
 	sr.push_string(address, alen);
 	sr << node_type;
 	return sr.len();

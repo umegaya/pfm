@@ -35,6 +35,13 @@ public:
 	static callback get_cb(int (*fn)(rpc::response &, FROM, void *)) {
 		return (callback)fn;
 	}
+	int call_cb(rpc::response &res, SWKFROM *f) {
+		return m_fn(res, f->p, m_p);
+	}
+	template <class FROM>
+	int call_cb(rpc::response &res, FROM f) {
+		return m_fn(res, (void *)f, m_p);
+	}
 	template <class FROM>
 	int reply(FROM from, rpc::response &res) {
 		if (finished()) { return NBR_OK; }
@@ -44,7 +51,7 @@ public:
 			force_finish();
 			return NBR_OK;
 		}
-		if (m_fn && m_fn(res, (void *)from, m_p) < 0) {
+		if (m_fn && call_cb(res, from) < 0) {
 			return NBR_OK;
 		}
 		m_reply++;

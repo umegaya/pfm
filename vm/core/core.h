@@ -794,7 +794,7 @@ template <class S, class CF, class VMMSG>
 int vmnode<S,CF,VMMSG>::save_object(object &o)
 {
 //	return nbr_thpool_addjob(vmmodule::thp(), &o, task_save_object);
-	task_save_object(&o);
+	//task_save_object(&o);
 	return NBR_OK;
 }
 

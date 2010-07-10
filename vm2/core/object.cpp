@@ -22,7 +22,7 @@ int object::request(MSGID msgid, ll *vm, serializer &sr)
 		return m_test_request(this, msgid, vm, sr);
 	}
 #endif
-	if (local()) {
+	if (local() || has_localdata()) {
 		if (thread_current(vm)) {
 			ASSERT(false);
 			return NBR_EINVAL;
@@ -33,5 +33,18 @@ int object::request(MSGID msgid, ll *vm, serializer &sr)
 	}
 	return m_wld->request(msgid, uuid(), sr);
 }
+
+int object::save(char *&p, int &l, void *ctx)
+{
+	if (!ctx) { return NBR_OK; }
+	return ((ll::coroutine *)ctx)->save_object(*this, p, l);
+}
+
+int object::load(const char *p, int l, void *ctx)
+{
+	if (!ctx) { return NBR_OK; }
+	return ((ll::coroutine *)ctx)->load_object(*this, p, l);
+}
+
 
 /* object_factory */

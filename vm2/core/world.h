@@ -55,7 +55,7 @@ public:
 		return connect_assigned_node(uuid);
 	}
 #endif
-	int save(char *&p, int &l) {
+	int save(char *&p, int &l, void *) {
 		int thissz = (int)sizeof(*this);
 		if (l <= thissz) {
 			ASSERT(false);
@@ -67,7 +67,7 @@ public:
 		memcpy(p, (void *)&m_world_object, sizeof(UUID));
 		return sizeof(UUID);
 	}
-	int load(const char *p, int l) {
+	int load(const char *p, int l, void *) {
 		m_world_object = *(UUID *)p;
 		return NBR_OK;
 	}
@@ -102,7 +102,7 @@ public:
 	}
 	world *create(world_id wid, int max_node, int max_replica) {
 		world *w = super::load(wid);
-		if (!w && !(w = super::create(wid))) { return NULL; }
+		if (!w && !(w = super::create(wid, NULL))) { return NULL; }
 		if (w->init(max_node, max_replica) < 0) {
 			super::destroy(wid);
 			return NULL;

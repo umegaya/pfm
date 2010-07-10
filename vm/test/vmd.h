@@ -76,6 +76,7 @@ public:
 		static int init_login_map(int max_user);
 		static void fin_login_map() { m_lm.fin(); }
 		inline script *fetch_vm();
+		vmdmstr *from_object(object &o) { return NULL; }
 		static inline script *fetch_vm_from_thread(THREAD);
 	public:/* receiver */
 		int recv_cmd_node_register(U32 msgid, const address &a);

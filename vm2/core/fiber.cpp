@@ -57,7 +57,11 @@ int ffutil::init(int max_node, int max_replica,
 		NBR_OK : NBR_EMALLOC;
 }
 
+#if !defined(_TEST)
 bool ffutil::init_tls()
+#else
+bool ffutil::init_tls(THREAD curr)
+#endif
 {
 	if (m_vm) { return true; }
 	if (!(m_sr = new serializer)) {
@@ -70,12 +74,16 @@ bool ffutil::init_tls()
 		ASSERT(false);
 		return false;
 	}
-	if (m_vm->init(m_max_rpc) < 0) {
+#if defined(_TEST)
+	if (curr) { m_curr = curr; }
+	else
+#endif
+	if (!(m_curr = nbr_thread_get_current())) {
 		fin_tls();
 		ASSERT(false);
 		return false;
 	}
-	if (!(m_curr = nbr_thread_get_current())) {
+	if (m_vm->init(m_max_rpc, m_curr) < 0) {
 		fin_tls();
 		ASSERT(false);
 		return false;
@@ -128,8 +136,19 @@ world *ffutil::world_new(world_id wid)
 void ffutil::world_destroy(const class world *w)
 {
 	m_vm->fin_world(w->id());
-	m_wf.unload(w->id());
+	m_wf.unload(w->id(), NULL);
 }
+
+void ffutil::remove_stored_packet(MSGID msgid)
+{
+	m_wf.cf()->remove_query(msgid);
+}
+
+void ffutil::connector_factory_poll(UTIME ut)
+{
+	m_wf.cf()->poll(ut);
+}
+
 
 world *ffutil::find_world(world_id wid)
 {
@@ -153,7 +172,7 @@ world *ffutil::world_create(const rpc::node_ctrl_cmd::add &req)
 		}
 		LOG("add node (%s) for (%s)\n", (const char *)req.addr(i), w->id());
 	}
-	if (m_wf.save_from_ptr(w, (const char *)req.wid()) < 0) {
+	if (m_wf.save_from_ptr(w, (const char *)req.wid(), false, NULL) < 0) {
 		world_destroy(w);
 		return NULL;
 	}
@@ -167,6 +186,7 @@ int fiber::respond(bool err, serializer &sr)
 #if defined(_TEST)
 	if (m_test_respond) { return m_test_respond(this, err, sr); }
 #endif
+	sr_disposer srd(sr);
 	switch(m_type) {
 	case from_thread: {
 		SWKFROM from = { from_thread, ff().curr() };
@@ -181,8 +201,11 @@ int fiber::respond(bool err, serializer &sr)
 	case from_mcasts:
 		return m_finder_s->send(sr.p(), sr.len());
 	case from_fiber:
+	case from_app:
 		ASSERT(false);
 		return NBR_ENOTSUPPORT;
+	case from_client:
+		return m_client->send(sr.p(), sr.len());
 	default:
 		ASSERT(false);
 		return NBR_ENOTFOUND;
@@ -261,6 +284,103 @@ fiber::get_socket_address(address &a)
 	}
 	return NBR_OK;
 }
+
+world_id
+fiber::get_world_id(rpc::request &req)
+{
+	world *w = ff().wf().find(rpc::world_request::cast(req).wid());
+	ASSERT(w);
+	return w->id();
+}
+
+void
+fiber::set_world_id_from(world *w)
+{
+	m_wid = w ? w->id() : NULL;
+}
+
+int basic_fiber::thrd_quorum_vote_commit(MSGID msgid,
+		quorum_context *ctx, serializer &sr)
+{
+	int r;
+	if ((r =yielding(msgid, ctx->m_rep_size,
+		yield::get_cb(thrd_quorum_vote_callback), ctx)) < 0) {
+		return r;
+	}
+	SWKFROM from = { from_thread, ff().curr() };
+	if ((r = nbr_sock_worker_bcast_event(&from, sr.p(), sr.len())) < 0) {
+		return r;
+	}
+	return NBR_OK;
+}
+
+basic_fiber::quorum_context *basic_fiber::thrd_quorum_init_context(world *w)
+{
+	quorum_context *ctx;
+	TRACE("try allocate quorum : %p/%s\n", &ff().quorums(), w->id());
+	if (!(ctx = ff().quorums().create_if_not_exist(w->id()))) {
+		return NULL; /* already used */
+	}
+	TRACE("svnt::init_context %p\n", ctx);
+	THREAD ath[ffutil::max_cpu_core];
+	int n_thread = ffutil::max_cpu_core;
+	if ((n_thread = nbr_sock_get_worker(ath, n_thread)) < 0) {
+		ff().quorums().erase(w->id());
+		return NULL;
+	}
+	if (!(ctx->m_reply = new quorum_context::reply[n_thread])) {
+		ff().quorums().erase(w->id());
+		return NULL;
+	}
+	for (int i = 0; i < n_thread; i++) {
+		ctx->m_reply[i].thrd = ath[i];
+	}
+	ctx->m_rep_size = n_thread;
+	return ctx;
+}
+
+int basic_fiber::thrd_quorum_global_commit(world *w, quorum_context *ctx, int result)
+{
+	for (int i = 0; i < (int)ctx->m_rep_size; i++) {
+		if (ctx->m_reply[i].msgid == 0) {/* means this node have trouble */
+			continue;	/* ignore and continue; */
+		}
+		rpc::response::pack_header(ff().sr(), ctx->m_reply[i].msgid);
+		if (result < 0) {
+			ff().sr().pushnil();
+			ff().sr() << result;
+		}
+		else {
+			ff().sr() << NBR_OK;
+			ff().sr().pushnil();
+		}
+		SWKFROM from = { from_thread, ff().curr() };
+		if (nbr_sock_worker_event(&from, ctx->m_reply[i].thrd,
+			ff().sr().p(), ff().sr().len()) < 0) {
+			continue;
+		}
+	}
+	TRACE("quorum released %p/%p/%s\n", &ff().quorums(), ctx, w->id());
+	ff().quorums().erase(w->id());
+	return NBR_OK;
+}
+
+int basic_fiber::thrd_quorum_vote_callback(rpc::response &r, THREAD t, void *p)
+{
+	quorum_context *ctx = (quorum_context *)p;
+	if (!r.success()) {
+		return NBR_OK;
+	}
+	for (U32 i = 0; i < ctx->m_rep_size; i++) {
+		if (t == ctx->m_reply[i].thrd) {
+			ctx->m_reply[i].msgid = r.ret();
+			return NBR_OK;
+		}
+	}
+	ASSERT(false);
+	return NBR_ENOTFOUND;
+}
+
 
 #include "svnt/svnt.h"
 void fiber::set_validity(class conn *c){ m_validity.m_sk = c->sk(); }

@@ -343,9 +343,9 @@ public:
 		CONHASH m_ch;
 		world_id m_wid;
 		UUID m_world_object;
-		map<const C*, char*> m_nodes;
+		map<const C*, address> m_nodes;
 	public:
-		typedef typename map<const C*, char*>::iterator nditer;
+		typedef typename map<const C*, address>::iterator nditer;
 		world_impl() : m_ch(NULL), m_world_object() {}
 		~world_impl() { fin(); }
 		int init(int max_node, int max_replica);
@@ -360,7 +360,7 @@ public:
 		}
 		int add_node(const C &s);
 		int del_node(const C &s);
-		map<const C*, char*> &nodes() { return m_nodes; }
+		map<const C*, address> &nodes() { return m_nodes; }
 		static void set_node(C &s, const char *addr) {
 			nbr_conhash_set_node(s.chnode(), addr, vmprotocol::vnode_replicate_num);
 		}

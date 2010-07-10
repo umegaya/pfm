@@ -190,7 +190,7 @@ public:
 					q->m_c->sent_unlink(q);
 					q->m_c = NULL;
 				}
-				remove_query(msgid);
+				m_querylist.erase(msgid);
 			}
 		}
 		void insert_failure_connector(connector *c) {
@@ -278,6 +278,7 @@ public:
 			pc->remove_processed_packet(last_msgid);
 		}
 	}
+	void remove_query(MSGID msgid) { m_connector_resource.remove_query(msgid); }
 	void set_pool(class conn_pool *f) { m_pool = f; }
 	class conn_pool &pool() { return *m_pool; }
 	inline conn *create(const address &a);
@@ -428,6 +429,9 @@ inline
 int connector_impl::connector::send(MSGID msgid, char *p, size_t l, querydata *fq)
 {
 	failover_chain *c = chain();
+#if 1
+	return c->m_s->send(p, l);
+#else
 	if (!fq) {
 		/* if connection is recovered, send unprocessed packet */
 		int r = try_resend();
@@ -437,6 +441,7 @@ int connector_impl::connector::send(MSGID msgid, char *p, size_t l, querydata *f
 		q->m_l = l;
 		q->m_sent_msgid = msgid;
 		if (!(q->m_p = (char *)malloc(l))) { goto error; }
+		TRACE("send : tmp buf = %p\n", q->m_p);
 		memcpy(q->m_p, p, l);
 		fq = q;
 		if (r < 0) { goto senderror; }
@@ -455,6 +460,7 @@ senderror:
 error:
 	cf().remove_query(msgid);
 	return NBR_EEXPIRE;
+#endif
 }
 
 inline

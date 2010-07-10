@@ -20,12 +20,12 @@ class test_object {
 	U64 u64;
 public:
 	test_object() { memset(this, 0, sizeof(*this)); }
-	int save(char *&p, int &l) {
+	int save(char *&p, int &l, void *ctx) {
 		if (sizeof(test_object) > (size_t)l) {
 			p = (char *)malloc(sizeof(test_object));
 			l = sizeof(test_object);
 		}
-		serializer sr;
+		serializer &sr = *(serializer *)ctx;
 		sr.pack_start(p, l);
 		sr.push_array_len(5);
 		sr.push_array_len(al);
@@ -42,11 +42,11 @@ public:
 		sr << u64;
 		return (l = sr.len());
 	}
-	int load(const char *p, int l) {
-		serializer sr;
+	int load(const char *p, int l, void *ctx) {
+		serializer &sr = *(serializer *)ctx;
 		serializer::data d, ary, dmp;
 		sr.unpack_start(p, l);
-		sr.unpack(d);
+		sr.unpack(d, p, l);
 		ASSERT(d.type() == rpc::datatype::ARRAY && d.size() == 5);
 		ary = d.elem(0);
 		ASSERT(ary.type() == rpc::datatype::ARRAY && ary.size() <= 3);
@@ -148,6 +148,7 @@ int dbm_test(int argc, char *argv[])
 	db.fin();
 	test_object	tests[1001], *pto;
 	pmap<test_object, char[9]>	pm;
+	serializer sr;
 	const char *dbmopt2 = get_rcpath(path, sizeof(path), 
 			argv[0], "rc/dbm/to.tch");
 	if (!pm.init(1000, 100, 0, dbmopt2)) {
@@ -158,11 +159,11 @@ int dbm_test(int argc, char *argv[])
 	for (int i = 0; i < 1001; i++) {
 		snprintf(key, sizeof(key), "%08x", i);
 		tests[i].fill();
-		if (!(pto = pm.insert(tests[i], key)) || (*pto != tests[i])) {
+		if (!(pto = pm.insert(tests[i], key, &sr)) || (*pto != tests[i])) {
 			TTRACE("pmap::create fail at %u\n", i);
 			return NBR_EMALLOC;
 		}
-		pm.unload(key);
+		pm.unload(key, &sr);
 	}
 	if (pm.cachesize() != 0) {
 		TTRACE("pmap: unload fail? (%d)\n", pm.cachesize());
@@ -170,7 +171,7 @@ int dbm_test(int argc, char *argv[])
 	}
 	for (int i = 0; i < 1000; i++) {
 		snprintf(key, sizeof(key), "%08x", i);
-		if (!(pto = pm.load(key)) || (*pto != tests[i])) {
+		if (!(pto = pm.load(key, &sr)) || (*pto != tests[i])) {
 			TTRACE("pmap::load fail at %u\n", i);
 			return NBR_EINVAL;
 		}
@@ -191,11 +192,11 @@ int dbm_test(int argc, char *argv[])
 	}
 	for (int i = 0; i < 1000; i++) {
 		snprintf(key, sizeof(key), "%08x", i);
-		if ((pto = pm.insert(tests[i], key))) {
+		if ((pto = pm.insert(tests[i], key, &sr))) {
 			TTRACE("pmap::insert should fail if once created (%d)\n", i);
 			return NBR_EALREADY;
 		}
-		if (!(pto = pm.load(key))) {
+		if (!(pto = pm.load(key, &sr))) {
 			TTRACE("pmap::load should success (%d)\n", i);
 			return NBR_ENOTFOUND;
 		} 

@@ -13,13 +13,17 @@ using namespace sfc;
 namespace svnt {
 class fiber : public rpc::basic_fiber {
 public:
-	static map<class csession*, UUID> m_sm;
+	typedef rpc::basic_fiber super;
+	struct csession_entry {
+		class csession *m_s;
+	};
+	static map<csession_entry, UUID> m_sm;
 public:	/* master quorum base replication */
-	typedef ffutil::quorum_context quorum_context;
+	typedef super::quorum_context quorum_context;
 	int quorum_vote_commit(MSGID msgid, quorum_context *ctx, serializer &sr);
 	int quorum_global_commit(world *w, quorum_context *ctx, int result);
 	quorum_context *init_context(world *w);
-	static int quorum_vote_callback(rpc::response &r, SWKFROM *from, void *ctx);
+	static int quorum_vote_callback(rpc::response &r, THREAD thrd, void *ctx);
 public:
 	static int init_global(int max_conn) {
 		if (!m_sm.init(max_conn, max_conn, -1, opt_expandable | opt_threadsafe)) {
@@ -29,15 +33,25 @@ public:
 	}
 	static void fin_global() { m_sm.fin(); };
 	static int register_session(class csession *s, const UUID &uuid) {
-		return m_sm.insert(s, uuid) == m_sm.end() ? NBR_EEXPIRE : NBR_OK;
+		csession_entry *ce = m_sm.create(uuid);
+		if (!ce) { return NBR_EEXPIRE; }
+		ce->m_s = s;
+		return NBR_OK;
 	}
 	static void unregister_session(const UUID &uuid) { m_sm.erase(uuid); }
+	static class csession *find_session(const UUID &uuid) {
+		csession_entry *ce = m_sm.find(uuid);
+		return ce ? ce->m_s : NULL;
+	}
 public:
 	int respond(bool err, serializer &sr) {
 		return basic_fiber::respond<svnt::fiber>(err, sr);
 	}
+	int send_error(int r) { return basic_fiber::send_error<svnt::fiber>(r); }
 	int call_login(rpc::request &req);
 	int resume_login(rpc::response &res);
+	int call_logout(rpc::request &req);
+	int resume_logout(rpc::response &res);
 	int call_replicate(rpc::request &req) { ASSERT(false); return NBR_ENOTSUPPORT; }
 	int resume_replicate(rpc::response &res) { ASSERT(false); return NBR_ENOTSUPPORT; }
 	int call_node_inquiry(rpc::request &req);
@@ -60,8 +74,8 @@ public:
 	int node_ctrl_vm_deploy(class world *,
 		rpc::node_ctrl_cmd::vm_deploy &, serializer &);
 	int node_ctrl_vm_deploy_resume(class world *, rpc::response &, serializer &);
-	int node_ctrl_regist(class world *, rpc::node_ctrl_cmd::regist &, serializer &);
-	int node_ctrl_regist_resume(class world *, rpc::response &, serializer &);
+	int call_node_regist(rpc::request &);
+	int resume_node_regist(rpc::response &);
 };
 }
 
@@ -108,7 +122,8 @@ public:
 	int on_open(const config &cfg) { return super::on_open(cfg); }
 	int on_close(int reason) { return super::on_close(reason); }
 	int on_recv(char *p, int l) {
-		return app().ff().recv((class conn *)this, p, l, true);
+		app().ff().recv((class conn *)this, p, l, true);
+		return NBR_OK;
 	}
 	int on_event(char *p, int l) {
 		return app().ff().recv((class conn *)this, p, l, true);
@@ -117,19 +132,25 @@ public:
 
 class csession : public sfc::base::session, public binprotocol {
 protected:
-	char *m_authdata;
-	int m_alen;
+	static const size_t max_authdata = 1024;
+	char m_authdata[max_authdata];
+	char m_wid[max_wid];
+	U16 m_alen, m_wlen;
 	UUID m_uuid;
 	char m_acc[rpc::login_request::max_account];
 public:
 	typedef sfc::base::session super;
-	csession() : super(), m_authdata(NULL), m_alen(0), m_uuid() {}
-	~csession() { if (m_authdata) { nbr_free(m_authdata); m_authdata = NULL; } }
-	void set_account_info(const char *acc, const char *auth, int alen) {
+	csession() : super(), m_alen(0), m_wlen(0), m_uuid() {}
+	~csession() {}
+	int set_account_info(world_id wid, 
+		const char *acc, const char *auth, int alen) {
 		nbr_str_copy(m_acc, sizeof(m_acc), acc, sizeof(m_acc));
-		m_authdata = (char *)nbr_malloc(alen);
+		if ((size_t)alen > max_authdata) { return NBR_ESHORT; }
 		memcpy(m_authdata, auth, alen);
 		m_alen = alen;
+		m_wlen = nbr_str_copy(m_wid, max_wid, wid, max_wid);
+		if (m_wlen > max_wid) { return NBR_ESHORT; }
+		return NBR_OK;
 	}
 	const char *authdata() const { return m_authdata; }
 	int alen() const { return m_alen; }
@@ -137,6 +158,25 @@ public:
 	const char *account() const { return m_acc; }
 	void set_uuid(const UUID &uuid) { m_uuid = uuid; }
 	inline int on_recv(char *p, int l);
+	static int logout_cb(serializer &sr) {
+		LOG("logout\n");
+		return NBR_OK;
+	}
+	int on_close(int reason) {
+		int r;
+		serializer &sr = svnt::session::app().sr();
+		PREPARE_PACK(sr);
+		if ((r = rpc::logout_request::pack_header(
+			sr, svnt::session::app().ff().new_msgid(), m_wid, m_wlen, m_acc)) < 0) {
+			ASSERT(false);
+			return r;
+		}
+		if ((r = svnt::session::app().ff().run_fiber(logout_cb, sr.p(), sr.len())) < 0) {
+			ASSERT(false);
+			return r;
+		}
+		return super::on_close(reason);
+	}
 };
 
 class besession : public session {

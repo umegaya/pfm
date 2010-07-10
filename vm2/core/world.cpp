@@ -89,7 +89,8 @@ const CHNODE *world::add_node(const conn &c)
 	TRACE("addnode conn: <%s:%s:%p>\n", (const char *)c.node_data()->iden, 
 		(const char *)c.addr(), &c);
 	if ((n = m_nodes.find(c.addr()))) { return n; }
-	if ((i = m_nodes.insert(c.node_data(), c.addr())) == m_nodes.end()) { return NULL; }
+	if ((i = m_nodes.insert(c.node_data(), c.addr())) == m_nodes.end()) {
+		return NULL; }
 	n = &(*i);
 	int r = add_node(*n);
 	if (r < 0 && r != NBR_EALREADY) {

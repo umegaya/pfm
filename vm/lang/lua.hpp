@@ -229,6 +229,7 @@ public:	/* typedefs */
 			set_sender(v, fn);
 			return m_ip != NULL;
 		}
+		void co_destroy();
 		/* because it union, s == NULL means vmm == NULL */
 		bool need_reply() const { return m_exit_fn.s == NULL; }
 		static void exit_noop(S &, S &, VM, int, U32, rpctype, char *, size_t) {}
@@ -269,7 +270,7 @@ public: /* constant */
 	};
 #endif
 protected:	/* static variable */
-	static map<type_id, char*> 	m_types;
+	map<type_id, char*> 	m_types;
 	static array<rpc>		m_rpcs;
 	static map<fiber*,U64>		m_fbmap;
 #if defined(_DEBUG)
@@ -287,7 +288,7 @@ protected:	/* static variable */
 	THREAD		m_thrd;
 	SR		m_serializer;
 public:
-	lua() : m_fibers(), m_smpool(), m_vm(NULL), m_thrd(NULL), m_serializer() {}
+	lua() : m_types(), m_fibers(), m_smpool(), m_vm(NULL), m_thrd(NULL), m_serializer() {}
 	~lua() {}
 	/* external interfaces */
 	int 	init(int max_rpc_entry, int max_rpc_ongoing, int n_wkr);
@@ -390,7 +391,7 @@ protected: 	/* helpers */
 	static inline void load_fiber_local_cache(VM);
 	static inline void load_fiber_local_cache_from_object(VM, const object &);
 
-	static const char *add_type(VM, const char *typestr, object *o);
+	const char *add_type(VM, const char *typestr, object *o, bool init_symbol = true);
 
 	template <class SNDR> static int dispatch(SNDR &, fiber &, int, bool);
 	static int 	reply_result(fiber &, int, rpctype rt = vmprotocol::rpct_invalid);

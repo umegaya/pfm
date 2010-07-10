@@ -480,7 +480,7 @@ vmd::vmdsvnt::recv_cmd_node_ctrl(U32 msgid, const char *cmd,
 	serializer &sr = vm()->serializer();
 	sr.unpack_start(p, l);
 	if (sr.unpack(d) <= 0) { return NBR_EFORMAT; }
-	bool has_object = protocol::is_valid_id(*(UUID *)script::to_p(d));
+//	bool has_object = protocol::is_valid_id(*(UUID *)script::to_p(d));
 	while(sr.unpack(d)) {
 		r = recv_notify_node_change(cmd, wid, script::to_s(d));
 		if (r < 0 && r != NBR_EALREADY) {
@@ -490,25 +490,25 @@ vmd::vmdsvnt::recv_cmd_node_ctrl(U32 msgid, const char *cmd,
 		}
 		log(INFO, "add node to consistent hash %s:%d\n", script::to_s(d), r);
 	}
-	if (!has_object) {
-		world *w = object_factory::find_world(wid);
-		if (!w) {
-			ASSERT(false);
-			return backend_conn()->reply_node_ctrl(
-					*this, msgid, NBR_ENOTFOUND, cmd, wid, "", 0);
-		}
-		TRACE("(%s) has no world object: create now\n", wid);
-		querydata *q;
-		if ((r = create_object_with_type(&wid, "World", sizeof("World"),
-			msgid, vmprotocol::load_purpose_create_world, &q)) < 0) {
-			return backend_conn()->reply_node_ctrl(
-					*this, msgid, r, cmd, wid, "", 0);
-		}
-		q->m_world = w;
-		return NBR_OK;
+//	if (!has_object) {
+	world *w = object_factory::find_world(wid);
+	if (!w) {
+		ASSERT(false);
+		return backend_conn()->reply_node_ctrl(
+				*this, msgid, NBR_ENOTFOUND, cmd, wid, "", 0);
 	}
-	return backend_conn()->reply_node_ctrl(
-			*this, msgid, NBR_OK, cmd, wid, "", 0);
+	TRACE("(%s) has no world object: create now\n", wid);
+	querydata *q;
+	if ((r = create_object_with_type(&wid, "World", sizeof("World"),
+		msgid, vmprotocol::load_purpose_create_world, &q)) < 0) {
+		return backend_conn()->reply_node_ctrl(
+				*this, msgid, r, cmd, wid, "", 0);
+	}
+	q->m_world = w;
+	return NBR_OK;
+//	}
+//	return backend_conn()->reply_node_ctrl(
+//			*this, msgid, NBR_OK, cmd, wid, "", 0);
 }
 
 
@@ -569,8 +569,8 @@ void vmd::vmdclnt::exit_main(vmdclnt &sender, vmdclnt &recver,
 	static int g_finish_cnt = 0;
 	sender.inc_iter_cnt();
 	ASSERT(sender.iter_cnt() <= 100);
-	ASSERT(sender.last_msgid() > 6);
-	if (sender.iter_cnt() >= 100) {
+	//ASSERT(sender.last_msgid() > 6);
+	if (sender.iter_cnt() >= 1) {
 		sender.log(INFO, "iteration finish\n");
 		//sender.close();
 		g_finish_cnt++;
@@ -865,6 +865,7 @@ vmd::boot(int argc, char *argv[])
 #if 1
 			vmdclnt::factory::super *fc = (vmdclnt::factory::super *)clnt;
 			for (int i = 0; i < clnt->cfg().m_max_connection; i++) {
+				usleep(50 * 1000);
 				vmdclnt *c = fc->pool().create();
 				if (!c || (r = fc->connect(c, vc->m_be_addr)) < 0) {
 					return c ? r : NBR_EEXPIRE;

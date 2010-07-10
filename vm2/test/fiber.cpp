@@ -33,7 +33,7 @@ struct packet {
 	template <class T>
 	int unpack(serializer &sr, T &d) {
 		sr.unpack_start(m_p, m_l);
-		return sr.unpack(d);
+		return sr.unpack(d, m_p, m_l);
 	}
 };
 
@@ -124,7 +124,7 @@ struct test_context {
 };
 
 static void thevent(SWKFROM *frm, THREAD to, char *p, size_t l);
-int init_node_data(node_data &d, const char *a, int type, char *argv[])
+int init_node_data(node_data &d, THREAD thrd, const char *a, int type, char *argv[])
 {
 	int r;
 	char path[1024], tmp[1024];
@@ -149,7 +149,7 @@ int init_node_data(node_data &d, const char *a, int type, char *argv[])
 				"init servant fiber factory fails (%d)\n", r = NBR_EEXPIRE);
 		TEST((r = d.m_sff->init(10000, 100, 10)) < 0,
 				"fiber_factory init fails(%d)\n", r);
-		TEST((r = d.m_sff->init_tls()) < 0, 
+		TEST((r = d.m_sff->init_tls(thrd)) < 0,
 				"fiber_factory init_tls fails (%d)\n", r);
 	} break;
 	case node_data::type_servant2: {
@@ -263,12 +263,15 @@ public:
 	test_object2() : object() {}
 	int save(char *&p, int &l) { return l; }
 	int load(const char *p, int l) { return NBR_OK; }
-	rpc::ll_exec_request &reqbuff() {
-		ASSERT(sizeof(rpc::ll_exec_request) <= sizeof(object::m_buffer));
-		return *(rpc::ll_exec_request *)buffer(); }
+	rpc::ll_exec_request &reqbuff(rpc::ll_exec_request &req) {
+		serializer sr;
+		sr.unpack_start(((packet *)buffer())->m_p, ((packet *)buffer())->m_l);
+		sr.unpack(req, ((packet *)buffer())->m_p, ((packet *)buffer())->m_l);
+		return  req;
+	}
 	int request(class serializer &sr) {
-		sr.unpack_start(sr.p(), sr.len());
-		return sr.unpack(reqbuff());
+		((packet *)buffer())->set(sr.p(), sr.len());
+		return sr.len();
 	}
 	static int test_request(object *p, MSGID, ll *, serializer &sr) {
 		return ((test_object2 *)p)->request(sr);
@@ -278,20 +281,23 @@ public:
 class test_world2 : public world {
 public:
 	static rpc::create_object_request m_d;
+	static packet m_pkt;
 	static UUID m_uuid_sent;
 public:
 	test_world2() : world() {}
 	static int test_request(world *w, MSGID msgid,
 			const UUID &uuid, serializer &sr) {
 		m_uuid_sent = uuid;
-		sr.unpack_start(sr.p(), sr.len());
-		return sr.unpack(m_d);
+		m_pkt.set(sr.p(), sr.len());
+		sr.unpack_start(m_pkt.m_p, m_pkt.m_l);
+		return sr.unpack(m_d, m_pkt.m_p, m_pkt.m_l);
 	}
 };
 rpc::create_object_request test_world2::m_d;
+packet test_world2::m_pkt;
 UUID test_world2::m_uuid_sent;
 static rpc::create_object_request &get_cor() { return test_world2::m_d; }
-static rpc::ll_exec_request &get_ler(test_object2 *o) { return o->reqbuff(); }
+static rpc::ll_exec_request &get_ler(test_object2 *o, rpc::ll_exec_request &r) { return o->reqbuff(r); }
 
 
 /*------------------------------------------------------------------*/
@@ -456,6 +462,7 @@ int fiber_test_login(test_context &ctx, int argc, char *argv[])
 	rpc::create_object_request req2;
 	rpc::authentication_request req3;
 	rpc::ll_exec_response res2;
+	rpc::ll_exec_request req_ler;
 	node_data *svnt, *nd, *wnd;
 	int idx = nbr_rand32() % ctx.m_snd.use();
 	map<node_data, address>::iterator it = ctx.m_snd.begin();
@@ -467,10 +474,11 @@ int fiber_test_login(test_context &ctx, int argc, char *argv[])
 	PREPARE_PACK(svnt->m_sff->sr());
 	TEST((r = rpc::login_request::pack_header(svnt->m_sff->sr(), 1000006,
 		"test_world2", sizeof("test_world2") - 1,
-		"user", "password", sizeof("password") - 1)) < 0,
+		"user", "password", sizeof("password"))) < 0,
 		"pack login command fails (%d)\n", r);
 	PREPARE_UNPACK(svnt->m_sff->sr());
-	TEST((r = svnt->m_sff->sr().unpack(req)) <= 0,
+	TEST((r = svnt->m_sff->sr().unpack(req,
+			svnt->m_sff->sr().p(), svnt->m_sff->sr().len())) <= 0,
 		"unpack login command fails (%d)\n", r);
 	svnt::csession cs;
 	TEST((r = svnt->m_sff->call(svnt_csession::cast(&cs), req, false)) < 0,
@@ -527,7 +535,7 @@ int fiber_test_login(test_context &ctx, int argc, char *argv[])
 	a = ct->primary()->get_addr(a);
 	TEST(!(wnd = ctx.m_snd.find(a)),
 		"node data which handle world object not found (%p)\n", wnd);
-	TEST((r = wnd->m_sff->call(&c, get_ler(to), true)) < 0,
+	TEST((r = wnd->m_sff->call(&c, get_ler(to, req_ler), true)) < 0,
 		"World:get_id call fails (%d)\n", r);
 	/* resume Player:new */
 	TEST((r = sresponse(nd->m_sff->sr(), res2)) < 0,
@@ -577,6 +585,7 @@ int fiber_test_ll(test_context &ctx, int argc, char *argv[])
 	object *o;
 	test_object2 *to;
 	rpc::response resp;
+	rpc::ll_exec_request req_ler;
 	connector *c;
 	world *w;
 	address a;
@@ -598,16 +607,18 @@ int fiber_test_ll(test_context &ctx, int argc, char *argv[])
 	TEST(!(nd = ctx.m_snd.find(c->primary()->get_addr(a))),
 		"node data which handle object creation not found (%p)\n", nd);
 	fiber_factory<testsfiber> &ff = *(nd->m_sff);
-	PREPARE_PACK(ff.sr());
 	/* create request */
 	rpc::create_object_request cor;
-	TEST((r = rpc::create_object_request::pack_header(
-		ff.sr(), 10000001/* msgid_dummy */, uuid,
-		ll::player_klass_name, ll::player_klass_name_len,
-		"test_world2", sizeof("test_world2") - 1, false, 0)) < 0,
-		"pack create object fails (%d)\n", r);
-	ff.sr().unpack_start(ff.sr().p(), ff.sr().len());
-	TEST((r = ff.sr().unpack(cor)) <= 0, "unpack fails (%d)\n", r);
+	{
+		PREPARE_PACK(ff.sr());
+		TEST((r = rpc::create_object_request::pack_header(
+			ff.sr(), 10000001/* msgid_dummy */, uuid,
+			ll::player_klass_name, ll::player_klass_name_len,
+			"test_world2", sizeof("test_world2") - 1, false, 0)) < 0,
+			"pack create object fails (%d)\n", r);
+		ff.sr().unpack_start(ff.sr().p(), ff.sr().len());
+		TEST((r = ff.sr().unpack(cor, ff.sr().p(), ff.sr().len())) <= 0, "unpack fails (%d)\n", r);
+	}
 	TEST(!(o = ff.of().find(ctx.wuuid)), "world object not found (%p)\n", o);
 	to = (test_object2 *)o;
 	/* force set remote */
@@ -615,7 +626,7 @@ int fiber_test_ll(test_context &ctx, int argc, char *argv[])
 	TEST((r = ff.call(fiber::to_thrd(t), cor, true)) < 0,
 		"create object fails (%d)\n", r);
 	/* it should resume inside of it and call World object */
-	TEST((r = ffw.call(fiber::to_thrd(t), get_ler(to), true)) < 0,
+	TEST((r = ffw.call(fiber::to_thrd(t), get_ler(to, req_ler), true)) < 0,
 		"resume object creation fails (call World:get_id) (%d)\n", r);
 	/* reply result to first fiber (msgid = 1) */
 	TEST((r = sresponse(ff.sr(), resp)) < 0, "response unpack fails (%d)\n", r);
@@ -625,13 +636,16 @@ int fiber_test_ll(test_context &ctx, int argc, char *argv[])
 			"klass type invalid (%s)\n", o->klass());
 	/* call Player:get_id */
 	rpc::ll_exec_request ler;
-	TEST((r = rpc::ll_exec_request::pack_header(
-		ff.sr(), 10000002/* msgid_dummy */, *o,
-		"get_id", sizeof("get_id") - 1,
-		"test_world2", sizeof("test_world2") - 1, 0)) < 0,
-		"pack ll exec fails (%d)\n", r);
-	ff.sr().unpack_start(ff.sr().p(), ff.sr().len());
-	TEST((r = ff.sr().unpack(ler)) <= 0, "ll exec unpack fails(%d)\n", r);
+	{
+		PREPARE_PACK(ff.sr());
+		TEST((r = rpc::ll_exec_request::pack_header(
+			ff.sr(), 10000002/* msgid_dummy */, *o,
+			"get_id", sizeof("get_id") - 1,
+			"test_world2", sizeof("test_world2") - 1, false, 0)) < 0,
+			"pack ll exec fails (%d)\n", r);
+		ff.sr().unpack_start(ff.sr().p(), ff.sr().len());
+		TEST((r = ff.sr().unpack(ler, ff.sr().p(), ff.sr().len())) <= 0, "ll exec unpack fails(%d)\n", r);
+	}
 	TEST((r = ff.call(fiber::to_thrd(t), ler, true)) < 0, "get_id exec call fails(%d)\n", r);
 	/* check return value */
 	rpc::ll_exec_response rler;
@@ -672,6 +686,7 @@ int fiber_test_thread(test_context &ctx, int argc, char *argv[])
 	fiber::m_test_respond = testsfiber::test_respond;
 	rpc::response resp;
 	rpc::request req;
+	init_thread_msg_wait(ctx);
 
 	TEST((r = db.init(MAKEPATH(path, "rc/uuid/uuid.tch"))) < 0,
 		"uuid DB init fail (%d)\n",r);
@@ -684,12 +699,12 @@ int fiber_test_thread(test_context &ctx, int argc, char *argv[])
 		"test_conn::pktmap init fail (%d)\n", r = NBR_EEXPIRE);
 	TEST(!m_thevmap.init(100, 100, -1, opt_threadsafe | opt_expandable), 
 		"thread event map init fails (%d)\n", r = NBR_EEXPIRE);
-	TEST((r = init_node_data(ctx.m_mnd, "127.0.0.1:8000",
+	TEST((r = init_node_data(ctx.m_mnd, ctx.workers[0], "127.0.0.1:8000",
 		node_data::type_master, argv)) < 0,
 		"create master connector factory fail (%d)\n", r);
-	TEST((r = ctx.m_mnd.m_mff->init_tls()) < 0,
+	TEST((r = ctx.m_mnd.m_mff->init_tls(ctx.workers[0])) < 0,
 		"init TLS fails (%d)\n", r);
-	TEST((r = init_node_data(ctx.m_snd2, "127.0.0.1:9000",
+	TEST((r = init_node_data(ctx.m_snd2, ctx.workers[0], "127.0.0.1:9000",
 		node_data::type_servant2, argv)) < 0,
 		"create master connector factory fail (%d)\n", r);
 	TEST(!ctx.m_snd.init(N_HOST, N_HOST, -1, opt_expandable),
@@ -697,7 +712,7 @@ int fiber_test_thread(test_context &ctx, int argc, char *argv[])
 	for (U32 i = 0; i < N_HOST; i++) {
 		nd = ctx.m_snd.create(HOST_LIST[i]);
 		TEST(!nd, "create node data fail (%s)\n", HOST_LIST[i]);
-		TEST((r = init_node_data(*nd, HOST_LIST[i],
+		TEST((r = init_node_data(*nd, ctx.workers[0], HOST_LIST[i],
 			node_data::type_servant, argv)) < 0,
 			"init node data fail (%d)\n", r);
 		/* emulate conneciton between master - servant */
@@ -717,7 +732,8 @@ int fiber_test_thread(test_context &ctx, int argc, char *argv[])
 			servant_node)) < 0,
 			"pack nodereg command fails (%d)\n", r);
 		PREPARE_UNPACK(nd->m_sff->sr());
-		TEST((r = nd->m_sff->sr().unpack(req)) <= 0,
+		TEST((r = nd->m_sff->sr().unpack(req,
+			nd->m_sff->sr().p(), nd->m_sff->sr().len())) <= 0,
 			"unpack login command fails (%d)\n", r);
 		THREAD th = NULL;
 		TEST((r = nd->m_sff->call(fiber::to_thrd(th), req, true)) < 0,

@@ -15,6 +15,7 @@
 
 #define PREPARE_PACK(scr)		\
 		char __b[4 * 1024];	\
+		sr_disposer srd((serializer &)(scr));	\
 		((serializer &)(scr)).pack_start(__b, sizeof(__b));
 
 #define PREPARE_UNPACK(scr)		\

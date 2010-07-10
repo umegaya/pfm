@@ -31,7 +31,7 @@ public:
 		if (err) { return NBR_EINVAL; }
 		sr.unpack_start(sr.p(), sr.len());
 		rpc::ll_exec_response d;
-		if (sr.unpack(d) < 0) {
+		if (sr.unpack(d, sr.p(), sr.len()) < 0) {
 			return NBR_ESHORT;
 		}
 		if (d.err().type() != rpc::datatype::NIL) {
@@ -54,7 +54,7 @@ static void push_rpc_context(serializer &sr, msgid_generator &seed,
 				object *o, world_id wid, size_t wlen)
 {
 	ll_exec_request::pack_header(sr, seed.new_id(), *o, "test_function",
-			sizeof("test_function") - 1, wid, wlen, 4);
+			sizeof("test_function") - 1, wid, wlen, false, 4);
 	sr.push_map_len(3);
 	PUSHSTR(sr,key_a);
 	sr << 111;
@@ -100,24 +100,14 @@ int ll_call_test(int argc, char *argv[])
 		TTRACE("init_object_factory fail (%d)\n", r);
 		return r;
 	}
-	if ((r = scr.init(10000)) < 0) {
+	if ((r = scr.init(10000, NULL)) < 0) {
 		TTRACE("lua::init fail (%d)\n", r);
 		return r;
 	}
 	of.clear();
-	uuid1.assign();
-	if (!(o1 = of.create(uuid1, w1, &scr, "World"))) {
-		TTRACE("create world object for test_world fails (%p)\n", o1);
-		return NBR_EEXPIRE;
-	}
-	uuid2.assign();
-	if (!(o2 = of.create(uuid2, w2, &scr, "World"))) {
-		TTRACE("create world object for test_world2 fails (%p)\n", o2);
-		return NBR_EEXPIRE;
-	}
-	if ((r = scr.init_world("test_world", NULL, 
-		get_rcpath(path, sizeof(path), 
-			argv[0], "rc/ll/test_world/main.lua"))) < 0) { 
+	if ((r = scr.init_world("test_world", NULL,
+		get_rcpath(path, sizeof(path),
+			argv[0], "rc/ll/test_world/main.lua"))) < 0) {
 		TTRACE("lua::init_world fail (test_world:%d)\n", r);
 		return r;
 	}
@@ -129,6 +119,24 @@ int ll_call_test(int argc, char *argv[])
 	}
 	fb.set_msgid(1000000);
 	fb2.set_msgid(1000001);
+	uuid1.assign();
+	if ((r = co.init(&fb, &scr)) < 0) {
+		TTRACE("fiber init fail (%d)\n", r);
+		return r;
+	}
+	if (!(o1 = of.create(uuid1, &co, w1, &scr, "World"))) {
+		TTRACE("create world object for test_world fails (%p)\n", o1);
+		return NBR_EEXPIRE;
+	}
+	uuid2.assign();
+	if ((r = co.init(&fb2, &scr)) < 0) {
+		TTRACE("fiber init fail (%d)\n", r);
+		return r;
+	}
+	if (!(o2 = of.create(uuid2, &co, w2, &scr, "World"))) {
+		TTRACE("create world object for test_world2 fails (%p)\n", o2);
+		return NBR_EEXPIRE;
+	}
 	
 	/* call 
 	map = { key_a => 111, key_b => 222, key_c => 333 }
@@ -150,7 +158,7 @@ int ll_call_test(int argc, char *argv[])
 	/* create ll_exec_request object */
 	sr.unpack_start(sr.p(), sr.len());/* eat my shit */
 	serializer::data d;
-	if ((r = sr.unpack(d)) < 0) {
+	if ((r = sr.unpack(d, sr.p(), sr.len())) < 0) {
 		TTRACE("create ll_exec_request fail (%d)\n", r);
 		return r;
 	}
@@ -168,7 +176,7 @@ int ll_call_test(int argc, char *argv[])
 	push_rpc_context(sr, seed, o2, "test_world2", sizeof("test_world2") - 1);
 	/* create ll_exec_request object */
 	sr.unpack_start(sr.p(), sr.len());/* eat my shit */
-	if ((r = sr.unpack(d)) < 0) {
+	if ((r = sr.unpack(d, sr.p(), sr.len())) < 0) {
 		TTRACE("create ll_exec_request fail (%d)\n", r);
 		return r;
 	}	
@@ -202,7 +210,7 @@ public:
 	rpc::ll_exec_response &result() { return m_d; }
 	int respond(bool err, serializer &sr) {
 		sr.unpack_start(sr.p(), sr.len());
-		return sr.unpack(m_d);
+		return sr.unpack(m_d, sr.p(), sr.len());
 	}
 	static int test_respond(fiber *f, bool err, serializer &sr) {
 		return ((testfiber *)f)->respond(err, sr);
@@ -219,7 +227,7 @@ public:
 		return *(rpc::ll_exec_request *)buffer(); }
 	int request(class serializer &sr) {
 		sr.unpack_start(sr.p(), sr.len());
-		return sr.unpack(reqbuff());
+		return sr.unpack(reqbuff(), sr.p(), sr.len());
 	}
 	static int test_request(object *p, MSGID, ll *, serializer &sr) {
 		return ((test_object *)p)->request(sr);
@@ -235,7 +243,7 @@ public:
 			const UUID &uuid, serializer &sr) {
 		sr.unpack_start(sr.p(), sr.len());
 		int r;
-		TEST((r = sr.unpack(m_d)) < 0, "of:request invalid (%d)", r);
+		TEST((r = sr.unpack(m_d, sr.p(), sr.len())) < 0, "of:request invalid (%d)", r);
 		m_uuid = m_d.object_id();
 		return r;
 	}
@@ -297,8 +305,10 @@ int	ll_resume_test_thread_main(THREAD th, int argc, char *argv[])
 	world::m_test_request = test_world::test_request;
 	fiber::m_test_respond = testfiber::test_respond;
 	TEST(!(w = wf.create("test_world", 10, 10)), "world create fail (%p)\n", w);
-	TEST((r = scr1.init(10000)) < 0, "scr1 init fail (%d)\n", r);
-	TEST((r = scr2.init(10000)) < 0, "scr2 init fail (%d)\n", r);
+	TEST((r = scr1.init(10000, nbr_thread_get_current())) < 0,
+		"scr1 init fail (%d)\n", r);
+	TEST((r = scr2.init(10000, nbr_thread_get_current())) < 0,
+		"scr2 init fail (%d)\n", r);
 	TEST(!of.init(10000, 1000, 0, MAKEPATH(path,"rc/ll/of.tch")),
 		"object factory creation fail (%d)\n", r = NBR_EINVAL);
 	of.clear();
@@ -316,14 +326,15 @@ int	ll_resume_test_thread_main(THREAD th, int argc, char *argv[])
 	fb2.set_ff(&ff);
 	fb2.set_msgid(seed.new_id());
 	uuid1.assign();
-	TEST(!(o1 = of.create(uuid1,w,&scr1,"Player")), "create o1 fail (%p)\n", o1);
+	TEST(!(o1 = of.create(uuid1,NULL,w,&scr1,"Player")), "create o1 fail (%p)\n", o1);
 	/* call Player:new */
 	sr.pack_start(buf, sizeof(buf));
 	TEST((r = pack_rpc_reqheader(sr, *o1, "new", "test_world", 1)) < 0,
 		"pack_rpc_header fail (%d)\n", r);
 	PUSHSTR(sr, umegaya);
 	sr.unpack_start(sr.p(), sr.len());
-	TEST((r = sr.unpack(req)) < 0, "unpack packed buf fails (%d)\n", r);
+	TEST((r = sr.unpack(req, sr.p(), sr.len())) < 0,
+		"unpack packed buf fails (%d)\n", r);
 	/* Player:new should be yielding */
 	TEST((r = co1.init(&fb1, &scr1)) < 0, "fb1 init fails (%d)\n", r);
 	TEST((r = co1.call(req, true)) < 0, "fb1 call fails (%d)\n", r);/* should be yield */
@@ -348,7 +359,7 @@ int	ll_resume_test_thread_main(THREAD th, int argc, char *argv[])
 	TEST((r = pack_rpc_reqheader(sr, *o1, "attack", "test_world", 0)) < 0,
 		"pack_rpc_header fail (%d)\n", r);
 	sr.unpack_start(sr.p(), sr.len());
-	TEST((r = sr.unpack(req)) < 0, "unpack packed buf fails (%d)\n", r);
+	TEST((r = sr.unpack(req, sr.p(), sr.len())) < 0, "unpack packed buf fails (%d)\n", r);
 	/* it also should be yielding */
 	TEST((r = co1.init(&fb1, &scr1)) < 0, "fb1 init fails (%d)\n", r);
 	TEST((r = co1.call(req, true)) < 0, "fb1 call fails (%d)\n", r);

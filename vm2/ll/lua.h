@@ -48,10 +48,11 @@ public:
 		coroutine() : m_fb(NULL), m_scr(NULL) {}
 		~coroutine() {}
 		int init(class fiber *f, class lua *scr);
+		void fin();
 		int call(rpc::ll_exec_request &req, bool trusted);
 		int call(rpc::create_object_request &req);
 		int call(rpc::authentication_request &req);
-		int call(rpc::ll_exec_response &res, const char *method);
+		int call(rpc::ll_exec_request &req, const char *method);
 		int resume(rpc::ll_exec_response &res, bool packobj = false);
 		int push_world_object(class object *o);
 		static int pack_object(serializer &sr, class object &o,
@@ -59,12 +60,14 @@ public:
 		int to_stack(rpc::create_object_response &res) {
 			return to_stack(rpc::ll_exec_response::cast(res));
 		}
+		int save_object(class object &o, char *p, int l);
+		int load_object(class object &o, const char *p, int l);
 	protected:
 		int respond(bool err, serializer &sr);
 		int dispatch(int argc, bool packobj);
 		int to_stack(rpc::ll_exec_request &req, bool trusted);
 		int to_stack(rpc::ll_exec_response &res);
-		int to_stack(rpc::ll_exec_response &res, const char *method);
+		int to_stack(rpc::ll_exec_request &req, const char *method);
 		int to_stack(rpc::create_object_request &res);
 		int to_stack(rpc::authentication_request &req);
 		int to_stack(const rpc::data &d);
@@ -72,9 +75,9 @@ public:
 		int from_stack(int start_id, serializer &sr, bool packobj = false);
 		int from_stack(serializer &sr, int stkid, bool packobj = false);
 		int from_func(serializer &sr);
-		int push_object(class object *o);
 		bool callable(int stkid);
 		class object *to_o(int stkid);
+		int push_object(class object *o, const rpc::data *d = NULL);
 		method *to_m(int stkid);
 		static class coroutine *to_co(VM vm);
 		class lua &scr() { return *m_scr; }
@@ -95,6 +98,7 @@ public:
 	};
 protected:
 	VM m_vm;
+	THREAD m_thrd;
 	serializer &m_sr;
 	class object_factory &m_of;/* weakref */
 	class world_factory &m_wf;/* weakref2 */
@@ -102,16 +106,18 @@ protected:
 	array<char[smblock_size]> m_smpool;
 public:
 	lua(class object_factory &of, class world_factory &wf, serializer &sr) :
-		m_vm(NULL), m_sr(sr), m_of(of), m_wf(wf), m_smpool() {}
+		m_vm(NULL), m_thrd(NULL), m_sr(sr), m_of(of), m_wf(wf), m_smpool() {}
 	~lua() { fin(); }
-	int init(int max_rpc_ongoing);
+	int init(int max_rpc_ongoing, THREAD th);
 	void fin();
 	int init_world(world_id wid, world_id from, const char *srcfile);
 	void fin_world(world_id wid);
 	class object_factory &of() { return m_of; }
 	class world_factory &wf() { return m_wf; }
+	serializer &sr() { return m_sr; }
 	operator serializer &() { return m_sr; }
 	operator VM() { return m_vm; }
+	THREAD attached_thrd() const { return m_thrd; }
 	coroutine *co_new() { return m_copool.create(); }
 	void co_destroy(coroutine *co) { m_copool.destroy(co); }
 protected:

@@ -7,6 +7,13 @@
 
 using namespace pfm;
 
+#if !defined(_TEST)
+extern int custom_respond(pfm::fiber *f, bool err, pfm::serializer &sr)
+{
+	return ((pfm::mstr::fiber *)f)->respond(err, sr);
+}
+#endif
+
 namespace pfm {
 namespace mstr {
 /* finder */
@@ -256,6 +263,12 @@ int mstr::fiber::quorum_vote_callback(rpc::response &r, class conn *c, void *p)
 {
 	quorum_context *ctx = (quorum_context *)p;
 	address a;
+#if !defined(_TEST)
+	if (!c->valid()) {
+		ASSERT(false);
+		return NBR_EINVAL;
+	}
+#endif
 	if (!r.success()) {
 		return NBR_OK;
 	}
@@ -296,16 +309,15 @@ int mstr::fiber::call_login(rpc::request &p)
 		}
 		rec->m_uuid.assign();
 		if ((r = m_al.save(rec, req.account(), true)) < 0) {
-			m_al.unload(req.account());
+			m_al.unload(req.account(), NULL);
 			goto error;
 		}
 	}
 	char b[256];
 	LOG("login success : UUID=<%s>\n", rec->uuid().to_s(b, sizeof(b)));
-	PREPARE_PACK(ff().sr());
 	rpc::login_response::pack_header(ff().sr(), m_msgid, rec->uuid());
 	if ((r = respond(false, ff().sr())) < 0) {
-		m_al.unload(req.account());
+		m_al.unload(req.account(), NULL);
 		goto error;
 	}
 	return NBR_OK;
@@ -321,6 +333,28 @@ int mstr::fiber::resume_login(rpc::response &res)
 	return NBR_OK;
 }
 
+int mstr::fiber::call_logout(rpc::request &p)
+{
+	int r;
+	rpc::logout_request &req = rpc::logout_request::cast(p);
+	m_al.unload(req.account(), NULL);
+	LOG("logout: %s\n", (const char*)req.account());
+	rpc::response::pack_header(ff().sr(), m_msgid);
+	ff().sr() << NBR_OK;
+	ff().sr().pushnil();
+	if ((r = respond(false, ff().sr())) < 0) {
+		goto error;
+	}
+	return NBR_OK;
+error:
+	if (r < 0) { return send_error(r); }
+	return r;
+}
+int mstr::fiber::resume_logout(rpc::response &res)
+{
+	return NBR_OK;
+}
+
 int mstr::fiber::call_node_inquiry(rpc::request &rq)
 {
 	int r;
@@ -330,7 +364,6 @@ int mstr::fiber::call_node_inquiry(rpc::request &rq)
 	if (get_socket_address(da) >= 0) {
 		LOG("node_inquiry : from %s\n", (const char *)da);
 	}
-	PREPARE_PACK(ff().sr());
 	a = ff().wf().cf()->pool().bind_addr(a);
 	if (req.node_type() == master_node) {
 		/* master find another master */
@@ -390,6 +423,8 @@ int mstr::fiber::node_ctrl_add(world *w,
 			r = NBR_EEXPIRE;
 			goto error;
 		}
+		ASSERT(m_wid == NULL);
+		m_wid = w->id();
 	}
 	if (!(c = w->cf().get_by((const char *)req.node_addr()))) {
 		r = NBR_ENOTFOUND;
@@ -438,13 +473,12 @@ int mstr::fiber::node_ctrl_add_resume(world *w, rpc::response &res, serializer &
 	}
 }
 
-int mstr::fiber::node_ctrl_regist(world *w,
-		rpc::node_ctrl_cmd::regist &req, serializer &sr)
+int mstr::fiber::call_node_regist(rpc::request &rq)
 {
 	int r;
 	address a;
 	conn *c;
-	ASSERT(!w);
+	rpc::node_ctrl_cmd::regist &req = (rpc::node_ctrl_cmd::regist &)rq;
 	if ((r = get_socket_address(a)) < 0) {
 		goto error;
 	}
@@ -463,7 +497,6 @@ int mstr::fiber::node_ctrl_regist(world *w,
 		if (req.node_type() == test_servant_node) {
 			serializer &sr = ff().sr();
 			UUID uuid;
-			PREPARE_PACK(sr);
 			if ((r = rpc::node_ctrl_cmd::add::pack_header(
 				sr, ff().new_msgid(),
 				"rtkonline", sizeof("rtkonline") - 1,
@@ -474,21 +507,25 @@ int mstr::fiber::node_ctrl_regist(world *w,
 				ASSERT(false);
 				goto error;
 			}
-			if ((r = ff().run_fiber(ff().curr(), sr.p(), sr.len())) < 0) {
+			if ((r = ff().run_fiber(fiber::to_thrd(ff().curr()), sr.p(), sr.len())) < 0) {
 				ASSERT(false);
 				goto error;
 			}
 		}
 	}
-	rpc::response::pack_header(sr, m_msgid);
-	sr << NBR_OK;
-	sr.pushnil();
-	return respond(false, sr);
 error:
 	if (r < 0) {
 		address a(req.node_server_addr());
 		ff().wf().cf()->del_failover_chain(a);
 		send_error(r);
+	}
+	else {
+		serializer &sr = ff().sr();
+		PREPARE_PACK(sr);
+		rpc::response::pack_header(sr, m_msgid);
+		sr << NBR_OK;
+		sr.pushnil();
+		return respond(false, sr);
 	}
 	return r;
 }
@@ -609,4 +646,5 @@ int mstr::fiber::node_ctrl_deploy_resume(world *w,
 		return res.err();
 	}
 }
+
 
