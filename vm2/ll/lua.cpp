@@ -7,7 +7,42 @@
 using namespace pfm;
 using namespace pfm::rpc;
 
-#define CAN_PROCESS(co, o) (o->can_process_with(ll::cast(&(co->scr()))))
+//#define CAN_PROCESS(co, o) (o->can_process_with(ll::cast(&(co->scr()))))
+#define METHOD_CALLABLE(co, o) (o->method_callable(ll::cast(&(co->scr()))))
+#define ATTR_ACCESIBLE(co, o) (o->attr_accesible(ll::cast(&(co->scr()))))
+
+/* lua::method */
+const char *
+lua::method::parse(const char *name, bool rcv, U32 &attr)
+{
+	int cnt = 0;
+	attr = ca_none;
+	while(cnt < lua::max_sys_convention) {
+		cnt++;
+		if (rcv) {
+			if (*name == '_') {
+				attr |= ca_protected;
+				name++;
+				continue;
+			}
+		}
+		else {
+			if (memcmp(name, "notify_", 7) == 0) {
+				attr |= ca_notification;
+				name += 7;
+				continue;
+			}
+			if (memcmp(name, "client_", 7) == 0) {
+				attr |= ca_clientcall;
+				name += 7;
+				continue;
+			}
+		}
+		break;
+	}
+	return name;
+}
+
 
 /* lua::coroutine */
 int lua::coroutine::init(class fiber *fb, class lua *scr) {
@@ -84,6 +119,17 @@ int lua::coroutine::call(ll_exec_request &req, bool trusted)
 	return dispatch(r, false);
 }
 
+int lua::coroutine::call(rpc::replicate_request &req)
+{
+	int r;
+	if ((r = to_stack(req)) < 0) { return r; }
+	object *o = to_o(1);
+	if (o && o->local() && !m_scr->of().save(o, this)) {
+		ASSERT(false); return NBR_EINVAL;
+	}
+	return NBR_OK;
+}
+
 int lua::coroutine::call(rpc::authentication_request &req)
 {
 	int r;
@@ -125,8 +171,13 @@ int lua::coroutine::dispatch(int argc, bool packobj)
 	}
 	else {	/* successfully finished */
 		/* save result */
-		if (o && !m_scr->of().save(o, this)) {
-			ASSERT(false); return NBR_EINVAL;
+		if (o) {
+			if (o->local() && !m_scr->of().save(o, this)) {
+				ASSERT(false); return NBR_EINVAL;
+			}
+			if (o->local() || o->cached_local()) {
+				/* TODO : normal replication */
+			}
 		}
 		serializer &sr = *m_scr;
 		PREPARE_PACK(sr);
@@ -150,8 +201,26 @@ int lua::coroutine::resume(ll_exec_response &res, bool packobj)
 		sr.pushnil();
 		/* TODO : need support except string/integer type? */
 		switch(res.err().type()) {
-		case datatype::INTEGER:
-			sr << (int)res.err(); break;
+		case datatype::INTEGER: {
+			int r = res.err();
+			TRACE("ll resume r = %d\n", r);
+			if (r > ll_exec_error_move_to) { sr << r; }
+			else {
+				object *o = to_o(2);
+				if (!o) { sr << NBR_ENOTFOUND; break; }
+				TRACE("ll resume do re-request\n");
+				if ((r = scr().wf().re_request(o->belong()->id(),
+					res.msgid(), o->uuid(), (r == ll_exec_error_move_to))) < 0) {
+					TRACE("ll resume re-request fails (%d)\n", r);
+					sr << r; break;
+				}
+				if ((r = fb().yielding(res.msgid())) < 0) {
+					TRACE("ll resume yielding fails (%d)\n", r);
+					sr << r; break;
+				}
+				return NBR_OK;
+			}
+		} break;
 		case datatype::BLOB:
 			if ((r = sr.push_string(res.err(), res.err().len())) < 0) {
 				ASSERT(false);
@@ -165,6 +234,7 @@ int lua::coroutine::resume(ll_exec_response &res, bool packobj)
 		}
 		return respond(true, *m_scr);
 	}
+	TRACE("resume: %u\n", res.msgid());
 	if ((r = to_stack(res)) < 0) { return r; }
 	return dispatch(r, packobj);
 }
@@ -418,8 +488,17 @@ bool lua::coroutine::callable(int stkid)
 int lua::coroutine::to_stack(ll_exec_request &req, bool trusted)
 {
 	int r, i, an;
-	if ((r = to_stack(req.rcvr())) < 0) { return r; }
-	if ((r = to_stack(req.method())) < 0) { return r; }
+	if (scr().has_convention_processor()) {
+		lua_getfield(m_exec, LUA_GLOBALSINDEX, lua::convention_processor);
+		if ((r = to_stack(req.rcvr())) < 0) { return r; }
+		if ((r = to_stack(req.method())) < 0) { return r; }
+		if (0 != lua_pcall(m_exec, 2, 1, 0)) { return NBR_ESYSCALL; }
+		ASSERT(lua_isfunction(m_exec, -1));
+	}
+	else {
+		if ((r = to_stack(req.rcvr())) < 0) { return r; }
+		if ((r = to_stack(req.method())) < 0) { return r; }
+	}
 	lua_gettable(m_exec, -2);	/* load function */
 	if (!callable(-1)) { ASSERT(false); return NBR_EINVAL; }
 	lua_pushvalue(m_exec, -2);
@@ -429,6 +508,11 @@ int lua::coroutine::to_stack(ll_exec_request &req, bool trusted)
 		if ((r = to_stack(req.argv(i))) < 0) { return r; }
 	}
 	return (an + 1); /* +1 for rcvr(re-push object) */
+}
+
+int lua::coroutine::to_stack(replicate_request &req)
+{
+	return to_stack(req.log());
 }
 
 int lua::coroutine::to_stack(create_object_request &req)
@@ -482,17 +566,22 @@ int lua::coroutine::to_stack(rpc::ll_exec_response &res)
 int lua::coroutine::to_stack(rpc::ll_exec_request &req, const char *method)
 {
 	int r, i, an;
+	TRACE("call method local %s\n", method);
 	if ((r = to_stack(req.rcvr())) < 0) { return r; }
+#if 0
 	/* 1 */object *o = to_o(-1);	/* 1 */
 	if (!o) { return NBR_EINVAL; }
 	/* 2 */lua_getfield(m_exec, LUA_GLOBALSINDEX, o->klass());	/* 1,2 */
 	/* 3 */lua_getfield(m_exec, -1, lua::klass_method_table);	/* 1,2,3 */
 	lua_remove(m_exec, 2);					/* 1,3 */
+#endif
 	/* 4 */lua_pushstring(m_exec, method);	/* 1,3,4 */
 	/* 5 */lua_gettable(m_exec, -2);		/* 1,3,5 */
 	if (!lua_isfunction(m_exec, -1)) { ASSERT(false); return NBR_EINVAL; }
-	lua_pushvalue(m_exec, -3);				/* 1,3,5,1 */
+	lua_pushvalue(m_exec, -2);				/* 1,3,5,1 */
+#if 0
 	lua_remove(m_exec, 2);					/* 1,5,1 */
+#endif
 	lua_remove(m_exec, 1);					/* 5,1 */
 	ASSERT(lua_gettop(m_exec) == 2);
 	for (i = 0, an = req.argc(); i < an; i++) {
@@ -555,7 +644,7 @@ int lua::coroutine::push_object(object *o, const rpc::data *d)
 	p->type = lua::userdata::object;
 	/* create metatable : TODO : use pre-created metatable */
 	bool need_init = false;
-	if (CAN_PROCESS(this, o)) {
+	if (ATTR_ACCESIBLE(this, o)) {
 		lua_pushlstring(m_exec, (const char *)&(o->uuid()), sizeof(UUID));
 		if (o->loaded()) {
 			o->set_flag(object::flag_loaded, false);
@@ -616,7 +705,17 @@ int lua::coroutine::object_index(VM vm)
 		lua_error(vm);
 	}
 	object *o = co->to_o(-2);
-	if (CAN_PROCESS(co, o)) {
+	TRACE("object index get %s\n", lua_tostring(vm, 2));
+//	static bool g_f = false;
+//	ASSERT(!g_f || strcmp(lua_tostring(vm, 2), "set_name") != 0);
+//	if (strcmp(lua_tostring(vm, 2), "set_name") == 0) {
+//		g_f = true;
+//	}
+	if (ATTR_ACCESIBLE(co, o)) {
+		char b[256];
+		TRACE("object_index local or has_localdata (%s)%p/%s\n",
+				lua_tostring(vm, 2), o->vm(),
+				o->uuid().to_s(b, sizeof(b)));
 		lua_getmetatable(vm, -2);	/* object's metatable */
 		lua_pushvalue(vm, -2);		/* key to get */
 		lua_gettable(vm, -2);
@@ -631,6 +730,10 @@ int lua::coroutine::object_index(VM vm)
 		}
 		/* this object must have remote master. */
 		if (lua_isnil(vm, -1) && o->has_localdata()) {
+			if (strcmp(lua_tostring(vm, 2), "open_ui") == 0) {
+				dump_table(vm, 3);
+			}
+			lua_settop(vm, 2); /* rollback stack */
 			goto remote_call;
 		}
 		ASSERT(!lua_isnil(vm, -1));
@@ -646,6 +749,7 @@ remote_call:
 	else {
 		fn = coroutine::method_call;
 	}
+	ASSERT(mth);
 	/* return method data instead of real func */
 	if (!method_new(vm, fn, mth)) {
 		lua_pushstring(vm, "no buffer for new method");
@@ -663,11 +767,19 @@ int lua::coroutine::object_newindex(VM vm)
 		lua_error(vm);
 	}
 	object *o = co->to_o(-3);
-	if (CAN_PROCESS(co, o)) {
+	if (ATTR_ACCESIBLE(co, o)) {
+		char b[256];
+		TRACE("set data [%s/%u]%p/%s to obj\n",
+			lua_tostring(vm, 2), lua_type(vm, 3), o->vm(),
+			o->uuid().to_s(b, sizeof(b)));
 		lua_getmetatable(vm, -3);	/* object's metatable */
 		lua_pushvalue(vm, -3);		/* key to set */
 		lua_pushvalue(vm, -3);		/* value to set */
 		lua_settable(vm, -3);		/* metatable[key] = value */
+		if (strcmp(lua_tostring(vm, 2), "open_ui") == 0) {
+			dump_table(vm, 4);
+		}
+
 	}
 	else {
 		lua_pushstring(vm, "cannot set data to object belongs to other VM");
@@ -693,7 +805,7 @@ int lua::coroutine::method_call(VM vm)
 	}
 	lua::method *m = co->to_m(1);
 	int top = lua_gettop(vm), r;
-	if (CAN_PROCESS(co, o)) {
+	if (METHOD_CALLABLE(co, o)) {
 		/* call Klass._ftbl_.func */
 		lua_getfield(vm, LUA_GLOBALSINDEX, o->klass());
 		ASSERT(lua_istable(vm, -1));
@@ -711,16 +823,31 @@ int lua::coroutine::method_call(VM vm)
 	}
 	else {
 		/* rpc */
-		MSGID msgid = co->fb().new_msgid();
-		if (msgid == INVALID_MSGID) {
-			lua_pushstring(vm, "cannot register fiber");
-			lua_error(vm);
+		U32 ca;
+		//lua::watcher *lw;
+		const char *mth = m->parse(false, ca);
+		bool nf = ca & method::ca_notification;
+		TRACE("ca = 0x%08x\n", ca);
+		MSGID msgid;
+		if (!nf) {
+			if ((msgid = co->fb().new_msgid()) == INVALID_MSGID) {
+				lua_pushstring(vm, "cannot register fiber");
+				lua_error(vm);
+			}
+			if (co->fb().yielding(msgid) < 0) {
+				lua_pushstring(vm, "cannot yield fiber");
+				lua_error(vm);
+			}
+		}
+		else {
+			pfm::watcher *w;
+			msgid = co->fb().new_watcher_msgid(&w);
 		}
 		PREPARE_PACK(co->scr());
 		ll_exec_request::pack_header(co->scr(), msgid, *o,
-			m->name(), strlen(m->name()),
-			o->belong()->id(), strlen(o->belong()->id()),
-			false, top - 2);
+			mth, nbr_str_length(mth, 256),
+			o->belong()->id(), nbr_str_length(o->belong()->id(), max_wid),
+			(ca & method::ca_clientcall ? ll_exec_client : ll_exec), top - 2);
 		/* arguments are starts from index 3 */
 		for (int i = 3; i <= top; i++) {
 			if ((r = co->from_stack(co->scr(), i)) < 0) {
@@ -728,13 +855,14 @@ int lua::coroutine::method_call(VM vm)
 				lua_error(vm);
 			}
 		}
-		if (co->fb().yielding(msgid) < 0) {
-			lua_pushstring(vm, "cannot yield fiber");
-			lua_error(vm);
-		}
 		if ((r = o->request(msgid, ll::cast(&(co->scr())), co->scr())) < 0) {
 			lua_pushfstring(vm, "send request to object fail (%d)", r);
 			lua_error(vm);
+		}
+		if (nf) {
+			/* FIXME : push watcher object */
+			lua_pushnil(vm);
+			return 1;
 		}
 		return lua_yield(vm, 0);
 	}
@@ -792,6 +920,8 @@ const char lua::player_klass_name[] = "Player";
 const char lua::world_object_name[] = "world";
 const char lua::enter_world_proc_name[] = "enter";
 const char lua::login_proc_name[] = "login";
+const char lua::convention_processor[] = "lambda";
+
 
 int lua::init(int max_rpc_ongoing, THREAD th)
 {

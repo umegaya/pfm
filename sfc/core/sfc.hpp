@@ -40,6 +40,9 @@ public:
 	operator const char*() const { return m_a; }
 	bool operator == (const address &a) const { return
 		m_len == a.len() && (0 == nbr_mem_cmp(m_a, a.a(), m_len)); }
+	bool operator == (const char *addr) const {
+		return 0 == strncmp(m_a, addr, address::SIZE);
+	}
 	char *a() { return m_a; }
 	const char *a() const { return m_a; }
 	int len() const { return m_len; }
@@ -508,6 +511,8 @@ public:
 	static int cmp(const char *a, const char *b);
 	static parser rparser_from(const char *str);
 	static sender sender_from(const char *str);
+	static const char *makepath(char *buf, size_t bl, 
+		const char *base, const char *name);
 };
 
 #if defined(_DEBUG)

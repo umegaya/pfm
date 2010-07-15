@@ -29,9 +29,7 @@ void ffutil::clear_tls() {
 /* ffutil */
 int ffutil::init(int max_node, int max_replica,
 		void (*wkev)(SWKFROM*,THREAD,char*,size_t)) {
-	if (!(m_cp = new conn_pool)) {
-		return NBR_EMALLOC;
-	}
+	if (!(m_cp = new conn_pool)) { return NBR_EMALLOC; }
 	m_max_node = max_node;
 	m_max_replica = max_replica;
 	if (!m_quorums.init(world::max_world, world::max_world,
@@ -51,6 +49,9 @@ int ffutil::init(int max_node, int max_replica,
 		for (int i = 0; i < n_th; i++) {
 			nbr_sock_set_worker_data(a_th[i], this, wkev);
 		}
+	}
+	if (!m_wm.init(m_max_rpc, m_max_rpc, -1, opt_threadsafe | opt_expandable)) {
+		return NBR_EMALLOC;
 	}
 	nbr_mem_copy(m_workers, a_th, n_th * sizeof(THREAD));
 	return m_fm.init(m_max_rpc, m_max_rpc, -1, opt_threadsafe | opt_expandable) ? 
@@ -102,6 +103,7 @@ bool ffutil::init_tls(THREAD curr)
 void ffutil::fin()
 {
 	m_fm.fin();
+	m_wm.fin();
 	m_quorums.fin();
 	if (m_cp) { delete m_cp; m_cp = NULL; }
 }
@@ -160,11 +162,21 @@ int ffutil::world_create_in_vm(const rpc::node_ctrl_cmd::add &req)
 	return m_vm->init_world(req.wid(), req.from(), req.srcfile());
 }
 
-world *ffutil::world_create(const rpc::node_ctrl_cmd::add &req)
+world *ffutil::world_create(const rpc::node_ctrl_cmd::add &req, bool save)
 {
+	char b[256];
 	world *w = world_new(req.wid());
 	if (!w) { return NULL; }
-	w->set_world_object_uuid(req.world_object_id());
+	if (!w->world_object_uuid().valid()) {
+		if (req.world_object_id().valid()) {
+			w->set_world_object_uuid(req.world_object_id());
+		}
+		else {
+			w->set_world_object_uuid();
+		}
+		LOG("world ID assigned (%s/%s)\n", w->id(),
+			w->world_object_uuid().to_s(b, sizeof(b)));
+	}
 	for (int i = 0; i < req.n_node(); i++) {
 		if (!w->add_node((const char *)req.addr(i))) {
 			world_destroy(w);
@@ -172,7 +184,7 @@ world *ffutil::world_create(const rpc::node_ctrl_cmd::add &req)
 		}
 		LOG("add node (%s) for (%s)\n", (const char *)req.addr(i), w->id());
 	}
-	if (m_wf.save_from_ptr(w, (const char *)req.wid(), false, NULL) < 0) {
+	if (save && m_wf.save_from_ptr(w, (const char *)req.wid(), false, NULL) < 0) {
 		world_destroy(w);
 		return NULL;
 	}
@@ -292,6 +304,36 @@ fiber::get_world_id(rpc::request &req)
 	ASSERT(w);
 	return w->id();
 }
+
+object *
+fiber::get_object(rpc::ll_exec_request &req)
+{
+	return ff().of().find(req.rcvr().elem(2));
+}
+
+ll *
+fiber::from_object(object *o)
+{
+	return o->vm();
+}
+
+bool
+fiber::check_move_to(object *o, const UUID &uuid)
+{
+	if (!o || o->replica()) {
+		world *w = ff().find_world(m_wid);
+		if (!w) {
+			send_error(NBR_ENOTFOUND);
+			return true;
+		}
+		send_error(w->primary_node_for(uuid) ?
+			ll_exec_error_will_move_to : ll_exec_error_move_to);
+		return true;
+	}
+	return false;
+}
+
+
 
 void
 fiber::set_world_id_from(world *w)

@@ -54,7 +54,7 @@ static void push_rpc_context(serializer &sr, msgid_generator &seed,
 				object *o, world_id wid, size_t wlen)
 {
 	ll_exec_request::pack_header(sr, seed.new_id(), *o, "test_function",
-			sizeof("test_function") - 1, wid, wlen, false, 4);
+			sizeof("test_function") - 1, wid, wlen, ll_exec, 4);
 	sr.push_map_len(3);
 	PUSHSTR(sr,key_a);
 	sr << 111;
@@ -188,6 +188,8 @@ int ll_call_test(int argc, char *argv[])
 	ASSERT(1568 == fb2.m_result);
 
 	scr.fin();
+	wf.fin();
+	of.fin();
 
 	return NBR_OK;
 }
@@ -240,7 +242,7 @@ public:
 	static UUID m_uuid;
 public:
 	static int test_request(world *, MSGID msgid,
-			const UUID &uuid, serializer &sr) {
+			const UUID &uuid, address &a, serializer &sr) {
 		sr.unpack_start(sr.p(), sr.len());
 		int r;
 		TEST((r = sr.unpack(m_d, sr.p(), sr.len())) < 0, "of:request invalid (%d)", r);
@@ -383,5 +385,8 @@ int	ll_resume_test_thread_main(THREAD th, int argc, char *argv[])
 	/* it will finish! */
 	ll::num rv = fb1.result().ret();
 	TEST((rv != ll::num(318)), "retval invalid (%d)\n", (int)rv);
+
+	wf.fin();
+	of.fin();
 	return NBR_OK;
 }

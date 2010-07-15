@@ -20,6 +20,7 @@ int main(int argc, char *argv[])
 	int r;
 	CONFIG c;
 	nbr_get_default(&c);
+	c.max_thread = 10;
 	nbr_init(&c);
 	TEST(dbm);
 	TEST(serializer);

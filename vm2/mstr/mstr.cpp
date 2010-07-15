@@ -40,11 +40,22 @@ public:
 /* config */
 class config : public util::config {
 public:
+	char m_dbmopt[256];
 	typedef util::config super;
-	config(BASE_CONFIG_PLIST);
+	config(BASE_CONFIG_PLIST, const char *dbmopt);
+	int set(const char *k, const char *v);
 };
 
-config::config(BASE_CONFIG_PLIST) : super(BASE_CONFIG_CALL) {}
+config::config(BASE_CONFIG_PLIST, const char *dbmopt) : super(BASE_CONFIG_CALL) {
+	nbr_str_copy(m_dbmopt, sizeof(m_dbmopt), dbmopt, sizeof(m_dbmopt));
+}
+int config::set(const char *k, const char *v) {
+	if (strcmp(k, "dbmopt") == 0) {
+		nbr_str_copy(m_dbmopt, sizeof(m_dbmopt), v, sizeof(m_dbmopt));
+		return NBR_OK;
+	}
+	return super::set(k, v);
+}
 }
 pfmm *mstr::session::m_daemon = NULL;
 #if defined(_DEBUG)
@@ -103,7 +114,8 @@ pfmm::create_config(config* cl[], int size)
 			kernel::INFO,
 			nbr_sock_rparser_bin16,
 			nbr_sock_send_bin16,
-			util::config::cfg_flag_server));
+			util::config::cfg_flag_server, 
+			"./mstr/db"));
 	CONF_ADD(cluster::finder_property, (
 			"finder",
 			"0.0.0.0:8888",
@@ -133,14 +145,18 @@ pfmm::boot(int argc, char *argv[])
 		SAFETY_ATOI(argv[1] + sizeof("--test="), tmode, int);
 		mstr::session::m_test_mode = (tmode != 0);
 	}
+	mstr::config *c = find_config<mstr::config>("mstr");
+	if (!c) { return  NBR_ENOTFOUND; }
 	int r;
+	char path[256];
 	conn_pool::mstr_cp *fc;
 	mstr::finder_factory *fdr;
-	INIT_OR_DIE((r = m_db.init("mstr/db/uuid.tch")) < 0, r,
+	INIT_OR_DIE((r = m_db.init(config::makepath(path, sizeof(path), c->m_dbmopt, "uuid.tch"))) < 0, r,
 		"uuid DB init fail (%d)\n", r);
 	INIT_OR_DIE((r = UUID::init(m_db)) < 0, r,
 		"UUID init fail (%d)\n", r);
-	INIT_OR_DIE((r = mstr::fiber::init_global(10000, "mstr/db/al.tch")) < 0, r,
+	INIT_OR_DIE((r = mstr::fiber::init_global(10000, 
+		config::makepath(path, sizeof(path), c->m_dbmopt, "al.tch"))) < 0, r,
 		"mstr::fiber::init fails(%d)\n", r);
 	INIT_OR_DIE((r = ff().init(100, 100, 10)) < 0, r,
 		"fiber_factory init fails(%d)\n", r);
@@ -149,13 +165,16 @@ pfmm::boot(int argc, char *argv[])
 	INIT_OR_DIE(!(fdr = find_factory<mstr::finder_factory>("finder")), NBR_ENOTFOUND,
 		"conn_pool not found (%p)\n", fc);
 	ff().cp()->set_pool(fc);
-	INIT_OR_DIE((r = ff().wf().cf()->init(ff().cp(), 100, 100, 100)) < 0, r,
+	INIT_OR_DIE((r = ff().wf().cf()->init(
+		ff().cp(), fc->ifaddr(), 100, 100, 100)) < 0, r,
 		"init connector factory fails (%d)\n", r);
 	ff().set_finder(fdr);
-	INIT_OR_DIE((r = ff().of().init(10000, 1000, 0, "mstr/db/of.tch")) < 0, r,
+	INIT_OR_DIE((r = ff().of().init(10000, 1000, 0, 
+		config::makepath(path, sizeof(path), c->m_dbmopt, "of.tch"))) < 0, r,
 		"object factory creation fail (%d)\n", r);
 	INIT_OR_DIE((r = ff().wf().init(
-		256, 256, opt_threadsafe | opt_expandable, "mstr/db/wf.tch")) < 0, r,
+		256, 256, opt_threadsafe | opt_expandable, 
+		config::makepath(path, sizeof(path), c->m_dbmopt, "wf.tch"))) < 0, r,
 		"object factory creation fail (%d)\n", r);
 	return NBR_OK;
 }
@@ -411,15 +430,9 @@ int mstr::fiber::node_ctrl_add(world *w,
 	MSGID msgid = INVALID_MSGID;
 	world::iterator i;
 	conn *c = NULL;
-	char b[256];
 	quorum_context *ctx = NULL;
 	if (!w) {
-		if (!req.world_object_id().valid()) {
-			req.assign_world_object_id();
-			LOG("world UUID assigned(%s/%s)\n", (const char *)req.wid(),
-				req.world_object_id().to_s(b, sizeof(b)));
-		}
-		if (!(w = ff().world_create(req))) {
+		if (!(w = ff().world_create(req, true))) {
 			r = NBR_EEXPIRE;
 			goto error;
 		}

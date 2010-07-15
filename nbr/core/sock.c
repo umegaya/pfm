@@ -1794,7 +1794,6 @@ nbr_sock_rparser_bin16(char *p, int *len, int *rlen)
 		*rlen = tmp + sizeof(U16);
 		return p + sizeof(U16);
 	}
-	else { ASSERT(FALSE); }
 	return NULL;
 }
 

@@ -247,10 +247,13 @@ cond_create(cond_t *c)
 NBR_INLINE int
 cond_destroy(cond_t *c)
 {
+	int r = 0;/* pthread success */
 	if (c->mtx) {
 		nbr_mutex_destroy(c->mtx);
+		r = pthread_cond_destroy(&(c->cnd));
+		c->mtx = NULL;
 	}
-	return pthread_cond_destroy(&(c->cnd));
+	return r;
 }
 
 NBR_INLINE int
@@ -460,7 +463,8 @@ nbr_thpool_destroy(THPOOL thp)
 			if (thread_terminate(th) < 0) {
 				ASSERT(FALSE);
 			}
-			cond_destroy(&(th->event));
+			/* it should be done nbr_tls_fin */
+			/* cond_destroy(&(th->event)); */
 		}
 		nbr_array_destroy(thpl->th_a);
 		thpl->th_a = NULL;

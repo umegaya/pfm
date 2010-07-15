@@ -97,7 +97,7 @@ public:
 		querydata *fail_list() { return m_fail.m_top; }
 		const querydata *fail_list() const { return m_fail.m_top; }
 		bool check_chain_validity() {
-			try_resend();
+			try_resend(fail_list());
 			return true;
 		}
 		void insert(querylist &list, querydata *q) {
@@ -124,9 +124,9 @@ public:
 		void sent_unlink(querydata *q) { unlink(m_sent, q); }
 		void fail_insert(querydata *q) { insert(m_fail, q); }
 		void fail_unlink(querydata *q) { unlink(m_fail, q); }
-		inline int send(MSGID msgid, char*p, size_t l, querydata *fq = NULL);
-		inline int replicate(MSGID msgid, char *p, size_t l);
-		inline int try_resend();
+		inline int send(MSGID msgid, const char *p, size_t l, querydata *fq = NULL);
+		inline int replicate(MSGID msgid, const char *p, size_t l);
+		inline int try_resend(querydata *list);
 		inline void remove_processed_packet(MSGID last_processed);
 		bool has_session(conn *s) {
 			failover_chain *c = chain();
@@ -229,14 +229,17 @@ public:
 	~connector_factory() { fin(); }
 protected:
 	class conn_pool			*m_pool;
+	address 				m_node_addr;
 	array<failover_chain>	m_failover_chain_factory;
 	map<failover_chain*, address>	m_address_chain_map;
 	connector_resource		m_connector_resource;
 	RWLOCK					m_lock;
 public:
-	int init(class conn_pool *cp, int max_chain, int max_node, int querysize) {
+	int init(class conn_pool *cp, const address &na,
+		int max_chain, int max_node, int querysize) {
 		int r;
 		m_pool = cp;
+		m_node_addr = na;
 		if (!(m_lock = nbr_rwlock_create())) {
 			fin();
 			return NBR_EPTHREAD;
@@ -278,12 +281,15 @@ public:
 			pc->remove_processed_packet(last_msgid);
 		}
 	}
+	querydata *find_query(MSGID msgid) { return m_connector_resource.find_query(msgid); }
 	void remove_query(MSGID msgid) { m_connector_resource.remove_query(msgid); }
+	void remove_query_low(MSGID msgid) { m_connector_resource.remove_query_low(msgid); }
 	void set_pool(class conn_pool *f) { m_pool = f; }
 	class conn_pool &pool() { return *m_pool; }
-	inline conn *create(const address &a);
-	inline conn *find(const address &a);
-	inline int connect(conn *c, const address &a, void *p);
+	const address &node_addr() const { return m_node_addr; }
+	inline conn *create(const address &a);	/* declare in cp.h */
+	inline conn *find(const address &a); /* declare in cp.h */
+	inline int connect(conn *c, const address &a, void *p);/* declare in cp.h */
 public:
 	conn *get_by(const address &a) {
 		failover_chain *c = m_address_chain_map.find(a);
@@ -327,7 +333,9 @@ public:
 		return super::find(k);
 	}
 	connector *backend_conn() {
-		return super::find(UUID::invalid_id());
+		const UUID &id = UUID::invalid_id();
+		ASSERT(!id.valid());
+		return super::find(id);
 	}
 	bool backend_enable() {
 		connector *ct = backend_conn();
@@ -392,11 +400,12 @@ public:
 };
 
 inline
-int connector_impl::connector::try_resend()
+int connector_impl::connector::try_resend(querydata *list)
 {
 	querydata *fq;
 	int r = NBR_OK;
-	if (writable() > 0 && (fq = fail_list())) {
+	bool fail_recovery = (list == fail_list());
+	if (writable() > 0 && (fq = list)) {
 		querydata *pfq;
 		while ((pfq = fq)) {
 			fq = fq->m_next_q;
@@ -405,7 +414,7 @@ int connector_impl::connector::try_resend()
 				break;
 			}
 		}
-		if (!fail_list()) {
+		if (fail_recovery && !fail_list()) {
 			cf().unlink_failure_connector(this);
 		}
 	}
@@ -426,15 +435,16 @@ void connector_impl::connector::
 }
 
 inline
-int connector_impl::connector::send(MSGID msgid, char *p, size_t l, querydata *fq)
+int connector_impl::connector::send(MSGID msgid,
+		const char *p, size_t l, querydata *fq)
 {
 	failover_chain *c = chain();
 #if 1
-	return c->m_s->send(p, l);
+	return c->m_s->send((char *)p, l);
 #else
 	if (!fq) {
 		/* if connection is recovered, send unprocessed packet */
-		int r = try_resend();
+		int r = try_resend(fail_list());
 		ASSERT(cf().find_query(msgid) == NULL);
 		querydata *q = cf().insert_query(msgid);
 		if (!q) { goto error; }
@@ -464,13 +474,13 @@ error:
 }
 
 inline
-int connector_impl::connector::replicate(MSGID msgid, char *p, size_t l)
+int connector_impl::connector::replicate(MSGID msgid, const char *p, size_t l)
 {
 #if 0
 	failover_chain *c = chain();
 	if (!fq) {
 		/* if connection is recovered, send unprocessed packet */
-		int r = try_resend();
+		int r = try_resend(fail_list());
 		querydata *q = cf()->insert_query(msgid);
 		if (!q) { goto error; }
 		q->m_l = l;

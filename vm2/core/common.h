@@ -13,10 +13,11 @@
 
 #define LOG TRACE	/* kari */
 
-#define PREPARE_PACK(scr)		\
-		char __b[4 * 1024];	\
-		sr_disposer srd((serializer &)(scr));	\
-		((serializer &)(scr)).pack_start(__b, sizeof(__b));
+#define PREPARE_PACK(scr)		PREPARE_PACK_LOW(scr, __b)
+#define PREPARE_PACK_LOW(scr, bufname)	\
+		char bufname[4 * 1024];	\
+		sr_disposer srd##bufname((serializer &)(scr));	\
+		((serializer &)(scr)).pack_start(bufname, sizeof(bufname));
 
 #define PREPARE_UNPACK(scr)		\
 		((serializer &)(scr)).unpack_start(((serializer &)(scr)).p(),	\

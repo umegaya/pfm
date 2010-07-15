@@ -36,6 +36,7 @@ public:
 										its local property, and if not found, then
 										rpc call happen. client object should have
 										this attribute. */
+		flag_replica = 0x00000020,		/* means replicated */
 	};
 public:
 	object() : m_uuid(), m_flag(0), m_klass("Unknown"), 
@@ -54,16 +55,18 @@ public:
 	void set_klass(const char *klass) { m_klass = klass; }
 public:
 	bool thread_current(class ll *vm) { return m_vm == vm; }
-	bool can_process_with(class ll *vm) {
-		return (local() || has_localdata()) && thread_current(vm); }
+	bool method_callable(class ll *vm) { return local() && thread_current(vm); }
+	bool attr_accesible(class ll *vm) {
+		return (local() || has_localdata()) && thread_current(vm);
+	}
 	void set_flag(U32 f, bool on) {
 		if (on) { m_flag |= f; } else { m_flag &= ~(f); } }
 	bool local() const { return m_flag & flag_local; }
 	bool cached_local() const { return m_flag & flag_cached_local; }
-	bool has_localdata() const {
-		return m_flag & (flag_local | flag_has_localdata) == flag_has_localdata; }
+	bool has_localdata() const { return m_flag & flag_has_localdata; }
 	bool loaded() const { return m_flag & flag_loaded; }
 	bool collected() const { return m_flag & flag_collected; }
+	bool replica() const { return m_flag & flag_replica; }
 public:
 	int save(char *&p, int &l, void *ctx);
 	int load(const char *p, int l, void *ctx);
@@ -95,18 +98,15 @@ protected:
 		TRACE("allocate symbol (%s/%p)\n", p, p);
 		return p;
 	}
+	THPOOL m_replacer;
 public:
 	typedef pmap<object, UUID> super;
 	typedef super::record record;
 	typedef super::key key;
 	object_factory() : super(), m_syms() {}
 	~object_factory() {}
-	bool init(int max, int hashsz, int opt, const char *dbmopt) {
-		if (!m_syms.init(256, 256, -1, opt_threadsafe | opt_expandable)) {
-			return NBR_EMALLOC;
-		}
-		return super::init(max, hashsz, opt, dbmopt);
-	}
+	bool init(int max, int hashsz, int opt, const char *dbmopt);
+	void fin();
 	record load(const UUID &uuid, void *co,
 		class world *w, class ll *vm, const char *klass) {
 		super::element *e;
@@ -114,12 +114,13 @@ public:
 		if (!(e = super::rawalloc(uuid, false, &exists))) { return record(NULL); }
 		if (exists) { return record(e); }
 		record rec(e);
-		dbm::record r = m_db.select((void *)&uuid, sizeof(uuid));
+		dbm::record r;
+		bool ret = m_db.select(r,(void *)&uuid, sizeof(uuid));
 		rec->belong_to(w);
 		rec->set_uuid(uuid);
 		rec->set_vm(vm);
 		rec->set_klass(create_symbol(klass));
-		if (r) {
+		if (ret) {
 			rec->set_flag((object::flag_local | object::flag_loaded), true);
 			if (rec.load(r.p<char>(), r.len(), co) < 0) {
 				erase(uuid);
@@ -150,8 +151,11 @@ public:
 		record r((super::element *)o);
 		return super::save(r, o->uuid(), false, co);
 	}
+	bool save_raw(const UUID &uuid, char *p, int l) {
+		return super::save_raw(uuid, p, l);
+	}
+	bool start_rehasher(class rehasher *param);
 };
-
 }
 
 #endif

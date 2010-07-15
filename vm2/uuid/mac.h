@@ -36,7 +36,7 @@ public:
 	static int save(dbm &db);
 	static int load(dbm &db);
 	static void new_id(mac_uuid &uuid);
-	static inline const mac_uuid invalid_id();
+	static inline const mac_uuid &invalid_id();
 	static inline bool valid(const mac_uuid &uuid) {
 		return uuid.id1 != 0 || uuid.id2 != 0; }
 	void set_macid_part(mac_uuid &uuid) {
@@ -47,12 +47,15 @@ public:
 		U16 *qw = (U16 *)&uuid;
 		qw[2] = pw[2];
 	}
+private:
+	mac_uuid(const mac_uuid &id) { *this = id; }
 };
 
-inline const mac_uuid
+inline const mac_uuid &
 mac_uuid::invalid_id()
 {
-	return mac_uuid();
+	extern mac_uuid *invalid_mac_uuid();
+	return *invalid_mac_uuid();
 }
 }
 

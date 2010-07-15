@@ -6,6 +6,11 @@ using namespace pfm;
 static mac_uuid UUID_INVALID;
 static mac_uuid UUID_SEED;
 
+namespace pfm {
+extern mac_uuid *
+invalid_mac_uuid() { return &(UUID_INVALID); }
+}
+
 int mac_uuid::init(dbm &db) 
 {
 	int r;

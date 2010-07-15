@@ -31,6 +31,8 @@ enum {
 	logout = 10,
 	ll_exec_local = 11,
 	node_regist = 12,
+	ll_exec_client = 13,
+	start_replicate = 14,
 };
 } /* namespace rpc */
 enum node_type {
@@ -38,6 +40,17 @@ enum node_type {
 	master_node,
 	client_node,
 	test_servant_node,
+};
+enum {
+	replicate_invalid = 0,
+	replicate_normal = 1,	/* normal replication (apply update) */
+	replicate_move_to = 2,	/* object should move by rehash */
+	start_replicate_normal = 11,	/* start 1 normal replicate */
+	start_replicate_move_to = 12,	/* start 1 rehash replicate */
+};
+enum ll_exec_error {
+	ll_exec_error_move_to = -1000,
+	ll_exec_error_will_move_to = -1001,
 };
 
 /* classes */
@@ -52,15 +65,23 @@ class data : public serializer::data {
 public:
 	data() : serializer::data() {}
 	~data() {}
-	operator const UUID & () const { 
-		ASSERT(serializer::data::type() == datatype::BLOB); 
-		ASSERT(via.raw.size == sizeof(UUID));
-		return *((const UUID *)(const void *)*this);
-	}
-	operator UUID & () {
+	operator const UUID & () const {
 		ASSERT(serializer::data::type() == datatype::BLOB);
 		ASSERT(via.raw.size == sizeof(UUID));
-		return *((UUID *)(const void *)*this); 
+		ASSERT(((const void *)*this) == via.raw.ptr);
+		return *((const UUID *)(const void *)*this);
+	}
+	operator const UUID * () const {
+		ASSERT(serializer::data::type() == datatype::BLOB);
+		ASSERT(via.raw.size == sizeof(UUID));
+		ASSERT(((const void *)*this) == via.raw.ptr);
+		return ((UUID *)(const void *)*this);
+	}
+	operator UUID * () {
+		ASSERT(serializer::data::type() == datatype::BLOB);
+		ASSERT(via.raw.size == sizeof(UUID));
+		ASSERT(((const void *)*this) == via.raw.ptr);
+		return ((UUID *)(const void *)*this);
 	}
 	const data &elem(int n) const { return (const data &)serializer::data::elem(n); }
 	data &elem(int n) { return (data &)serializer::data::elem(n); }
@@ -80,6 +101,8 @@ public:
 	data &argv(int n) { return super::elem(3).elem(n); }
 	static inline int pack_header(serializer &sr, MSGID msgid,
 		U8 cmd, int n_arg);
+	static inline void replace_msgid(MSGID new_msgid, char *p, int l);
+	static inline void replace_method(U8 method, char *p, int l);
 };
 class world_request : public request {
 public:
@@ -126,10 +149,11 @@ public:
 	const data &argv(int n) const { return super::argv(n+2); }
 	static inline int pack_header(serializer &sr, MSGID msgid,
 			pfmobj &o, const char *method, size_t mlen,
-			world_id wid, size_t wlen, bool local, int n_arg);
+			world_id wid, size_t wlen, U8 mth, int n_arg);
 	static inline ll_exec_request &cast(request &r) {
 		ASSERT((U32)r.method() == ll_exec ||
-				(U32)r.method() == ll_exec_local);
+				(U32)r.method() == ll_exec_local ||
+				(U32)r.method() == ll_exec_client);
 		return (ll_exec_request &)r;
 	}
 };
@@ -142,7 +166,7 @@ public:
 class create_object_request : public world_request {
 public:
 	typedef world_request super;
-	const data &klass() const { return super::argv(0); }
+	const char *klass() const { return super::argv(0); }
 	const UUID &object_id() const { return super::argv(1); }
 	int argc() const { return super::argc() - 2; }
 	const data &argv(int n) const { return super::argv(n+2); }
@@ -162,17 +186,26 @@ public:
 };
 
 /* replicate */
-class replicate_request : public request {
+class replicate_request : public world_request {
 public:
-	const data &uuid() const { return request::argv(0); }
-	const data &log() const { return request::argv(1); }
-	static int pack_header(serializer &sr, MSGID msgid, const UUID &uuid,
-			int log_size);
-	REQUEST_CASTER(replicate);
+	typedef world_request super;
+	const UUID &uuid() const { return super::argv(0); }
+	const data &type() const { return super::argv(1); }
+	const data &log() const { return super::argv(2); }
+	static int pack_header(serializer &sr, U8 cmd, MSGID msgid,
+			world_id wid, size_t wlen,
+			const UUID &uuid, U8 rep_type);
+	static inline replicate_request &cast(request &r) {
+		ASSERT((U32)r.method() == replicate ||
+				(U32)r.method() == start_replicate);
+		return (replicate_request &)r;
+	}
+#define MAKE_REPL_CMD(method, rep_type) (10 * ((U32)method) + ((U32)rep_type))
 };
 
 class replicate_response : public response {
 public:
+	const UUID &uuid() const { return response::ret(); }
 	RESPONSE_CASTER(replicate);
 };
 
@@ -277,12 +310,12 @@ public:
 	world_id from() const { return super::argv(1); }
 	const UUID &world_object_id() const { return super::argv(2); }
 	void assign_world_object_id() {
-		UUID &uuid = super::argv(2);
-		uuid.assign();
+		UUID *puuid = super::argv(2);
+		puuid->assign();
 	}
-	const data &srcfile() const { return super::argv(3); }
+	const char *srcfile() const { return super::argv(3); }
 	int n_node() const { return super::argc() - 4; }
-	const data &addr(int n) const { return super::argv(n+4); }
+	const char *addr(int n) const { return super::argv(n+4); }
 	static inline int pack_header(serializer &sr, MSGID msgid,
 			world_id wid, size_t wlen,
 			const char *address, size_t alen,
@@ -293,7 +326,8 @@ public:
 class regist : public request {
 public:
 	typedef request super;
-	const data &node_server_addr() const { return super::argv(0); }
+	const char *node_server_addr() const { return super::argv(0); }
+	int node_server_addr_len() const { return super::argv(0).len(); }
 	const int node_type() const { return super::argv(1); }
 	static inline int pack_header(serializer &sr, MSGID msgid,
 		const char *address, size_t alen, U8 node_type);
@@ -370,6 +404,20 @@ inline int request::pack_header(serializer &sr, MSGID msgid, U8 reqtype, int n_a
 	ASSERT(msgid != 0);
 	return sr.len();
 }
+inline void request::replace_msgid(MSGID new_id, char *p, int l)
+{
+	/* p, l, must be packed by request::pack_header */
+	ASSERT(l >= 6);
+	/* array_len(1), msg_request(1), signiture for U32 (1), msgid (4) */
+	SET_32((p + 3), htonl(new_id));
+}
+inline void request::replace_method(U8 mth, char *p, int l)
+{
+	/* p, l, must be packed by request::pack_header */
+	ASSERT(l >= 7);
+	/* array_len(1), msg_request(1), signiture for U32 (1), msgid (4), rtype(1) */
+	SET_8((p + 7), mth);
+}
 
 inline int response::pack_header(serializer &sr, MSGID msgid)
 {
@@ -391,10 +439,9 @@ inline int world_request::pack_header(serializer &sr, MSGID msgid, U8 reqtype,
 
 inline int ll_exec_request::pack_header(serializer &sr, MSGID msgid,
 		pfmobj &o, const char *method, size_t mlen,
-		world_id wid, size_t wlen, bool local, int n_arg)
+		world_id wid, size_t wlen, U8 mth, int n_arg)
 {
-	super::pack_header(sr, msgid,
-		local ? ll_exec_local : ll_exec, wid, wlen, n_arg + 2);
+	super::pack_header(sr, msgid, mth, wid, wlen, n_arg + 2);
 	sr.push_string(method, mlen);
 	super::pack_object(sr, o);
 	return sr.len();
@@ -414,12 +461,12 @@ inline int create_object_request::pack_header(
 }
 
 inline int replicate_request::pack_header(
-			serializer &sr, MSGID msgid, const UUID &uuid,
-			int log_size)
+			serializer &sr, U8 cmd, MSGID msgid, world_id wid, size_t wlen,
+			const UUID &uuid, U8 rep_type)
 {
-	request::pack_header(sr, msgid, replicate, 2);
+	super::pack_header(sr, msgid, cmd, wid, wlen, 3);
 	sr.push_raw(reinterpret_cast<const char *>(&uuid), sizeof(UUID));
-	sr.push_map_len(log_size);
+	sr << rep_type;
 	return sr.len();
 }
 

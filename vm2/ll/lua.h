@@ -32,11 +32,25 @@ public:
 	static const char enter_world_proc_name[];
 	static const U32 login_proc_name_len = 5;/* login */
 	static const char login_proc_name[];
+	static const U32 convention_processor_name_len = 6; /* lambda */
+	static const char convention_processor[];
+	static const int max_sys_convention = 10;
 public:
 	struct method {
+	public:
+		enum callattr {
+			ca_none = 0,
+			ca_protected = 1 << 0,
+			ca_notification = 1 << 1,
+			ca_clientcall = 1 << 2,
+		};
+	public:
 		const char *m_name;
 		void *p;
 		const char *name() const { return m_name; }
+		const char *parse(bool rcv, U32 &attr) {
+			return parse(name(), rcv, attr); }
+		static const char *parse(const char *name, bool rcv, U32 &attr);
 	};
 	class coroutine {
 	friend class lua;
@@ -52,6 +66,7 @@ public:
 		int call(rpc::ll_exec_request &req, bool trusted);
 		int call(rpc::create_object_request &req);
 		int call(rpc::authentication_request &req);
+		int call(rpc::replicate_request &req);
 		int call(rpc::ll_exec_request &req, const char *method);
 		int resume(rpc::ll_exec_response &res, bool packobj = false);
 		int push_world_object(class object *o);
@@ -67,6 +82,7 @@ public:
 		int dispatch(int argc, bool packobj);
 		int to_stack(rpc::ll_exec_request &req, bool trusted);
 		int to_stack(rpc::ll_exec_response &res);
+		int to_stack(rpc::replicate_request &res);
 		int to_stack(rpc::ll_exec_request &req, const char *method);
 		int to_stack(rpc::create_object_request &res);
 		int to_stack(rpc::authentication_request &req);
@@ -82,17 +98,22 @@ public:
 		static class coroutine *to_co(VM vm);
 		class lua &scr() { return *m_scr; }
 		class fiber &fb() { return *m_fb; }
+		VM vm() { return m_exec; }
 	protected:/* metamethods */
 		static int object_index(VM vm);
 		static int object_newindex(VM vm);
 		static int method_call(VM vm);
 		static int ctor_call(VM vm);
 	};
+	struct watcher {
+		coroutine *m_co;
+	};
 	struct userdata {
-		enum { method, object };
+		enum { method, watcher, object };
 		U8 type, padd[3];
 		union {
 			struct method m;
+			struct watcher w;
 			class object *o;
 		};
 	};
@@ -120,6 +141,7 @@ public:
 	THREAD attached_thrd() const { return m_thrd; }
 	coroutine *co_new() { return m_copool.create(); }
 	void co_destroy(coroutine *co) { m_copool.destroy(co); }
+	bool has_convention_processor() const { return false; }
 protected:
 	array<char[smblock_size]> &smpool() { return m_smpool; }
 	int load_module(world_id wid, const char *srcfile);

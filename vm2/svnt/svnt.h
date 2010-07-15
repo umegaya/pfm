@@ -48,12 +48,14 @@ public:
 		return basic_fiber::respond<svnt::fiber>(err, sr);
 	}
 	int send_error(int r) { return basic_fiber::send_error<svnt::fiber>(r); }
+	int call_ll_exec_client(rpc::request &req, object *o,
+			bool trusted, char *p, int l);
 	int call_login(rpc::request &req);
 	int resume_login(rpc::response &res);
 	int call_logout(rpc::request &req);
 	int resume_logout(rpc::response &res);
-	int call_replicate(rpc::request &req) { ASSERT(false); return NBR_ENOTSUPPORT; }
-	int resume_replicate(rpc::response &res) { ASSERT(false); return NBR_ENOTSUPPORT; }
+	int call_replicate(rpc::request &req, char *p, int l);
+	int resume_replicate(rpc::response &res);
 	int call_node_inquiry(rpc::request &req);
 	int resume_node_inquiry(rpc::response &res);
 public:

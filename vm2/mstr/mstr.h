@@ -60,7 +60,8 @@ public:
 	int resume_login(rpc::response &res);
 	int call_logout(rpc::request &req);
 	int resume_logout(rpc::response &res);
-	int call_replicate(rpc::request &req) { ASSERT(false); return NBR_ENOTSUPPORT; }
+	int call_replicate(rpc::request &req, char *, int) 
+		{ ASSERT(false); return NBR_ENOTSUPPORT; }
 	int resume_replicate(rpc::response &res) {
 		ASSERT(false); return NBR_ENOTSUPPORT; }
 	int call_node_inquiry(rpc::request &req);
@@ -128,9 +129,11 @@ public:
 			for (; wit != session::app().ff().wf().end(); ) {
 				if (wit->nodes().use() == 0) {
 					/* FIXME : need to notice other master nodes? */
+					TRACE("World destroy (%s)\n", wit->id());
 					tmp = wit;
 					wit = session::app().ff().wf().next(wit);
-					session::app().ff().wf().destroy(tmp->id());
+					session::app().ff().wf().unload(tmp->id(),
+						session::app().ff().vm());
 					continue;
 				}
 				int r;

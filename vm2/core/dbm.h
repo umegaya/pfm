@@ -65,7 +65,8 @@ public:
 		if (!(e = super::rawalloc(k, false, &exists))) { return record(NULL); }
 		if (exists) { return record(e); }
 		record rec(e);
-		dbm::record r = m_db.select(key_traits::kp(k), key_traits::kl(k));
+		dbm::record r;
+		m_db.select(r, key_traits::kp(k), key_traits::kl(k));
 		if (!r || rec.load(r.p<char>(), r.len(), ctx) < 0) {
 			erase(k);
 			return record(NULL);
@@ -79,7 +80,8 @@ public:
 		if (!(e = super::rawalloc(k, false, &exists))) { return record(NULL); }
 		if (exists) { return record(e); }
 		record rec(e);
-		dbm::record r = m_db.select(key_traits::kp(k), key_traits::kl(k));
+		dbm::record r;
+		m_db.select(r, key_traits::kp(k), key_traits::kl(k));
 		exist_on_disk = (r && rec.load(r.p<char>(), r.len(), ctx) >= 0);
 		return rec;
 	}
@@ -87,6 +89,9 @@ public:
 		bool insertion = false, void *ctx = NULL) {
 		record r = to_r(v);
 		return save(r, k, insertion, ctx);
+	}
+	inline bool save_raw(key k, const char *v, int vl) {
+		return m_db.replace(key_traits::kp(k), key_traits::kl(k), v, vl);
 	}
 	inline bool save(record &r, key k,
 		bool insertion = false, void *ctx = NULL) {

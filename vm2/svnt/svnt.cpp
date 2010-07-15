@@ -54,11 +54,22 @@ public:
 /* config */
 class config : public util::config {
 public:
+	char m_dbmopt[256];
 	typedef util::config super;
-	config(BASE_CONFIG_PLIST);
+	config(BASE_CONFIG_PLIST, const char *dbmopt);
+	int set(const char *k, const char *v);
 };
 
-config::config(BASE_CONFIG_PLIST) : super(BASE_CONFIG_CALL) {}
+config::config(BASE_CONFIG_PLIST, const char *dbmopt) : super(BASE_CONFIG_CALL) {
+	nbr_str_copy(m_dbmopt, sizeof(m_dbmopt), dbmopt, sizeof(m_dbmopt));
+}
+int config::set(const char *k, const char *v) {
+	if (strcmp(k, "dbmopt") == 0) {
+		nbr_str_copy(m_dbmopt, sizeof(m_dbmopt), v, sizeof (m_dbmopt));
+		return NBR_OK;
+	}
+	return super::set(k, v);
+}
 }
 pfms *svnt::session::m_daemon = NULL;
 #if defined(_DEBUG)
@@ -120,7 +131,8 @@ pfms::create_config(config* cl[], int size)
 			kernel::INFO,
 			nbr_sock_rparser_bin16,
 			nbr_sock_send_bin16,
-			util::config::cfg_flag_not_set));
+			util::config::cfg_flag_not_set, 
+			"svnt/db"));
 	CONF_ADD(svnt::config, (
 			"svnt",
 			"0.0.0.0:8200",
@@ -135,7 +147,8 @@ pfms::create_config(config* cl[], int size)
 			kernel::INFO,
 			nbr_sock_rparser_bin16,
 			nbr_sock_send_bin16,
-			util::config::cfg_flag_server));
+			util::config::cfg_flag_server, 
+			"svnt/db"));
 	CONF_ADD(cluster::finder_property, (
 			"finder",
 			"0.0.0.0:9999",
@@ -166,9 +179,13 @@ pfms::boot(int argc, char *argv[])
 		svnt::session::m_test_mode = (tmode != 0);
 	}
 	int r;
+	char path[256]; 
 	conn_pool::svnt_cp *fc;
+	base::factory_impl<svnt::session> *fc_svnt;
 	svnt::finder_factory *fdr;
-	INIT_OR_DIE((r = m_db.init("svnt/db/uuid.tch")) < 0, r,
+	svnt::config *c = find_config<svnt::config>("svnt");
+	if (!c) { return NBR_ENOTFOUND; }
+	INIT_OR_DIE((r = m_db.init(config::makepath(path, sizeof(path), c->m_dbmopt, "uuid.tch"))) < 0, r,
 		"uuid DB init fail (%d)\n", r);
 	INIT_OR_DIE((r = UUID::init(m_db)) < 0, r,
 		"UUID init fail (%d)\n", r);
@@ -178,16 +195,21 @@ pfms::boot(int argc, char *argv[])
 		"fiber_factory init fails(%d)\n", r);
 	INIT_OR_DIE(!(fc = find_factory<conn_pool::svnt_cp>("be")), NBR_ENOTFOUND,
 		"conn_pool not found (%p)\n", fc);
+	INIT_OR_DIE(!(fc_svnt = find_factory<conn_pool::svnt_cp>("svnt")), NBR_ENOTFOUND,
+			"svnt factory not found (%p)\n", fc_svnt);
 	INIT_OR_DIE(!(fdr = find_factory<svnt::finder_factory>("finder")), NBR_ENOTFOUND,
-		"conn_pool not found (%p)\n", fc);
+		"conn_pool not found (%p)\n", fdr);
 	ff().cp()->set_pool(fc);
-	INIT_OR_DIE((r = ff().wf().cf()->init(ff().cp(), 100, 100, 100)) < 0, r,
+	INIT_OR_DIE((r = ff().wf().cf()->init(
+		ff().cp(), fc_svnt->ifaddr(), 100, 100, 100)) < 0, r,
 		"init connector factory fails (%d)\n", r);
 	ff().set_finder(fdr);
-	INIT_OR_DIE((r = ff().of().init(10000, 1000, 0, "svnt/db/of.tch")) < 0, r,
+	INIT_OR_DIE((r = ff().of().init(10000, 1000, 0, 
+		config::makepath(path, sizeof(path), c->m_dbmopt, "of.tch"))) < 0, r,
 		"object factory creation fail (%d)\n", r);
 	INIT_OR_DIE((r = ff().wf().init(
-		256, 256, opt_threadsafe | opt_expandable, "svnt/db/wf.tch")) < 0, r,
+		256, 256, opt_threadsafe | opt_expandable, 
+		config::makepath(path, sizeof(path), c->m_dbmopt, "wf.tch"))) < 0, r,
 		"object factory creation fail (%d)\n", r);
 	return NBR_OK;
 }
@@ -225,6 +247,35 @@ int svnt::fiber::quorum_global_commit(world *w, quorum_context *ctx, int result)
 int svnt::fiber::quorum_vote_callback(rpc::response &r, THREAD t, void *p)
 {
 	return super::thrd_quorum_vote_callback(r, t, p);
+}
+
+int svnt::fiber::call_ll_exec_client(rpc::request &req,
+		object *o, bool trusted, char *p, int l)
+{
+	int r;
+	MSGID msgid = INVALID_MSGID;
+	TRACE("call_ll_exec_client %u byte\n", l);
+	csession *cs = find_session(o->uuid());
+	if (!cs) { r = NBR_ENOTFOUND; goto error; }
+	if ((msgid = new_msgid()) == INVALID_MSGID) {
+		r = NBR_EEXPIRE;
+		goto error;
+	}
+	TRACE("new assigned msgid = %u, climsgid = %u\n", msgid, req.msgid());
+	if ((r = yielding(msgid)) < 0) {
+		goto error;
+	}
+	m_ctx.climsgid = req.msgid();
+	/* TODO : remove magic? but its super faster... */
+	rpc::request::replace_msgid(msgid, p, l);
+	if ((r = cs->send(p, l)) < 0) {
+		goto error;
+	}	
+	return r;
+error:
+	if (msgid != INVALID_MSGID) { ff().fiber_unregister(msgid); }
+	if (r < 0) { send_error(r); }
+	return r;
 }
 
 int svnt::fiber::call_login(rpc::request &p)
@@ -366,7 +417,7 @@ int svnt::fiber::resume_login(rpc::response &p)
 			if ((r = rpc::ll_exec_request::pack_header(
 				ff().sr(), msgid, *o,
 				ll::enter_world_proc_name, ll::enter_world_proc_name_len,
-				w->id(), nbr_str_length(w->id(), max_wid), false, 0)) < 0) {
+				w->id(), nbr_str_length(w->id(), max_wid), rpc::ll_exec, 0)) < 0) {
 				goto error;
 			}
 			if ((r = yielding(msgid)) < 0) {
@@ -481,6 +532,120 @@ error:
 }
 
 
+int svnt::fiber::call_replicate(rpc::request &rq, char *p, int l)
+{
+	int r;
+	char b[256];
+	ll::coroutine *co = NULL;
+	MSGID msgid = INVALID_MSGID;
+	rpc::replicate_request &req = rpc::replicate_request::cast(rq);
+	const UUID &uuid = req.uuid();
+	m_ctx.nctrl.cmd = (U32)MAKE_REPL_CMD(req.method(), req.type());
+	switch(m_ctx.nctrl.cmd) {
+	case MAKE_REPL_CMD(rpc::replicate, replicate_move_to):
+		/* object should move by rehash */ {
+		if (!(co = ff().co_create(this))) {
+			r = NBR_EEXPIRE; goto error;
+		}
+		if ((r = co->call(req)) < 0) {
+			LOG("rehash %s replicate call fails (%d)",
+				uuid.to_s(b, sizeof(b)), r);
+			goto error;
+		}
+		ff().vm()->co_destroy(co);
+		co = NULL;
+		serializer &sr = ff().sr();
+		response::pack_header(sr, m_msgid);
+		sr.push_raw((char *)&uuid, sizeof(UUID));
+		sr.pushnil();
+		if ((r = respond(false, sr)) < 0) {
+			LOG("rehash %s respond fails (%d)",
+				uuid.to_s(b, sizeof(b)), r);
+			goto error;
+		}
+		return NBR_OK;
+	} break;
+	case MAKE_REPL_CMD(rpc::start_replicate, replicate_move_to):
+		/* start 1 rehash replicate */ {
+		LOG("rehash start %s/%s\n", m_wid, uuid.to_s(b, sizeof(b)));
+		ASSERT(uuid.id2 < 0x00010000);
+		world *w = ff().find_world(m_wid);
+		if (!w) { r = NBR_ENOTFOUND; goto error; }
+		if ((msgid = new_msgid()) == INVALID_MSGID) {
+			r = NBR_EEXPIRE;
+			goto error;
+		}
+		serializer &sr = ff().sr();
+		rpc::request::replace_msgid(msgid, p, l);
+		rpc::request::replace_method(replicate, p, l);
+		sr.pack_start(p, l);
+		sr.set_curpos(l);
+		if ((r = w->request(msgid, uuid, sr)) < 0) { goto error; }
+		if ((r = yielding(msgid)) < 0) { goto error; }
+		return NBR_OK;
+	} break;
+	case MAKE_REPL_CMD(rpc::replicate, replicate_normal):
+		/* normal replication (apply update) */
+	case MAKE_REPL_CMD(rpc::start_replicate, replicate_normal):
+		/* start 1 normal replicate */
+	default:
+		ASSERT(false);
+		r = NBR_EINVAL;
+		goto error;
+	}
+error:
+ASSERT(false);
+	if (co) { ff().vm()->co_destroy(co); }
+	if (msgid != INVALID_MSGID) { ff().fiber_unregister(msgid); }
+	if (r < 0) { send_error(r); }
+	return r;
+}
+
+int svnt::fiber::resume_replicate(rpc::response &re)
+{
+	char b[256];
+	int r;
+	rpc::replicate_response &res = rpc::replicate_response::cast(re);
+	const UUID &uuid = res.uuid();
+	switch(m_ctx.nctrl.cmd) {
+	case MAKE_REPL_CMD(rpc::replicate, replicate_move_to): {
+	} break;
+	case MAKE_REPL_CMD(rpc::start_replicate, replicate_move_to): {
+		TRACE("resume rehash for %s\n", uuid.to_s(b, sizeof(b)));
+		world *w = ff().find_world(m_wid);
+		if (!w) { r = NBR_ENOTFOUND; goto error; }
+		if (res.success()) {
+			if (!w->node_for(uuid)) {
+				ff().of().destroy(uuid);
+				LOG("rehash %s destroy\n", uuid.to_s(b, sizeof(b)));
+			}
+			else {
+				object *o = ff().of().find(uuid);
+				o->set_flag(object::flag_replica, true);
+				LOG("rehash %s replica\n", uuid.to_s(b, sizeof(b)));
+			}
+		}
+		else {
+			LOG("rehash %s fails!", uuid.to_s(b, sizeof(b)));
+			ASSERT(false);
+		}
+		w->rh().resume();	/* do next move to */
+		return NBR_OK;
+	} break;
+	case MAKE_REPL_CMD(rpc::replicate, replicate_normal):
+		/* normal replication (apply update) */
+	case MAKE_REPL_CMD(rpc::start_replicate, replicate_normal):
+		/* start 1 normal replicate */
+	default:
+		ASSERT(false);
+		r = NBR_EINVAL;
+		goto error;
+	}
+error:
+	return r;
+}
+
+
 int svnt::fiber::call_node_inquiry(rpc::request &rq)
 {
 	int r;
@@ -536,12 +701,16 @@ int svnt::fiber::node_ctrl_add(world *w,
 	MSGID msgid = INVALID_MSGID;
 	quorum_context *ctx = NULL;
 	bool world_exist = true;
-
 	switch(m_status) {
 	case start:
 		if (!w) {
 			world_exist = false;
-			if (!(w = ff().world_create(req))) {
+			if (!req.world_object_id().valid()) {
+				r = NBR_EINVAL;
+				goto error;
+			}
+			/* servant never preserve world information */
+			if (!(w = ff().world_create(req, false))) {
 				r = NBR_EEXPIRE;
 				goto error;
 			}
@@ -617,7 +786,9 @@ error:
 int svnt::fiber::node_ctrl_add_resume(world *w, rpc::response &res, serializer &sr)
 {
 	int r;
+	rehasher *rh;
 	MSGID msgid = INVALID_MSGID;
+	bool add_master = false;
 	quorum_context *ctx = yld()->p<quorum_context>();
 	if (res.success()) {
 		switch(m_status) {
@@ -643,9 +814,31 @@ int svnt::fiber::node_ctrl_add_resume(world *w, rpc::response &res, serializer &
 			m_status = ncc_wait_global_commit;
 			break;
 		case ncc_wait_global_commit:
+			add_master = true;
+			msgid = new_msgid();
+			if (msgid == INVALID_MSGID) {
+				r = NBR_EEXPIRE;
+				goto error;
+			}
+			if ((r = yielding(msgid, 1, NULL, ctx)) < 0) {
+				goto error;
+			}
+			rh = &(w->rh());
+			rh->init(&ff(), w, ff().curr(), msgid);
+			if (!ff().of().start_rehasher(rh) < 0) {
+				ASSERT(false);
+				r = NBR_EPTHREAD;
+				goto error;
+			}
+			m_status = ncc_add_wait_rehash;
+			break;
+		case ncc_add_wait_rehash:
 			/* if vm_init is skipped (because of already world created)
 			 * then ctx->m_rep_size == 0 so nothing happen */
-			quorum_global_commit(w, ctx, NBR_OK);
+			add_master = true;
+			if ((r = quorum_global_commit(w, ctx, NBR_OK)) < 0) {
+				goto error;
+			}
 			break;
 		default:
 			ASSERT(false);
@@ -661,7 +854,13 @@ int svnt::fiber::node_ctrl_add_resume(world *w, rpc::response &res, serializer &
 error:
 	if (msgid != INVALID_MSGID) { ff().fiber_unregister(msgid); }
 	quorum_global_commit(w, ctx, r);
-	w->del_node(ctx->m_node_addr);
+	if (add_master) {
+		/* TODO : send del node to master */
+		assert(false);
+	}
+	else {
+		w->del_node(ctx->m_node_addr);
+	}
 	return r;
 }
 
@@ -678,7 +877,7 @@ int svnt::fiber::call_node_regist(rpc::request &rq)
 	}
 	if ((r = rpc::node_ctrl_cmd::regist::pack_header(
 		ff().sr(), msgid, req.node_server_addr(),
-		req.node_server_addr().len(), req.node_type())) < 0) {
+		req.node_server_addr_len(), req.node_type())) < 0) {
 		goto error;
 	}
 	if ((r = yielding(msgid)) < 0) {

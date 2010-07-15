@@ -8,11 +8,37 @@
 namespace pfm {
 using namespace sfc;
 using namespace sfc::util;
+
+class rehasher {
+protected:
+	class world *m_wld;
+	class ffutil *m_ff;
+	class serializer *m_sr;
+	MSGID m_msgid;
+	THREAD m_my, m_invoked;
+public:
+	rehasher() : m_my(NULL) {}
+	void init(class ffutil *ff, class world *w,
+			THREAD invoke, MSGID msgid) {
+		m_ff = ff; m_wld = w;
+		m_invoked = invoke;
+		m_msgid = msgid;
+		ASSERT(msgid != INVALID_MSGID);
+	}
+	int start();
+	THREAD my() const { return m_my; }
+	bool set_thrd(THREAD th) { return (m_my = th); }
+	void resume() { ASSERT(m_my); if (m_my) { nbr_thread_signal(m_my, 1); } }
+	int operator () (dbm_impl *dbm, const char *k, int ksz);
+	static void *proc(void *p);
+};
+
 class world  {
 protected:
-	CONHASH m_ch;
+	CONHASH m_ch, m_nch;
 	world_id m_wid;
 	UUID m_world_object;
+	rehasher m_rh;
 	map<const CHNODE *, address> m_nodes;
 	class connector_factory *m_cf;
 public:
@@ -21,12 +47,13 @@ public:
 	static const U32 object_multiplexity = 3;
 	static const U32 max_world = 1000;
 	world(class connector_factory *cf = NULL) :
-		m_ch(NULL), m_wid(NULL), m_world_object(), m_nodes(), m_cf(cf) {}
+		m_ch(NULL), m_wid(NULL), m_world_object(), m_rh(), m_nodes(), m_cf(cf) {}
 	~world() { fin(); }
 	int init(int max_node, int max_replica);
 	void fin();
 	world_id set_id(world_id wid) { return m_wid = strndup(wid, max_wid); }
 	world_id id() const { return m_wid; }
+	rehasher &rh() { return m_rh; }
 	const UUID &world_object_uuid() const { return m_world_object; }
 	void set_world_object_uuid() {
 		ASSERT(!m_world_object.valid());
@@ -41,6 +68,8 @@ public:
 	map<const CHNODE *, address> &nodes() { return m_nodes; }
 	class connector_factory &cf() { return *m_cf; }
 	void set_cf(class connector_factory *cf) { m_cf = cf; }
+	bool primary_node_for(const UUID &uuid);
+	bool node_for(const UUID &uuid);
 	const CHNODE *add_node(const class conn &c);
 	const CHNODE *add_node(const char *a);
 	int del_node(const char *a);
@@ -49,8 +78,10 @@ public:
 	int del_node(const CHNODE &n) {
 		return nbr_conhash_del_node(m_ch, (CHNODE *)&n); }
 	int request(MSGID msgid, const UUID &uuid, serializer &sr);
+	int re_request(MSGID msgid, const UUID &uuid, bool reconnect);
 #if defined(_TEST)
-	static int (*m_test_request)(world *, MSGID, const UUID &, serializer &);
+	static int (*m_test_request)(world *, MSGID,
+			const UUID &, address &a, serializer &);
 	void *_connect_assigned_node(const UUID &uuid) {
 		return connect_assigned_node(uuid);
 	}
@@ -121,6 +152,12 @@ public:
 		if (!w) { return NBR_ENOTFOUND; }
 		return w->request(msgid, uuid, sr);
 	}
+	int re_request(world_id wid, MSGID msgid,
+		const UUID &uuid, bool reconnect) {
+		world *w = super::find(wid);
+		if (!w) { return NBR_ENOTFOUND; }
+		return w->re_request(msgid, uuid, reconnect);
+	}
 };
 class world_loader {
 	class world_factory &m_wf;
@@ -130,7 +167,7 @@ public:
 		int max_node, int max_replica) :
 		m_wf(wf), m_max_node(max_node),
 		m_max_replica(max_replica) {}
-	int operator () (const char *k, int ksz) {
+	int operator () (dbm_impl *dbm, const char *k, int ksz) {
 		world *w = m_wf.create(k, m_max_node, m_max_replica);
 		if (!w) { return NBR_ENOTFOUND; }
 		return NBR_OK;

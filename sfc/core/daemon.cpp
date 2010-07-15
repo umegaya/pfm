@@ -142,10 +142,12 @@ daemon::init(int argc, char *argv[])
 void
 daemon::fin()
 {
+	/* stop networkd IO */
+	nbr_stop_sock_io();
 	/* app defined finalization */
 	shutdown();
 	/* stop network IO */
-	nbr_stop_sock_io();
+	//nbr_stop_sock_io();
 	/* cleanup related memory resource */
 	smap::iterator s;
 	for (s = m_sl.begin(); s != m_sl.end(); s = m_sl.next(s)) {

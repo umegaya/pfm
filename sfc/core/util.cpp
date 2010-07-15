@@ -96,6 +96,17 @@ config::~config()
 {
 }
 
+const char *config::makepath(char *b, size_t bl, const char *base, const char *name)
+{
+	size_t sz = nbr_str_length(base, MAX_VALUE_STR);
+	if (base[sz - 1] == '/') {
+		snprintf(b, bl, "%s%s", base, name);
+		return b;
+	}
+	snprintf(b, bl, "%s/%s", base, name);
+	return b;
+}
+
 int config::load(const char *line)
 {
 	char key[256];

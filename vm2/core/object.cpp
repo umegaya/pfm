@@ -22,7 +22,7 @@ int object::request(MSGID msgid, ll *vm, serializer &sr)
 		return m_test_request(this, msgid, vm, sr);
 	}
 #endif
-	if (local() || has_localdata()) {
+	if (local()) {
 		if (thread_current(vm)) {
 			ASSERT(false);
 			return NBR_EINVAL;
@@ -46,5 +46,31 @@ int object::load(const char *p, int l, void *ctx)
 	return ((ll::coroutine *)ctx)->load_object(*this, p, l);
 }
 
-
 /* object_factory */
+bool object_factory::init(int max, int hashsz, int opt, const char *dbmopt) {
+	if (!(m_replacer = nbr_thpool_create(4))) {
+		return false;
+	}
+	if (!m_syms.init(256, 256, -1, opt_threadsafe | opt_expandable)) {
+		return false;
+	}
+	return super::init(max, hashsz, opt, dbmopt);
+}
+void object_factory::fin() {
+	if (m_replacer) {
+		nbr_thpool_destroy(m_replacer);
+		m_replacer = NULL;
+	}
+	m_syms.fin();
+	super::fin();
+}
+bool object_factory::start_rehasher(class rehasher *param)
+{
+	if (param->my()) {
+		nbr_thread_destroy(m_replacer, param->my());
+	}
+	return param->set_thrd(
+		nbr_thread_create(m_replacer, (void *)param, rehasher::proc));
+}
+
+

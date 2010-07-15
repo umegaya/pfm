@@ -171,10 +171,10 @@ $(DEPS)/$(COREDIR)/%.d: $(COREDIR)/%.cpp
 	@$(CC) $(CFLAG) $(INCS) $< -M |         \
 		sed 's:.*\.o:${OBJS}/${COREDIR}/\0:' > $@
 
-$(TDEPS)/$(COREDIR)/$(MDIR)/%.d: $(COREDIR)/$(MDIR)/%.cpp
-	@mkdir -p $(DEPS)/$(COREDIR)$(MDIR)/
+$(TDEPS)/$(COREDIR)/%.d: $(COREDIR)/%.cpp
+	@mkdir -p $(TDEPS)/$(COREDIR)
 	@$(CC) $(CFLAG) -D_TEST $(INCS) $< -M |         \
-		sed 's:.*\.o:${OBJS}/${COREDIR}/\0:' > $@
+		sed 's:.*\.o:${TOBJS}/${COREDIR}/\0:' > $@
 
 $(TDEPS)/$(TESTDIR)/%.d: $(TESTDIR)/%.cpp
 	@mkdir -p $(TDEPS)/$(TESTDIR)

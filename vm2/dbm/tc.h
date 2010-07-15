@@ -52,9 +52,12 @@ public:
 		ASSERT(m_db);
 		return tchdbget(m_db, k, kl, &vl);
 	}
-	inline record select(const void *k, int kl) {
+	inline int select(const void *k, int kl, void *v, int vl) {
 		ASSERT(m_db);
-		record r;
+		return tchdbget3(m_db, k, kl, v, vl);
+	}
+	inline bool select(record &r, const void *k, int kl) {
+		ASSERT(m_db);
 		r.m_p = select(k, kl, r.m_len);
 		return r;
 	}
@@ -83,7 +86,7 @@ public:
 		if (!tchdbiterinit(m_db)) { return false; }
 		char *k; int ksz;
 		while ((k = (char *)tchdbiternext(m_db, &ksz))) {
-			if (fn(k, ksz) < 0) {
+			if (fn(this, k, ksz) < 0) {
 				return false;
 			}
 			tcfree(k);
