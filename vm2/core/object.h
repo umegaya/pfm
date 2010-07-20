@@ -59,6 +59,7 @@ public:
 	bool attr_accesible(class ll *vm) {
 		return (local() || has_localdata()) && thread_current(vm);
 	}
+	/* TODO : use __sync_***?? */
 	void set_flag(U32 f, bool on) {
 		if (on) { m_flag |= f; } else { m_flag &= ~(f); } }
 	bool local() const { return m_flag & flag_local; }

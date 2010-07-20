@@ -5,7 +5,7 @@ namespace pfm {
 
 class msgid_generator {
 protected:
-	U32 m_msgid_seed;
+	volatile U32 m_msgid_seed;
 	static const U32 MSGID_NORMAL_LIMIT = 2000000000;
 	static const U32 MSGID_COMPACT_LIMIT = 60000;
 public:

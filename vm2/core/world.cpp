@@ -32,8 +32,8 @@ int rehasher::start()
 		sr.pushnil();
 		sr << r;
 	}
-	if ((r = m_ff->run_fiber(
-		fiber::to_thrd(m_my), m_invoked, sr.p(), sr.len())) < 0) {
+	if ((r = m_ff->run_fiber(fiber::to_thrd(curr()),
+		m_invoked, sr.p(), sr.len())) < 0) {
 		ASSERT(false);
 	}
 	delete m_sr;
@@ -69,14 +69,17 @@ int rehasher::operator () (dbm_impl *db, const char *k, int ksz)
 		ASSERT(sr.unpack(req_, sr.p(), sr.len()) > 0);
 		object *o = m_ff->of().find(uuid);
 		if (o) {
-			if ((r = m_ff->run_fiber(fiber::to_thrd(m_my), o->vm()->attached_thrd(),
-				sr.p(), sr.len())) < 0) { ASSERT(false); return r; }
+			if ((r = m_ff->run_fiber(fiber::to_thrd(curr()),
+				o->vm()->attached_thrd(), sr.p(), sr.len())) < 0) {
+				ASSERT(false); return r;
+			}
 		}
-		else if ((r = m_ff->run_fiber(fiber::to_thrd(m_my), sr.p(), sr.len())) < 0) {
+		else if ((r = m_ff->run_fiber(fiber::to_thrd(curr()),
+			sr.p(), sr.len())) < 0) {
 			ASSERT(false);
 			return r;
 		}
-		if ((r = nbr_thread_wait_signal(m_my, 1, 10 * 1000)) < 0) {
+		if ((r = yield(10)) < 0) {
 			TRACE("rehasher : timeout\n");
 			return r;
 		}
@@ -228,7 +231,7 @@ bool world::node_for(const UUID &uuid)
 	return false;
 }
 
-int world::request(MSGID msgid, const UUID &uuid, serializer &sr)
+int world::request(MSGID msgid, const UUID &uuid, serializer &sr, bool recon)
 {
 #if defined(_TEST)
 	if (m_test_request) {
@@ -249,6 +252,10 @@ int world::request(MSGID msgid, const UUID &uuid, serializer &sr)
 	}
 #endif
 	connector *c = m_cf->get_by(uuid);
+	if (recon && c) {
+		m_cf->del_failover_chain(*c);
+		c = NULL;
+	}
 	if (!c) { c = (connector *)connect_assigned_node(uuid); }
 	if (!c) { ASSERT(false); return NBR_EEXPIRE; }
 	return c->send(msgid, sr.p(), sr.len());

@@ -66,8 +66,8 @@ void object_factory::fin() {
 }
 bool object_factory::start_rehasher(class rehasher *param)
 {
-	if (param->my()) {
-		nbr_thread_destroy(m_replacer, param->my());
+	if (param->curr()) {
+		nbr_thread_destroy(m_replacer, param->curr());
 	}
 	return param->set_thrd(
 		nbr_thread_create(m_replacer, (void *)param, rehasher::proc));

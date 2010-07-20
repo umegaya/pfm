@@ -16,12 +16,11 @@
 #define PREPARE_PACK(scr)		PREPARE_PACK_LOW(scr, __b)
 #define PREPARE_PACK_LOW(scr, bufname)	\
 		char bufname[4 * 1024];	\
-		sr_disposer srd##bufname((serializer &)(scr));	\
-		((serializer &)(scr)).pack_start(bufname, sizeof(bufname));
+		sr_disposer srd##bufname((scr));	\
+		(scr).pack_start(bufname, sizeof(bufname));
 
 #define PREPARE_UNPACK(scr)		\
-		((serializer &)(scr)).unpack_start(((serializer &)(scr)).p(),	\
-						((serializer &)(scr)).len());
+		(scr).unpack_start((scr).p(), (scr).len());
 
 #define INIT_OR_DIE(cond, ret, ...)	\
 	if (cond) {	\

@@ -39,7 +39,8 @@ public:
 			return NBR_OK;
 		}
 	};
-	typedef pmap<account_info, const char*> account_list;
+	typedef pmap<account_info,
+		char[rpc::login_request::max_account]> account_list;
 	typedef rpc::basic_fiber super;
 	static account_list m_al;
 public:	/* master quorum base replication */
@@ -137,6 +138,12 @@ public:
 					continue;
 				}
 				int r;
+				serializer *psr = &(app().ff().sr());
+				if (!psr) {
+					/* from main thread (shutdown case) so nothing to do */
+					wit = session::app().ff().wf().next(wit);
+					continue;
+				}
 				serializer &sr = app().ff().sr();
 				PREPARE_PACK(sr);
 				if ((r = rpc::node_ctrl_cmd::del::pack_header(
@@ -145,10 +152,12 @@ public:
 					node_data()->iden,
 					nbr_str_length(node_data()->iden, address::SIZE))) < 0) {
 					ASSERT(false);
+					wit = session::app().ff().wf().next(wit);
 					continue;
 				}
 				if ((r = app().ff().run_fiber(node_delete_cb, sr.p(), sr.len())) < 0) {
 					ASSERT(false);
+					wit = session::app().ff().wf().next(wit);
 					continue;
 				}
 				wit = session::app().ff().wf().next(wit);

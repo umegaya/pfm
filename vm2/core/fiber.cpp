@@ -30,6 +30,7 @@ void ffutil::clear_tls() {
 int ffutil::init(int max_node, int max_replica,
 		void (*wkev)(SWKFROM*,THREAD,char*,size_t)) {
 	if (!(m_cp = new conn_pool)) { return NBR_EMALLOC; }
+	ASSERT(m_max_rpc > 0);
 	m_max_node = max_node;
 	m_max_replica = max_replica;
 	if (!m_quorums.init(world::max_world, world::max_world,
@@ -70,7 +71,7 @@ bool ffutil::init_tls(THREAD curr)
 		ASSERT(false);
 		return false;
 	}
-	if (!(m_vm = new ll(m_of, m_wf, *m_sr, nbr_thread_get_current()))) {
+	if (!(m_vm = new ll(m_of, m_wf, nbr_thread_get_current()))) {
 		fin_tls();
 		ASSERT(false);
 		return false;
@@ -317,20 +318,27 @@ fiber::from_object(object *o)
 	return o->vm();
 }
 
-bool
-fiber::check_move_to(object *o, const UUID &uuid)
+int
+fiber::check_forwarding_and_notice_intr(bool check_rpc, const UUID &uuid,
+		char *p, int l, class ll **pvm)
 {
-	if (!o || o->replica()) {
+	object *o = ff().of().find(uuid);
+	if (check_rpc && (!o || o->replica())) {
 		world *w = ff().find_world(m_wid);
 		if (!w) {
 			send_error(NBR_ENOTFOUND);
-			return true;
+			return NBR_EALREADY;
 		}
 		send_error(w->primary_node_for(uuid) ?
 			ll_exec_error_will_move_to : ll_exec_error_move_to);
-		return true;
+		return NBR_EALREADY;
 	}
-	return false;
+	*pvm = o->vm();
+	TRACE("check_fwd: vm : %p %p\n", ff().vm(), *pvm);
+	if (ff().vm() != *pvm) {
+		return NBR_EINVAL;
+	}
+	return NBR_OK;
 }
 
 
@@ -356,11 +364,12 @@ int basic_fiber::thrd_quorum_vote_commit(MSGID msgid,
 	return NBR_OK;
 }
 
-basic_fiber::quorum_context *basic_fiber::thrd_quorum_init_context(world *w)
+basic_fiber::quorum_context *basic_fiber::thrd_quorum_init_context(
+		world *w, quorum_context *qc/* = NULL */)
 {
-	quorum_context *ctx;
+	quorum_context *ctx = qc;
 	TRACE("try allocate quorum : %p/%s\n", &ff().quorums(), w->id());
-	if (!(ctx = ff().quorums().create_if_not_exist(w->id()))) {
+	if (!ctx && !(ctx = ff().quorums().create_if_not_exist(w->id()))) {
 		return NULL; /* already used */
 	}
 	TRACE("svnt::init_context %p\n", ctx);
@@ -428,6 +437,30 @@ int basic_fiber::thrd_quorum_vote_callback(rpc::response &r, THREAD t, void *p)
 void fiber::set_validity(class conn *c){ m_validity.m_sk = c->sk(); }
 void fiber::set_validity(class finder_session *s){ m_validity.m_sk = s->sk(); }
 void fiber::set_validity(class svnt_csession *s){ m_validity.m_sk = s->sk(); }
+void fiber::set_validity(SWKFROM *f)
+{
+	switch(f->type) {
+	case from_thread:
+		set_validity((thread_ptr)f->p); break;
+	case from_socket:
+		set_validity((class conn *)f->p); break;
+	case from_fncall:
+		set_validity((callback)f->p); break;
+	case from_mcastr:
+		set_validity((class finder_session *)f->p); break;
+	case from_mcasts:
+		set_validity((class finder_factory *)f->p); break;
+	case from_fiber:
+		set_validity((fiber *)f->p); break;
+	case from_app:
+		set_validity((app_param)f->p); break;
+	case from_client:
+		set_validity((class svnt_csession *)f->p); break;
+	default:
+		ASSERT(false);
+		return;
+	}
+}
 bool fiber::valid() const
 {
 	switch(m_type) {
@@ -442,12 +475,14 @@ bool fiber::valid() const
 	case from_mcasts:
 		return true;
 	case from_fiber:
+		ASSERT(m_validity.m_msgid != INVALID_MSGID);
 		return m_fiber->msgid() == m_validity.m_msgid;
 	case from_app:
 		return true;
 	case from_client:
 		return nbr_sock_is_same(m_client->sk(), m_validity.m_sk);
 	default:
+		ASSERT(false);
 		return false;
 	}
 }

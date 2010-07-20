@@ -162,10 +162,14 @@ public:
 	inline int on_recv(char *p, int l);
 	static int logout_cb(serializer &sr) {
 		LOG("logout\n");
+		/* TODO : remove object from factory and vm */
 		return NBR_OK;
 	}
 	int on_close(int reason) {
 		int r;
+		char b[256];
+		LOG("session unregister <%s>\n", m_uuid.to_s(b, sizeof(b)));
+		fiber::unregister_session(m_uuid);
 		serializer &sr = svnt::session::app().sr();
 		PREPARE_PACK(sr);
 		if ((r = rpc::logout_request::pack_header(
@@ -222,6 +226,7 @@ public:
 		}
 		return super::on_open(cfg);
 	}
+	/* TODO : when close remove it from connector */
 };
 }
 class svnt_csession : public svnt::csession {

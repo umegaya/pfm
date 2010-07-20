@@ -77,12 +77,12 @@ static void push_rpc_context(serializer &sr, msgid_generator &seed,
 int ll_call_test(int argc, char *argv[])
 {
 	int r;
-	serializer sr;
 	char b[1024], path[1024];
 	world_factory wf(NULL, MAKEPATH(path, "rc/ll/wf.tch"));
 	object_factory of;
+	serializer sr;
 	msgid_generator seed;
-	ll scr(of, wf, sr, NULL);
+	ll scr(of, wf, NULL);
 	test_fiber fb("test_world"), fb2("test_world2");
 	test_coroutine co;
 	object *o1, *o2;
@@ -290,9 +290,9 @@ int	ll_resume_test_thread_main(THREAD th, int argc, char *argv[])
 	char path[1024], buf[65536];
 	world_factory wf(NULL, MAKEPATH(path, "rc/ll/wf.tch"));
 	fiber_factory<testfiber> ff(of, wf);
-	serializer sr;
 	msgid_generator seed;
-	ll scr1(of, wf, sr, NULL), scr2(of, wf, sr, NULL);
+	serializer sr;
+	ll scr1(of, wf, NULL), scr2(of, wf, NULL);
 	rpc::ll_exec_request req;
 	rpc::ll_exec_response res;
 	testfiber fb1("test_world"), fb2("test_world");
@@ -323,6 +323,7 @@ int	ll_resume_test_thread_main(THREAD th, int argc, char *argv[])
 		"scr2 init world fail (%d)\n", r);
 	TEST((r = ff.init(10000, 100, 10)) < 0, "fiber initialize fail (%d)\n", r);
 	TEST(!(ff.init_tls()), "fiber init tls fails (%d)\n", r = NBR_EPTHREAD);
+	scr1.check_sr(); scr2.check_sr();
 	fb1.set_ff(&ff);
 	fb1.set_msgid(seed.new_id());
 	fb2.set_ff(&ff);

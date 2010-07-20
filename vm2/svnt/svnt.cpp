@@ -31,16 +31,22 @@ public:
 	}
 };
 class finder_factory : public cluster::finder_factory {
+	static const char *m_mstr_addr;
 public:
 	int init(const config &cfg) {
 		return cluster::finder_factory::init(cfg, on_recv<finder>);
 	}
+	static void set_mstr_addr(const char *p) { m_mstr_addr = p; }
 	static int node_inquiry_cb(serializer &sr) { 
 		TRACE("node_inquery finish \n");
 		return NBR_OK;
 	}
 	void poll(UTIME ut) {
 		if (session::app().ff().wf().cf()->backend_enable()) {
+			return;
+		}
+		if (m_mstr_addr) {
+			session::app().ff().wf().cf()->backend_connect(address(m_mstr_addr));
 			return;
 		}
 		serializer &sr = session::app().sr();
@@ -55,23 +61,31 @@ public:
 class config : public util::config {
 public:
 	char m_dbmopt[256];
+	const char* m_mstr_addr;
 	typedef util::config super;
-	config(BASE_CONFIG_PLIST, const char *dbmopt);
+	config(BASE_CONFIG_PLIST, const char *dbmopt, const char *maddr);
 	int set(const char *k, const char *v);
 };
 
-config::config(BASE_CONFIG_PLIST, const char *dbmopt) : super(BASE_CONFIG_CALL) {
+config::config(BASE_CONFIG_PLIST,
+	const char *dbmopt, const char *mstr_addr) : super(BASE_CONFIG_CALL) {
 	nbr_str_copy(m_dbmopt, sizeof(m_dbmopt), dbmopt, sizeof(m_dbmopt));
+	m_mstr_addr = mstr_addr;
 }
 int config::set(const char *k, const char *v) {
 	if (strcmp(k, "dbmopt") == 0) {
 		nbr_str_copy(m_dbmopt, sizeof(m_dbmopt), v, sizeof (m_dbmopt));
 		return NBR_OK;
 	}
+	if (strcmp(k, "master_addr") == 0) {
+		m_mstr_addr = strndup(v, MAX_VALUE_STR);
+		return NBR_OK;
+	}
 	return super::set(k, v);
 }
 }
 pfms *svnt::session::m_daemon = NULL;
+const char *svnt::finder_factory::m_mstr_addr = NULL;
 #if defined(_DEBUG)
 bool svnt::session::m_test_mode = true;
 #else
@@ -105,11 +119,11 @@ pfms::create_config(config* cl[], int size)
 	CONF_ADD(base::config, (
 			"clnt",
 			"0.0.0.0:8100",
-			10,
+			500,
 			60, opt_not_set,
 			64 * 1024, 64 * 1024,
 			0, 0,
-			10000,	-1,
+			-1,	0,
 			"TCP", "eth0",
 			1 * 100 * 1000/* 100msec task span */,
 			1 * 1000 * 1000/* after 1s, again try to connect */,
@@ -124,7 +138,7 @@ pfms::create_config(config* cl[], int size)
 			60, opt_expandable,
 			64 * 1024, 64 * 1024,
 			100 * 1000 * 1000, 5 * 1000 * 1000,
-			10000,	-1,
+			-1,	0,
 			"TCP", "eth0",
 			1 * 100 * 1000/* 100msec task span */,
 			1 * 1000 * 1000/* after 1s, again try to connect */,
@@ -132,7 +146,8 @@ pfms::create_config(config* cl[], int size)
 			nbr_sock_rparser_bin16,
 			nbr_sock_send_bin16,
 			util::config::cfg_flag_not_set, 
-			"svnt/db"));
+			"svnt/db",
+			NULL));
 	CONF_ADD(svnt::config, (
 			"svnt",
 			"0.0.0.0:8200",
@@ -140,7 +155,7 @@ pfms::create_config(config* cl[], int size)
 			60, opt_expandable,
 			64 * 1024, 64 * 1024,
 			100 * 1000 * 1000, 5 * 1000 * 1000,
-			10000,	-1,
+			-1,	0,
 			"TCP", "eth0",
 			1 * 100 * 1000/* 100msec task span */,
 			1 * 1000 * 1000/* after 1s, again try to connect */,
@@ -148,7 +163,8 @@ pfms::create_config(config* cl[], int size)
 			nbr_sock_rparser_bin16,
 			nbr_sock_send_bin16,
 			util::config::cfg_flag_server, 
-			"svnt/db"));
+			"svnt/db",
+			""));
 	CONF_ADD(cluster::finder_property, (
 			"finder",
 			"0.0.0.0:9999",
@@ -184,7 +200,8 @@ pfms::boot(int argc, char *argv[])
 	base::factory_impl<svnt::session> *fc_svnt;
 	svnt::finder_factory *fdr;
 	svnt::config *c = find_config<svnt::config>("svnt");
-	if (!c) { return NBR_ENOTFOUND; }
+	svnt::config *c_be = find_config<svnt::config>("be");
+	if (!c || !c_be) { return NBR_ENOTFOUND; }
 	INIT_OR_DIE((r = m_db.init(config::makepath(path, sizeof(path), c->m_dbmopt, "uuid.tch"))) < 0, r,
 		"uuid DB init fail (%d)\n", r);
 	INIT_OR_DIE((r = UUID::init(m_db)) < 0, r,
@@ -195,6 +212,7 @@ pfms::boot(int argc, char *argv[])
 		"fiber_factory init fails(%d)\n", r);
 	INIT_OR_DIE(!(fc = find_factory<conn_pool::svnt_cp>("be")), NBR_ENOTFOUND,
 		"conn_pool not found (%p)\n", fc);
+	svnt::finder_factory::set_mstr_addr(c_be->m_mstr_addr);
 	INIT_OR_DIE(!(fc_svnt = find_factory<conn_pool::svnt_cp>("svnt")), NBR_ENOTFOUND,
 			"svnt factory not found (%p)\n", fc_svnt);
 	INIT_OR_DIE(!(fdr = find_factory<svnt::finder_factory>("finder")), NBR_ENOTFOUND,
@@ -236,7 +254,7 @@ int svnt::fiber::quorum_vote_commit(MSGID msgid,
 }
 svnt::fiber::quorum_context *svnt::fiber::init_context(world *w)
 {
-	return super::thrd_quorum_init_context(w);
+	return super::thrd_quorum_init_context(w, NULL);
 }
 
 int svnt::fiber::quorum_global_commit(world *w, quorum_context *ctx, int result)
@@ -383,7 +401,8 @@ int svnt::fiber::resume_login(rpc::response &p)
 			if ((r = rpc::create_object_request::pack_header(
 				ff().sr(), msgid, c->player_id(),
 				ll::player_klass_name, ll::player_klass_name_len,
-				w->id(), nbr_str_length(w->id(), max_wid), true, 0)) < 0) {
+				w->id(), nbr_str_length(w->id(), max_wid),
+				(const char *)c->addr(), 0)) < 0) {
 				goto error;
 			}
 			if ((r = yielding(msgid)) < 0) {
@@ -395,19 +414,23 @@ int svnt::fiber::resume_login(rpc::response &p)
 			m_status = login_wait_object_create;
 		} break;
 		case login_wait_object_create: {
-			rpc::create_object_response &res = 
-				rpc::create_object_response::cast(p);
-			if (!(co = ff().co_create(this))) {
-				r = NBR_EEXPIRE;
-				goto error;
-			}
-			if ((r = co->to_stack(res)) < 0) {
-				goto error;
-			}
 			object *o;
+			char b[256];
+			TRACE("login : object create %s\n", c->player_id().to_s(b, sizeof(b)));
 			if (!(o = ff().of().find(c->player_id()))) {
-				r = NBR_ENOTFOUND;
-				goto error;
+				rpc::ll_exec_response &res = rpc::ll_exec_response::cast(p);
+				if (!(co = ff().co_create(this))) {
+					r = NBR_EEXPIRE;
+					goto error;
+				}
+				if ((r = co->to_stack(res)) < 0) {
+					goto error;
+				}
+				ff().vm()->co_destroy(co);
+				co = NULL;
+				if (!(o = ff().of().find(c->player_id()))) {
+					goto error;
+				}
 			}
 			msgid = new_msgid();
 			if (msgid == INVALID_MSGID) {
@@ -427,7 +450,6 @@ int svnt::fiber::resume_login(rpc::response &p)
 				ff().sr().p(), ff().sr().len())) < 0) {
 				goto error;
 			}
-			ff().vm()->co_destroy(co);
 			m_status = login_enter_world;
 		} break;
 		case login_enter_world: {
@@ -466,8 +488,7 @@ int svnt::fiber::resume_login(rpc::response &p)
 			r = NBR_EINVAL;
 			goto error;
 		}
-		if ((r = respond(true, ff().sr())) < 0) {
-		}
+		if ((r = respond(true, ff().sr())) < 0) { ASSERT(false); }
 	}
 error:
 	if (msgid != INVALID_MSGID) { ff().fiber_unregister(msgid); }
@@ -512,6 +533,7 @@ int svnt::fiber::resume_logout(rpc::response &res)
 {
 	int r;
 	if (res.success()) {
+		/* TODO : call Player:logout callback */
 		serializer &sr = ff().sr();
 		rpc::response::pack_header(sr, m_msgid);
 		sr << NBR_OK;
@@ -522,7 +544,6 @@ int svnt::fiber::resume_logout(rpc::response &res)
 		return NBR_OK;
 	}
 	else {
-		/* TODO: rollback master node status */
 		r = res.err();
 		goto error;
 	}
@@ -543,6 +564,7 @@ int svnt::fiber::call_replicate(rpc::request &rq, char *p, int l)
 	m_ctx.nctrl.cmd = (U32)MAKE_REPL_CMD(req.method(), req.type());
 	switch(m_ctx.nctrl.cmd) {
 	case MAKE_REPL_CMD(rpc::replicate, replicate_move_to):
+		LOG("rehash %s replicate move_to\n", uuid.to_s(b, sizeof(b)));
 		/* object should move by rehash */ {
 		if (!(co = ff().co_create(this))) {
 			r = NBR_EEXPIRE; goto error;
@@ -568,7 +590,7 @@ int svnt::fiber::call_replicate(rpc::request &rq, char *p, int l)
 	case MAKE_REPL_CMD(rpc::start_replicate, replicate_move_to):
 		/* start 1 rehash replicate */ {
 		LOG("rehash start %s/%s\n", m_wid, uuid.to_s(b, sizeof(b)));
-		ASSERT(uuid.id2 < 0x00010000);
+		ASSERT(uuid.id2 < 0x00700000);
 		world *w = ff().find_world(m_wid);
 		if (!w) { r = NBR_ENOTFOUND; goto error; }
 		if ((msgid = new_msgid()) == INVALID_MSGID) {
@@ -580,7 +602,7 @@ int svnt::fiber::call_replicate(rpc::request &rq, char *p, int l)
 		rpc::request::replace_method(replicate, p, l);
 		sr.pack_start(p, l);
 		sr.set_curpos(l);
-		if ((r = w->request(msgid, uuid, sr)) < 0) { goto error; }
+		if ((r = w->request(msgid, uuid, sr, true)) < 0) { goto error; }
 		if ((r = yielding(msgid)) < 0) { goto error; }
 		return NBR_OK;
 	} break;
@@ -613,22 +635,24 @@ int svnt::fiber::resume_replicate(rpc::response &re)
 	case MAKE_REPL_CMD(rpc::start_replicate, replicate_move_to): {
 		TRACE("resume rehash for %s\n", uuid.to_s(b, sizeof(b)));
 		world *w = ff().find_world(m_wid);
-		if (!w) { r = NBR_ENOTFOUND; goto error; }
+		if (!w) { ASSERT(false); r = NBR_ENOTFOUND; goto error; }
+		object *o = ff().of().find(uuid);
+		ASSERT(o);
 		if (res.success()) {
-			if (!w->node_for(uuid)) {
-				ff().of().destroy(uuid);
-				LOG("rehash %s destroy\n", uuid.to_s(b, sizeof(b)));
-			}
-			else {
-				object *o = ff().of().find(uuid);
-				o->set_flag(object::flag_replica, true);
-				LOG("rehash %s replica\n", uuid.to_s(b, sizeof(b)));
+			bool node_for = w->node_for(uuid);
+			if (o) {
+				o->set_flag(object::flag_local, false);
+				o->set_flag(object::flag_replica, node_for);
+				LOG("rehash %s to %s\n", uuid.to_s(b, sizeof(b)),
+						node_for ? "replica" : "not used");
 			}
 		}
 		else {
 			LOG("rehash %s fails!", uuid.to_s(b, sizeof(b)));
 			ASSERT(false);
 		}
+		TRACE("rehash resume thrd: %p %p\n",
+			nbr_thread_get_current(), w->rh().curr());
 		w->rh().resume();	/* do next move to */
 		return NBR_OK;
 	} break;
@@ -1104,7 +1128,7 @@ int svnt::fiber::node_ctrl_vm_init(
 	if ((r = rpc::create_object_request::pack_header(
 		sr, msgid, w->world_object_uuid(),
 		ll::world_klass_name, ll::world_klass_name_len,
-		w->id(), nbr_str_length(w->id(), max_wid), false, 0)) < 0) {
+		w->id(), nbr_str_length(w->id(), max_wid), NULL, 0)) < 0) {
 		goto error;
 	}
 	if ((r = yielding(msgid)) < 0) {
@@ -1149,6 +1173,7 @@ int svnt::fiber::node_ctrl_vm_init_resume(
 				goto error;
 			}
 			ff().vm()->co_destroy(co);
+			co = NULL;
 			msgid = new_msgid();
 			if (msgid == INVALID_MSGID) {
 				r = NBR_EEXPIRE;
@@ -1172,7 +1197,12 @@ int svnt::fiber::node_ctrl_vm_init_resume(
 	else {
 		/* rollback vm status */
 		ff().vm()->fin_world(wid());
-		r = res.err();
+		if (res.err().type() == datatype::INTEGER) {
+			r = res.err();
+		}
+		else {
+			r = NBR_EINVAL;
+		}
 		goto error;
 	}
 error:

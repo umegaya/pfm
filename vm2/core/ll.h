@@ -8,9 +8,8 @@ class ll : public ll_impl {
 protected:
 	THREAD m_thrd;
 public:
-	ll(class object_factory &of, class world_factory &wf, 
-		class serializer &sr, THREAD thrd) :
-		ll_impl(of, wf, sr), m_thrd(thrd) {}
+	ll(class object_factory &of, class world_factory &wf, THREAD thrd) :
+		ll_impl(of, wf), m_thrd(thrd) {}
 	THREAD thrd() const { return m_thrd; }
 	static inline class ll *cast(ll_impl *li);
 	static inline class ll &cast(ll_impl &li);

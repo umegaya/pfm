@@ -92,7 +92,7 @@ pfmm::create_config(config* cl[], int size)
 			60, opt_expandable,
 			64 * 1024, 64 * 1024,
 			0, 0,
-			10000,	-1,
+			-1, 0,
 			"TCP", "eth0",
 			1 * 100 * 1000/* 100msec task span */,
 			1 * 1000 * 1000/* after 1s, again try to connect */,
@@ -107,7 +107,7 @@ pfmm::create_config(config* cl[], int size)
 			60, opt_expandable,
 			64 * 1024, 64 * 1024,
 			0, 0,
-			10000,	-1,
+			-1, 0,
 			"TCP", "eth0",
 			1 * 100 * 1000/* 100msec task span */,
 			1 * 1000 * 1000/* after 1s, again try to connect */,
@@ -512,10 +512,10 @@ int mstr::fiber::call_node_regist(rpc::request &rq)
 			UUID uuid;
 			if ((r = rpc::node_ctrl_cmd::add::pack_header(
 				sr, ff().new_msgid(),
-				"rtkonline", sizeof("rtkonline") - 1,
+				"test", sizeof("test") - 1,
 				c->node_data()->iden,
 				strlen(c->node_data()->iden),
-				"", uuid, "svnt/ll/rtkonline/main.lua",
+				"", uuid, "svnt/ll/test/main.lua",
 				0, NULL)) < 0) {
 				ASSERT(false);
 				goto error;

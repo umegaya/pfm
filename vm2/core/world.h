@@ -15,20 +15,32 @@ protected:
 	class ffutil *m_ff;
 	class serializer *m_sr;
 	MSGID m_msgid;
-	THREAD m_my, m_invoked;
+	THREAD m_invoked, m_curr;
+	volatile U32 *m_flag, m_data;
 public:
-	rehasher() : m_my(NULL) {}
+	rehasher() : m_curr(NULL), m_flag(NULL) {}
 	void init(class ffutil *ff, class world *w,
 			THREAD invoke, MSGID msgid) {
 		m_ff = ff; m_wld = w;
 		m_invoked = invoke;
 		m_msgid = msgid;
+		if (!m_flag) { m_flag = &m_data; }
+		m_data = 0;
 		ASSERT(msgid != INVALID_MSGID);
 	}
 	int start();
-	THREAD my() const { return m_my; }
-	bool set_thrd(THREAD th) { return (m_my = th); }
-	void resume() { ASSERT(m_my); if (m_my) { nbr_thread_signal(m_my, 1); } }
+	int yield(int timeout) {
+		time_t start = time(NULL);
+		while(__sync_bool_compare_and_swap(m_flag, 1, 0) == false) {
+			::sched_yield();
+			nbr_osdep_sleep(1000 * 1000 * 10);
+			if ((time(NULL) - start) > timeout) { return NBR_ETIMEOUT; }
+		}
+		return NBR_OK;
+	}
+	THREAD set_thrd(THREAD t) { return m_curr = t; }
+	THREAD curr() const { return m_curr; }
+	void resume() { m_data = 1; }
 	int operator () (dbm_impl *dbm, const char *k, int ksz);
 	static void *proc(void *p);
 };
@@ -77,7 +89,7 @@ public:
 		return nbr_conhash_add_node(m_ch, (CHNODE *)&n); }
 	int del_node(const CHNODE &n) {
 		return nbr_conhash_del_node(m_ch, (CHNODE *)&n); }
-	int request(MSGID msgid, const UUID &uuid, serializer &sr);
+	int request(MSGID msgid, const UUID &uuid, serializer &sr, bool recon = false);
 	int re_request(MSGID msgid, const UUID &uuid, bool reconnect);
 #if defined(_TEST)
 	static int (*m_test_request)(world *, MSGID,

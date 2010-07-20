@@ -101,7 +101,7 @@ public:
 	void set_msgid(MSGID msgid) { m_msgid = msgid; }
 #endif
 	void set_ff(class ffutil *ffu) { m_ff = ffu; }
-	inline void fin();
+	inline void fin(bool term = false);
 	inline MSGID new_msgid();
 	inline MSGID new_watcher_msgid(class watcher **ppw);
 	inline int yielding(MSGID msgid, int size = 1,
@@ -109,7 +109,11 @@ public:
 	bool valid() const;
 	static int noop(serializer &) { return NBR_OK; }
 	static ll *from_object(object *o);
-	bool check_move_to(object *o, const UUID &uuid);
+	int check_forwarding_and_notice_intr(bool check_rpc, const UUID &uuid,
+		char *p, int l, class ll **pvm);
+	template <typename FROM> bool
+	check_forwarding_and_notice(FROM from, bool check_rpc, const UUID &uuid,
+		char *p, int l);
 	template <class FB>
 		void terminate(fiber_factory<FB> &ff, int err);
 	template <class FB, typename FROM>
@@ -159,11 +163,12 @@ public:
 	void set_validity(callback) {}
 	void set_validity(class finder_session *s);
 	void set_validity(class finder_factory *) {}
-	void set_validity(class fiber *f) { m_validity.m_msgid = f->msgid(); }
+	void set_validity(class fiber *f) { m_validity.m_msgid = f->msgid();
+		ASSERT(f->msgid() != INVALID_MSGID); }
 	void set_validity(app_param)  {}
 	void set_validity(class svnt_csession *s);
 	void set_validity(thread_ptr) {}
-	void set_validity(SWKFROM *) {}
+	void set_validity(SWKFROM *);
 	template <class FROM> void set_responder(FROM from) {
 		set_validity(from);
 		p = respond_ptr(from);
@@ -189,7 +194,8 @@ protected:	/** DUMMY CALLBACKS **/
 	int call_ll_exec_client(rpc::request &req, object *o, bool trusted,
 		char *p, int l){ ASSERT(0); return NBR_ENOTSUPPORT; }
 	int call_login(rpc::request &req) { ASSERT(0); return NBR_ENOTSUPPORT; }
-	int resume_login(rpc::response &res) { ASSERT(0); return NBR_ENOTSUPPORT; }
+	int resume_login(rpc::response &res)
+		{ ASSERT(0); return NBR_ENOTSUPPORT; }
 	int call_logout(rpc::request &req) { ASSERT(0); return NBR_ENOTSUPPORT; }
 	int resume_logout(rpc::response &res) { ASSERT(0); return NBR_ENOTSUPPORT; }
 	int call_replicate(rpc::request &req, char *p, int l)
@@ -248,7 +254,7 @@ public:
 public:	/* quorum base replication (thrd) */
 	int thrd_quorum_vote_commit(MSGID msgid, quorum_context *ctx, serializer &sr);
 	int thrd_quorum_global_commit(world *w, quorum_context *ctx, int result);
-	quorum_context *thrd_quorum_init_context(world *w);
+	quorum_context *thrd_quorum_init_context(world *w, quorum_context *qc = NULL);
 	static int thrd_quorum_vote_callback(rpc::response &r, THREAD thrd, void *ctx);
 public:
 	typedef fiber super;
@@ -393,7 +399,7 @@ public:
 	template <class FROM>
 	int run_fiber(FROM from, char *p, int l) {
 		SWKFROM f = { fiber::respond_type(from), fiber::respond_ptr(from) };
-		TRACE("p[7] = %u\n", p[7]);
+//		TRACE("p[7] = %u\n", p[7]);
 		__sync_val_compare_and_swap(&m_widx, m_wnum, 0);
 		return nbr_sock_worker_event(&f,
 			m_workers[__sync_fetch_and_add(&m_widx, 1)], p, l);
@@ -401,7 +407,7 @@ public:
 	template <class FROM>
 	int run_fiber(FROM fr, THREAD to, char *p, int l) {
 		SWKFROM from = { fiber::respond_type(fr), fiber::respond_ptr(fr) };
-		TRACE("2:p[7] = %u\n", p[7]);
+//		TRACE("2:p[7] = %u\n", p[7]);
 		return nbr_sock_worker_event(&from, to, p, l);
 	}
 	int run_fiber(class conn *c, char *p, int l);
@@ -456,16 +462,20 @@ public:
 			switch(r = d.elem(0)) {
 			case rpc::msg_request:
 //				TRACE("method = %u\n", (int)((rpc::request &)d).method());
-				return call(from, (rpc::request &)d, trust, p, l);
+				r = call(from, (rpc::request &)d, trust, p, l);
+				break;
 			case rpc::msg_response:
-				return resume(from, (rpc::response &)d, p, l);
+				r = resume(from, (rpc::response &)d, p, l);
+				break;
 			default:
 				ASSERT(false);
 				return NBR_EINVAL;
 			}
+			if (r < 0) { LOG("RPC error %d\n", r); }
+			return NBR_OK;
 		}
 		else {
-//			ASSERT(false);
+			ASSERT(false);
 			return NBR_OK;
 		}
 	}
@@ -485,12 +495,12 @@ fiber_factory<FB>::call(FROM from, rpc::request &req, bool trusted, char *p, int
 		ASSERT(false);
 		return NBR_EEXPIRE;
 	}
-	TRACE("fiber new : %p\n", f);
+//	TRACE("fiber new : %p\n", f);
 	f->set_responder(from);
 	int r = f->call(*this, req, trusted, from, p, l);
 	if ((r < 0) || !f->yielded()) {
-//		TRACE("finish c: %u/%d/%p/%p/%p\n",req.msgid(),r,curr(),f,f->yld());
-		f->fin();
+//		TRACE("finish c: %u/%u/%d/%p/%p/%p\n",req.msgid(),(U32)req.method(),r,curr(),f,f->yld());
+		f->fin(r < 0);
 		fiber_destroy(f);
 	}
 	return r;
@@ -510,12 +520,6 @@ fiber_factory<FB>::resume(FROM from, rpc::response &res, char *p, int l)
 		TRACE("msgid: %u not found\n", res.msgid());
 		return NBR_ENOTFOUND;
 	}
-	if (!f->valid()) {
-		LOG("fiber invalid : %p %u %u\n", f, f->msgid(), f->type());
-		f->fin();
-		fiber_destroy(f);
-		return NBR_EINVAL;
-	}
 //	TRACE("resume: %u/%p/%p/%p\n", res.msgid(), curr(), f, f->yld());
 	ASSERT(f->yld());
 	THREAD attach = f->yld()->attached();
@@ -523,6 +527,12 @@ fiber_factory<FB>::resume(FROM from, rpc::response &res, char *p, int l)
 //		TRACE("fw: %u/%p/%p/%p\n", res.msgid(), curr(), attach, f);
 		ASSERT(f->yielded());
 		return run_fiber(from, f->yld()->attached(), p, l);
+	}
+	if (!f->valid()) {
+		LOG("fiber invalid : %p %u %u\n", f, f->msgid(), f->type());
+		f->fin(true);
+		fiber_destroy(f);
+		return NBR_EINVAL;
 	}
 	if (f->yld()->reply(from, res) < 0) {
 		return NBR_OK;	/* wait for reply */
@@ -534,7 +544,7 @@ fiber_factory<FB>::resume(FROM from, rpc::response &res, char *p, int l)
 	int r = f->resume(*this, res, p, l);
 	if ((r < 0) || !f->yielded()) {
 //		TRACE("finish r: %u/%d/%p/%p/%p\n",res.msgid(),r,curr(),f,f->yld());
-		f->fin();
+		f->fin(r < 0);
 		fiber_destroy(f);
 	}
 	return r;
@@ -649,6 +659,23 @@ fiber::timeout(fiber_factory<FB> &ff, rpc::response &res)
 	}
 }
 
+template <typename FROM> bool
+fiber::check_forwarding_and_notice(FROM from, bool check_rpc, const UUID &uuid,
+	char *p, int l)
+{
+	int r;
+	class ll *ovm;
+	if ((r = check_forwarding_and_notice_intr(check_rpc, uuid, p, l, &ovm)) < 0) {
+		if (r == NBR_EINVAL &&
+			(r = ff().run_fiber(from, ovm->attached_thrd(), p, l)) < 0) {
+			send_error(r);
+		}
+		return true;
+	}
+	return false;
+}
+
+
 template <class FB, typename FROM> int
 fiber::call(fiber_factory<FB> &ff, rpc::request &req, bool trusted,
 		FROM from, char *p, int l)
@@ -660,17 +687,9 @@ fiber::call(fiber_factory<FB> &ff, rpc::request &req, bool trusted,
 	case rpc::ll_exec: {
 		m_wid = get_world_id(req);
 		rpc::ll_exec_request &rq = rpc::ll_exec_request::cast(req);
-		object *o = get_object(rq);
-		if (check_move_to(o, rq.rcvr().elem(2))) { return NBR_OK; }
-		ll *ovm = from_object(o);
-		int r;
-		if (ff.vm() != ovm) {
-			if ((r = ff.run_fiber(from, ovm->attached_thrd(), p, l)) < 0) {
-				send_error(r); return r;
-			}
-			return NBR_OK;
+		if (check_forwarding_and_notice(from, true, rq.rcvr_uuid(), p, l)) {
+			return NBR_OK; 
 		}
-		TRACE("vm : %p %p\n", ff.vm(), ovm);
 		if (!(m_ctx.co = ff.co_create(this))) {
 			send_error(NBR_EEXPIRE); return NBR_EEXPIRE; 
 		}
@@ -685,32 +704,28 @@ fiber::call(fiber_factory<FB> &ff, rpc::request &req, bool trusted,
 	case rpc::login:
 		m_wid = get_world_id(req);
 		return ((FB*)this)->call_login(req);
-	case rpc::authentication:
-		m_wid = get_world_id(req);
+	case rpc::authentication: {
+		rpc::authentication_request &rq = rpc::authentication_request::cast(req);
+		m_wid = get_world_id(rq);
+		/* TODO : if for different thread, switch thread */
 		if (!(m_ctx.co = ff.co_create(this))) {
 			send_error(NBR_EEXPIRE); return NBR_EEXPIRE;
 		}
-		return m_ctx.co->call(rpc::authentication_request::cast(req));
+		return m_ctx.co->call(rq);
+	}
 	default:
 		if (trusted) {
 			switch(m_cmd) {
 			case rpc::ll_exec_local: {
 				m_wid = get_world_id(req);
-				object *o = get_object(rpc::ll_exec_request::cast(req));
-				ll *ovm = from_object(o);
-				int r;
-				if (ff.vm() != ovm) {
-					if ((r = ff.run_fiber(from, ovm->attached_thrd(), p, l)) < 0) {
-						send_error(r); return r;
-					}
+				rpc::ll_exec_request &rq = rpc::ll_exec_request::cast(req);
+				if (check_forwarding_and_notice(from, false, rq.rcvr_uuid(), p, l)) {
 					return NBR_OK;
 				}
-				TRACE("vm : %p %p\n", ff.vm(), ovm);
 				if (!(m_ctx.co = ff.co_create(this))) {
 					send_error(NBR_EEXPIRE); return NBR_EEXPIRE;
 				}
-				return m_ctx.co->call(rpc::ll_exec_request::cast(req),
-					(const char *)rpc::ll_exec_request::cast(req).method());
+				return m_ctx.co->call(rq, (const char *)rq.method());
 			}
 			case rpc::create_object:
 			case rpc::load_object:
@@ -721,9 +736,15 @@ fiber::call(fiber_factory<FB> &ff, rpc::request &req, bool trusted,
 				}
 				return m_ctx.co->call(rpc::create_object_request::cast(req));
 			case rpc::replicate:
-			case rpc::start_replicate:
-				m_wid = get_world_id(req);
+			case rpc::start_replicate: {
+				rpc::replicate_request &rq = rpc::replicate_request::cast(req);
+				/* TODO : if for different thread, switch thread */
+				m_wid = get_world_id(rq);
+				if (check_forwarding_and_notice(from, false, rq.uuid(), p, l)) {
+					return NBR_OK;
+				}
 				return ((FB*)this)->call_replicate(req, p, l);
+			}
 			case rpc::node_ctrl:
 				return call_node_ctrl((FB*)this, req);
 			case rpc::node_inquiry:
@@ -752,7 +773,7 @@ fiber::resume(fiber_factory<FB> &ff, rpc::response &res, char *p, int l)
 	case rpc::ll_exec_local:
 		return m_ctx.co->resume(rpc::ll_exec_response::cast(res), false);
 	case rpc::load_object:
-		return m_ctx.co->resume(rpc::ll_exec_response::cast(res), true);
+		return m_ctx.co->resume(rpc::ll_exec_response::cast(res), false);
 	case rpc::ll_exec_client:
 		TRACE("msgid = %u, climsgid = %u\n", res.msgid(), m_ctx.climsgid);
 		rpc::request::replace_msgid(m_ctx.climsgid, p, l);
@@ -864,7 +885,7 @@ int fiber::resume_node_ctrl(FB *fb, rpc::response &res)
 
 
 inline void
-fiber::fin()
+fiber::fin(bool term)
 {
 	switch(m_cmd) {
 	case rpc::ll_exec:
@@ -873,6 +894,7 @@ fiber::fin()
 	case rpc::authentication:
 	case rpc::ll_exec_local:
 		if (m_ctx.co) {
+			if (term) { m_ctx.co->fin(); }
 			ff().vm()->co_destroy(m_ctx.co);
 			m_ctx.co = NULL;
 		}

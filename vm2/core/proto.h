@@ -142,6 +142,8 @@ public:
 	typedef world_request super;
 	const data &method() const { return super::argv(0); }
 	const data &rcvr() const { return super::argv(1); }
+	/* FIXME : it depend on current lua implementation */
+	const UUID &rcvr_uuid() const { return rcvr().elem(2); }
 	void set_uuid(const UUID &uuid) {	/* FIXME : black magic */
 		return super::argv(1).set_ptr((const void *)&uuid);
 	}
@@ -168,12 +170,14 @@ public:
 	typedef world_request super;
 	const char *klass() const { return super::argv(0); }
 	const UUID &object_id() const { return super::argv(1); }
-	int argc() const { return super::argc() - 2; }
-	const data &argv(int n) const { return super::argv(n+2); }
+	const char *node_addr() const { return 
+		super::argv(2).type() == datatype::NIL ? "" : super::argv(2); }
+	int argc() const { return super::argc() - 3; }
+	const data &argv(int n) const { return super::argv(n+3); }
 	bool need_load() const { return ((U32)method()) == load_object; }
 	static inline int pack_header(serializer &sr, MSGID msgid,
 			const UUID &uuid, const char *klass, size_t klen,
-			world_id wid, size_t wlen, bool load, int n_arg);
+			world_id wid, size_t wlen, const char *addr, int n_arg);
 	static inline create_object_request &cast(request &r) {
 		ASSERT((U32)r.method() == create_object ||
 				(U32)r.method() == load_object);
@@ -450,14 +454,19 @@ inline int ll_exec_request::pack_header(serializer &sr, MSGID msgid,
 inline int create_object_request::pack_header(
 		serializer &sr, MSGID msgid, const UUID &uuid,
 		const char *klass, size_t klen,
-		world_id wid, size_t wlen, bool load, int n_arg)
+		world_id wid, size_t wlen, const char *addr, int n_arg)
 {
 	super::pack_header(sr, msgid,
-		load ? load_object : create_object, wid, wlen, n_arg + 2);
+		addr ? load_object : create_object, wid, wlen, n_arg + 3);
 	sr.push_string(klass, klen);
 	sr.push_raw(reinterpret_cast<const char *>(&uuid), sizeof(UUID));
+	if (addr) { 
+		sr.push_string(addr, nbr_str_length(addr, 32)); 
+	}
+	else {
+		sr.pushnil();
+	}
 	return sr.len();
-
 }
 
 inline int replicate_request::pack_header(
@@ -581,7 +590,7 @@ inline int node_ctrl_cmd::deploy::pack_header(serializer &sr, MSGID msgid,
 inline int node_ctrl_cmd::vm_fin::pack_header(serializer &sr, MSGID msgid,
 		world_id wid, size_t wlen)
 {
-	super::pack_header(sr, msgid, super::vm_fin, wid, wlen, 1);
+	super::pack_header(sr, msgid, super::vm_fin, wid, wlen, 0);
 	return sr.len();
 }
 

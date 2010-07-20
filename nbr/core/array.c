@@ -458,6 +458,7 @@ nbr_array_create(int max, int size, int option)
 			g_array, g_array->max, g_array->use);
 		return NULL;
 	}
+	ASSERT(size > 0);
 	n_size = array_get_alloc_size(max, size);
 	a = (array_t *)nbr_mem_alloc(n_size);
 	if (a == NULL) {
