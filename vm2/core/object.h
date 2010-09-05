@@ -87,6 +87,7 @@ class object_factory : public pmap<object, UUID> {
 protected:
 	static const size_t max_klass_symbol = 64;
 	map<const char *, char[max_klass_symbol]> m_syms;
+public:
 	const char *create_symbol(const char *sym) {
 		const char *p = m_syms.find(sym);
 		if (p) { return p; }
@@ -99,6 +100,7 @@ protected:
 		TRACE("allocate symbol (%s/%p)\n", p, p);
 		return p;
 	}
+protected:
 	THPOOL m_replacer;
 public:
 	typedef pmap<object, UUID> super;
@@ -110,6 +112,29 @@ public:
 	void fin();
 	record load(const UUID &uuid, void *co,
 		class world *w, class ll *vm, const char *klass) {
+#if !defined(_OLD_OBJECT)
+		dbm::record r;
+		super::element *e;
+		bool exists;
+		if ((e = super::findelem(uuid))) { return record(e); }
+		/* it is possible that more than 2 thread reach here */
+		if (!m_db.select(r,(void *)&uuid, sizeof(uuid))) { return record(NULL); }
+		if (!(e = super::rawalloc(uuid, false, &exists))) { return record(NULL); }
+		/* so need to check duplicate creation here */
+		if (exists) { return record(e); }
+		record rec(e);
+		if (!rec->belong_to(w)) {
+			rec->set_uuid(uuid);
+			rec->set_vm(vm);
+			rec->set_klass(create_symbol(klass));
+			rec->set_flag((object::flag_local | object::flag_loaded), true);
+			if (rec.load(r.p<char>(), r.len(), co) < 0) {
+				erase(uuid);
+				return record(NULL);
+			}
+		}
+		return rec;
+#else
 		super::element *e;
 		bool exists;
 		if (!(e = super::rawalloc(uuid, false, &exists))) { return record(NULL); }
@@ -129,6 +154,7 @@ public:
 			}
 		}
 		return rec;
+#endif
 	}
 	record create(const UUID &uuid, void *co,
 			class world *w, class ll *vm, const char *klass) {

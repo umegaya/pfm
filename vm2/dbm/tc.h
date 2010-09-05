@@ -14,8 +14,8 @@ public:
 		void *m_p;
 		int m_len;
 	public:
-		record() {}
-		~record() { nbr_free(m_p); }
+		record() : m_p(NULL) {}
+		~record() { if (m_p) { nbr_free(m_p); } }
 		operator bool () const { return m_p != NULL; }
 		template <typename T> T *p() { return (T *)m_p; }
 		int len() const { return m_len; }

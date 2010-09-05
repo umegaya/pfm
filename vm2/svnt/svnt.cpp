@@ -86,7 +86,7 @@ int config::set(const char *k, const char *v) {
 }
 pfms *svnt::session::m_daemon = NULL;
 const char *svnt::finder_factory::m_mstr_addr = NULL;
-#if defined(_DEBUG)
+#if !defined(_NOTEST)
 bool svnt::session::m_test_mode = true;
 #else
 bool svnt::session::m_test_mode = false;
@@ -201,6 +201,7 @@ pfms::boot(int argc, char *argv[])
 	svnt::finder_factory *fdr;
 	svnt::config *c = find_config<svnt::config>("svnt");
 	svnt::config *c_be = find_config<svnt::config>("be");
+	base::config *c_cl = find_config<base::config>("clnt");
 	if (!c || !c_be) { return NBR_ENOTFOUND; }
 	INIT_OR_DIE((r = m_db.init(config::makepath(path, sizeof(path), c->m_dbmopt, "uuid.tch"))) < 0, r,
 		"uuid DB init fail (%d)\n", r);
@@ -208,7 +209,7 @@ pfms::boot(int argc, char *argv[])
 		"UUID init fail (%d)\n", r);
 	INIT_OR_DIE((r = svnt::fiber::init_global(10000)) < 0, r,
 		"svnt::fiber::init fails(%d)\n", r);
-	INIT_OR_DIE((r = ff().init(100, 100, 10)) < 0, r,
+	INIT_OR_DIE((r = ff().init(c_cl->m_max_connection, 100, 10)) < 0, r,
 		"fiber_factory init fails(%d)\n", r);
 	INIT_OR_DIE(!(fc = find_factory<conn_pool::svnt_cp>("be")), NBR_ENOTFOUND,
 		"conn_pool not found (%p)\n", fc);
@@ -416,7 +417,10 @@ int svnt::fiber::resume_login(rpc::response &p)
 		case login_wait_object_create: {
 			object *o;
 			char b[256];
-			TRACE("login : object create %s\n", c->player_id().to_s(b, sizeof(b)));
+			LOG("login : object create %s\n", c->player_id().to_s(b, sizeof(b)));
+#if !defined(_OLD_OBJECT)
+			o = ff().of().find(c->player_id());
+#else
 			if (!(o = ff().of().find(c->player_id()))) {
 				rpc::ll_exec_response &res = rpc::ll_exec_response::cast(p);
 				if (!(co = ff().co_create(this))) {
@@ -432,13 +436,14 @@ int svnt::fiber::resume_login(rpc::response &p)
 					goto error;
 				}
 			}
+#endif
 			msgid = new_msgid();
 			if (msgid == INVALID_MSGID) {
 				r = NBR_EEXPIRE;
 				goto error;
 			}
 			if ((r = rpc::ll_exec_request::pack_header(
-				ff().sr(), msgid, *o,
+				ff().sr(), msgid, c->player_id(), ll::player_klass_name,
 				ll::enter_world_proc_name, ll::enter_world_proc_name_len,
 				w->id(), nbr_str_length(w->id(), max_wid), rpc::ll_exec, 0)) < 0) {
 				goto error;
@@ -446,21 +451,31 @@ int svnt::fiber::resume_login(rpc::response &p)
 			if ((r = yielding(msgid)) < 0) {
 				goto error;
 			}
-			if ((r = ff().run_fiber(this, o->vm()->attached_thrd(), 
-				ff().sr().p(), ff().sr().len())) < 0) {
+			if (o && !o->replica()) {
+				if ((r = ff().run_fiber(this, o->vm()->attached_thrd(),
+					ff().sr().p(), ff().sr().len())) < 0) {
+					goto error;
+				}
+			}
+			else if ((r = w->request(msgid, c->player_id(), ff().sr())) < 0) {
 				goto error;
 			}
 			m_status = login_enter_world;
 		} break;
 		case login_enter_world: {
+			rpc::response::pack_header(ff().sr(), m_msgid);
+//			ff().sr().push_raw((char *)&(o->uuid()), sizeof(UUID));
+#if !defined(_OLD_OBJECT)
+			rpc::world_request::pack_object(ff().sr(),
+					c->player_id(), ll::player_klass_name);
+#else
 			object *o;
 			if (!(o = ff().of().find(c->player_id()))) {
 				r = NBR_ENOTFOUND;
 				goto error;
 			}
-			rpc::response::pack_header(ff().sr(), m_msgid);
-//			ff().sr().push_raw((char *)&(o->uuid()), sizeof(UUID));
 			rpc::world_request::pack_object(ff().sr(), *o);
+#endif
 			ff().sr().pushnil();
 			if ((r = respond(false, ff().sr())) < 0) {
 				goto error;
@@ -880,7 +895,7 @@ error:
 	quorum_global_commit(w, ctx, r);
 	if (add_master) {
 		/* TODO : send del node to master */
-		assert(false);
+		//assert(false);
 	}
 	else {
 		w->del_node(ctx->m_node_addr);
@@ -1164,14 +1179,21 @@ int svnt::fiber::node_ctrl_vm_init_resume(
 				r = NBR_EEXPIRE;
 				goto error;
 			}
+#if !defined(_OLD_OBJECT)
+			if ((r = co->push_world_object(w->world_object_uuid())) < 0) {
+				goto error;
+			}
+#else
 			if (!(o = ff().of().load(w->world_object_uuid(), co,
 				w, ff().vm(), ll::world_klass_name))) {
 				r = NBR_EEXPIRE;
 				goto error;
 			}
+
 			if ((r = co->push_world_object(o)) < 0) {
 				goto error;
 			}
+#endif
 			ff().vm()->co_destroy(co);
 			co = NULL;
 			msgid = new_msgid();

@@ -226,7 +226,8 @@ public:
 		}
 		return super::on_open(cfg);
 	}
-	/* TODO : when close remove it from connector */
+	/* TODO : when close remove it from connector
+	 * and timeout yielded fiber which uses this connection */
 };
 }
 class svnt_csession : public svnt::csession {

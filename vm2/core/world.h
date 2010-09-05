@@ -126,8 +126,7 @@ public:
 	typedef super::iterator iterator;
 	world_factory(class connector_factory *cf, const char *dbmopt) :
 		pmap<world, world_id>(), m_cf(cf) {
-		bool b = super::init(64, 64, opt_expandable | opt_threadsafe, dbmopt);
-		assert(b);	/* if down here, your machine is not suitable to use it */
+		super::init(64, 64, opt_expandable | opt_threadsafe, dbmopt);
 	}
 	world_factory() : pmap<world, world_id>() {}
 	~world_factory() { super::fin(); }

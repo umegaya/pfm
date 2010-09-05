@@ -52,6 +52,10 @@ public:
 			return parse(name(), rcv, attr); }
 		static const char *parse(const char *name, bool rcv, U32 &attr);
 	};
+	struct remote_object {
+		UUID m_uuid;
+		const char *m_klass;
+	};
 	class coroutine {
 	friend class lua;
 	protected:
@@ -69,9 +73,16 @@ public:
 		int call(rpc::replicate_request &req);
 		int call(rpc::ll_exec_request &req, const char *method);
 		int resume(rpc::ll_exec_response &res, bool packobj = false);
-		int push_world_object(class object *o);
+#if !defined(_OLD_OBJECT)
+		int push_world_object(const UUID &uuid);
+		static int pack_object(serializer &sr,
+			const UUID &uuid, const char *klass,
+			bool packobj = false);
+#else
+		int push_world_object(class object &o);
 		static int pack_object(serializer &sr, class object &o,
 			bool packobj = false);
+#endif
 		int to_stack(rpc::ll_exec_response &res);
 		int save_object(class object &o, char *p, int l);
 		int load_object(class object &o, const char *p, int l);
@@ -89,8 +100,13 @@ public:
 		int from_stack(serializer &sr, int stkid, bool packobj = false);
 		int from_func(serializer &sr);
 		bool callable(int stkid);
-		class object *to_o(int stkid);
+#if !defined(_OLD_OBJECT)
+		int push_object(const rpc::data *d);
+#else
 		int push_object(class object *o, const rpc::data *d = NULL, bool ok_nil = false);
+#endif
+		class object *to_o(int stkid);
+		remote_object *to_ro(int stkid);
 		method *to_m(int stkid);
 		static class coroutine *to_co(VM vm);
 		class lua &scr() { return *m_scr; }
@@ -106,7 +122,7 @@ public:
 		coroutine *m_co;
 	};
 	struct userdata {
-		enum { method, watcher, object };
+		enum { method, watcher, remote_object, object };
 		U8 type, padd[3];
 		union {
 			struct method m;
@@ -155,6 +171,8 @@ protected:
 	/* helper */
 	static int copy_table(VM vm, int from, int to, int type);
 	static method *method_new(VM vm, lua_CFunction fn, const char *name);
+	static remote_object *remote_object_new(coroutine *co,
+			const UUID &uuid, const char *klass, bool try_load);
 	static void dump_table(VM vm, int index);
 };
 }

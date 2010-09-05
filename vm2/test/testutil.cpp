@@ -33,20 +33,21 @@ const char *get_rcpath(char *buf, size_t blen,
 	return buf;
 }
 
-using namespace pfm;
+//using namespace pfm;
 
-
-int pack_rpc_reqheader(serializer &sr, class object &o, 
-		const char *method, world_id wid, int n_arg)
+#if 0
+int pack_rpc_reqheader(pfm::serializer &sr,
+		class pfm::UUID &uuid, const char *klass,
+		const char *method, pfm::world_id wid, int n_arg)
 {
 	int r;
-	MSGID msgid = 11;
-	TEST((r = rpc::ll_exec_request::pack_header(sr, msgid, 
-		o, method, strlen(method), wid, strlen(wid), false, n_arg)) < 0, 
+	pfm::MSGID msgid = 11;
+	TEST((r = pfm::rpc::ll_exec_request::pack_header(sr, msgid, 
+		uuid, klass, method, strlen(method), wid, strlen(wid), false, n_arg)) < 0,
 		"push_array_len fail (%d)\n", r);
 	return sr.len();
 }
-
+#endif
 
 
 

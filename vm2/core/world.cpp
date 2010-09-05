@@ -46,14 +46,14 @@ int rehasher::operator () (dbm_impl *db, const char *k, int ksz)
 	ASSERT(ksz == sizeof(UUID));
 	UUID &uuid = *((UUID *)k);
 	char buf[256];
-	TRACE("op() : for %s\n", uuid.to_s(buf, sizeof(buf)));
+	LOG("op() : for %s\n", uuid.to_s(buf, sizeof(buf)));
 	if (!m_wld->primary_node_for(uuid)) {
 		static const U32 save_work_buffer_size = 16 * 1024;
 		char buffer[save_work_buffer_size + 1024], *b = buffer;
 		serializer &sr = *m_sr;
 		sr.pack_start(buffer, sizeof(buffer));
 		MSGID msgid = m_ff->new_msgid();
-		TRACE("rehash : do %s:%u\n", uuid.to_s(buf, sizeof(buf)), msgid);
+		LOG("rehash : do %s:%u\n", uuid.to_s(buf, sizeof(buf)), msgid);
 		b += rpc::replicate_request::pack_header(
 			sr, rpc::start_replicate, msgid,
 			m_wld->id(), nbr_str_length(m_wld->id(), max_wid),

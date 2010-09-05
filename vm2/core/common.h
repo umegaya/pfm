@@ -11,7 +11,7 @@
 #define TEST_VIRTUAL
 #endif
 
-#define LOG TRACE	/* kari */
+#define LOG(...) fprintf(stderr, __VA_ARGS__)	/* kari */
 
 #define PREPARE_PACK(scr)		PREPARE_PACK_LOW(scr, __b)
 #define PREPARE_PACK_LOW(scr, bufname)	\

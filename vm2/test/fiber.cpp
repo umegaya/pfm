@@ -342,8 +342,12 @@ static rpc::create_object_request &get_cor() {
 	return (rpc::create_object_request &)test_world2::m_d; }
 static rpc::replicate_request &get_rpr() {
 	return (rpc::replicate_request &)test_world2::m_d; }
+static rpc::ll_exec_request &get_ler() {
+	return (rpc::ll_exec_request &)test_world2::m_d;
+}
 static rpc::ll_exec_request &get_ler(test_object2 *o, rpc::ll_exec_request &r) { return o->reqbuff(r); }
 static packet &get_pkt(test_object2 *o) { return *(packet *)o->buffer(); }
+static packet &get_world_pkt() { return test_world2::m_pkt; }
 
 /*------------------------------------------------------------------*/
 /* test : node_ctrl :: add 											*/
@@ -640,19 +644,23 @@ int fiber_test_login(test_context &ctx, int argc, char *argv[])
 		testsfiber::m_d.m_p, testsfiber::m_d.m_l)) < 0,
 		"create object call fails (%d)\n", r);
 	/* will call World:get_id */
-	object *o;
-	test_object2 *to;
-	TEST(!(o = nd->m_of.find(ctx.wuuid)), 
-		"world object not found (%p:%d)\n", o, r = NBR_ENOTFOUND);
-	to = (test_object2 *)o;
+	object *o = nd->m_of.find(ctx.wuuid);
+	test_object2 *to = (test_object2 *)o;
 	TEST(!(ct = (connector *)w->_connect_assigned_node(ctx.wuuid)),
 		"connector not found (%p)\n", ct);
 	a = ct->primary()->get_addr(a);
 	TEST(!(wnd = ctx.m_snd.find(a)),
 		"node data which handle world object not found (%p)\n", wnd);
-	TEST((r = wnd->m_sff->call(&c, get_ler(to, req_ler), true, 
-		get_pkt(to).m_p, get_pkt(to).m_l)) < 0,
-		"World:get_id call fails (%d)\n", r);
+	if (to) { /* it has object (replica or master) */
+		TEST((r = wnd->m_sff->call(&c, get_ler(to, req_ler), true,
+			get_pkt(to).m_p, get_pkt(to).m_l)) < 0,
+			"World:get_id call fails (%d)\n", r);
+	}
+	else {	/* otherwise direct request to world */
+		TEST((r = wnd->m_sff->call(&c, get_ler(), true,
+			get_world_pkt().m_p, get_world_pkt().m_l)) < 0,
+			"World:get_id call fails (%d)\n", r);
+	}
 	/* resume Player:new */
 	TEST((r = sresponse(nd->m_sff->sr(), res2)) < 0,
 		"invalid login response from svnt (%d)\n", r);
@@ -661,24 +669,39 @@ int fiber_test_login(test_context &ctx, int argc, char *argv[])
 	/* resume player login (now object creation finish) */
 	TEST((r = sresponse(svnt->m_sff->sr(), res2)) < 0,
 		"invalid login response from svnt (%d)\n", r);
-	init_thread_msg_wait(ctx);
-	ctx.n_thread = 1;
+	if (nd == svnt) {	/* if player object created same host as svnt */
+		init_thread_msg_wait(ctx);
+		ctx.n_thread = 1;
+	}
 	TEST((r = svnt->m_sff->resume_nofw(&c, res2)) < 0,
 		"resume login response fails (%d)\n", r);
-	thread_msg_wait(ctx);
 	/* will call Player:enter */
-	TEST((r = m_thevmap.use()) != 1,
-		"too much event sent (%d)\n", r = NBR_EINVAL);
-	tpit = m_thevmap.begin();
-	TEST((r = svnt->m_sff->recv(fiber::to_thrd(tpit->m_th),
-		tpit->m_p, tpit->m_l, true)) < 0,
-		"call World:enter fails (%d)\n", r);
-	m_thevmap.erase((U64)tpit->m_th);
-	/* will call Player:enter and will return 788 */
-	TEST((r = sresponse(svnt->m_sff->sr(), res2)) < 0,
-		"invalid login response from svnt (%d)\n", r);
+	if (nd == svnt) {	/* if player object created same host as svnt */
+		thread_msg_wait(ctx);
+		TEST((r = m_thevmap.use()) != 1,
+				"too much event sent (%d)\n", r = NBR_EINVAL);
+		tpit = m_thevmap.begin();
+		TEST((r = svnt->m_sff->recv(fiber::to_thrd(tpit->m_th),
+				tpit->m_p, tpit->m_l, true)) < 0,
+				"call World:enter fails (%d)\n", r);
+		m_thevmap.erase((U64)tpit->m_th);
+		/* will call Player:enter and will return 788 */
+		TEST((r = sresponse(svnt->m_sff->sr(), res2)) < 0,
+			"invalid login response from svnt (%d)\n", r);
+	}
+	else {	/* otherwise request to world object */
+		TEST(!(nd = ctx.m_snd.find(get_world_pkt().m_a)),
+				"world which execute Player:enter not found (%d)\n",
+				r = NBR_ENOTFOUND);
+		TEST((r = nd->m_sff->recv(&c,
+				get_world_pkt().m_p, get_world_pkt().m_l, true)) < 0,
+				"call World:enter fails (%d)\n", r);
+		/* will call Player:enter and will return 788 */
+		TEST((r = sresponse(nd->m_sff->sr(), res2)) < 0,
+			"invalid login response from svnt (%d)\n", r);
+	}
 	TEST((ll::num(788) != (ll::num)res2.ret()),
-		"retval invalid (%d)\n", (int)(ll::num)res2.ret());
+		"retval invalid (%d:%d)\n", (int)(ll::num)res2.ret(), r = NBR_ESYSCALL);
 	return NBR_OK;
 }
 
@@ -733,16 +756,21 @@ int fiber_test_ll(test_context &ctx, int argc, char *argv[])
 		"pack create object fails (%d)\n", r);
 	ff.sr().unpack_start(ff.sr().p(), ff.sr().len());
 	TEST((r = ff.sr().unpack(cor, ff.sr().p(), ff.sr().len())) <= 0, "unpack fails (%d)\n", r);
-	TEST(!(o = ff.of().find(ctx.wuuid)), "world object not found (%p)\n", o);
+	o = ff.of().find(ctx.wuuid);
 	to = (test_object2 *)o;
-	/* force set remote */
-	to->set_flag(object::flag_local, false);
 	TEST((r = ff.call(fiber::to_thrd(t), cor, true, ff.sr().p(), ff.sr().len())) < 0,
 		"create object fails (%d)\n", r);
 	/* it should resume inside of it and call World object */
-	TEST((r = ffw.call(fiber::to_thrd(t), get_ler(to, req_ler), true, 
-		get_pkt(to).m_p, get_pkt(to).m_l)) < 0,
-		"resume object creation fails (call World:get_id) (%d)\n", r);
+	if (to) {	/* ffw == ff */
+		TEST((r = ffw.call(fiber::to_thrd(t), get_ler(to, req_ler), true,
+				get_pkt(to).m_p, get_pkt(to).m_l)) < 0,
+				"resume object creation fails (call World:get_id) (%d)\n", r);
+	}
+	else {
+		TEST((r = ffw.call(fiber::to_thrd(t), get_ler(), true,
+				get_world_pkt().m_p, get_world_pkt().m_l)) < 0,
+				"resume object creation fails (call World:get_id) (%d)\n", r);
+	}
 	/* reply result to first fiber (msgid = 1) */
 	TEST((r = sresponse(ff.sr(), resp)) < 0, "response unpack fails (%d)\n", r);
 	TEST((r = ff.resume_nofw(fiber::to_thrd(t), resp)) < 0, "world_create resume fail (%d)\n", r);
@@ -753,7 +781,7 @@ int fiber_test_ll(test_context &ctx, int argc, char *argv[])
 	rpc::ll_exec_request ler;
 	PREPARE_PACK_LOW(ff.sr(), __buf2);
 	TEST((r = rpc::ll_exec_request::pack_header(
-		ff.sr(), 10000002/* msgid_dummy */, *o,
+		ff.sr(), 10000002/* msgid_dummy */, o->uuid(), o->klass(),
 		"get_id", sizeof("get_id") - 1,
 		"test_world2", sizeof("test_world2") - 1, rpc::ll_exec, 0)) < 0,
 		"pack ll exec fails (%d)\n", r);

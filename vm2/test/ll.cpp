@@ -50,10 +50,23 @@ public:
 	test_coroutine() { ll::coroutine::m_exec = NULL; }
 };
 
-static void push_rpc_context(serializer &sr, msgid_generator &seed, 
-				object *o, world_id wid, size_t wlen)
+int pack_rpc_reqheader(serializer &sr,
+		const UUID &uuid, const char *klass,
+		const char *method, world_id wid, int n_arg)
 {
-	ll_exec_request::pack_header(sr, seed.new_id(), *o, "test_function",
+	int r;
+	MSGID msgid = 11;
+	TEST((r = pfm::rpc::ll_exec_request::pack_header(sr, msgid,
+		uuid, klass, method, strlen(method), wid, strlen(wid), false, n_arg)) < 0,
+		"push_array_len fail (%d)\n", r);
+	return sr.len();
+}
+
+static void push_rpc_context(serializer &sr, msgid_generator &seed, 
+				const UUID &uuid, const char *klass, world_id wid, size_t wlen)
+{
+	ll_exec_request::pack_header(sr, seed.new_id(), 
+			uuid, klass, "test_function",
 			sizeof("test_function") - 1, wid, wlen, ll_exec, 4);
 	sr.push_map_len(3);
 	PUSHSTR(sr,key_a);
@@ -154,7 +167,8 @@ int ll_call_test(int argc, char *argv[])
 
 	/* test_world : test_function call */
 	sr.pack_start(b, sizeof(b));
-	push_rpc_context(sr, seed, o1, "test_world", sizeof("test_world") - 1);
+	push_rpc_context(sr, seed, o1->uuid(), o1->klass(),
+		"test_world", sizeof("test_world") - 1);
 	/* create ll_exec_request object */
 	sr.unpack_start(sr.p(), sr.len());/* eat my shit */
 	serializer::data d;
@@ -173,7 +187,8 @@ int ll_call_test(int argc, char *argv[])
 
 	/* test_world2 : test_function call */
 	sr.pack_start(b, sizeof(b));
-	push_rpc_context(sr, seed, o2, "test_world2", sizeof("test_world2") - 1);
+	push_rpc_context(sr, seed, o2->uuid(), o2->klass(),
+		"test_world2", sizeof("test_world2") - 1);
 	/* create ll_exec_request object */
 	sr.unpack_start(sr.p(), sr.len());/* eat my shit */
 	if ((r = sr.unpack(d, sr.p(), sr.len())) < 0) {
@@ -329,10 +344,9 @@ int	ll_resume_test_thread_main(THREAD th, int argc, char *argv[])
 	fb2.set_ff(&ff);
 	fb2.set_msgid(seed.new_id());
 	uuid1.assign();
-	TEST(!(o1 = of.create(uuid1,NULL,w,&scr1,"Player")), "create o1 fail (%p)\n", o1);
 	/* call Player:new */
 	sr.pack_start(buf, sizeof(buf));
-	TEST((r = pack_rpc_reqheader(sr, *o1, "new", "test_world", 1)) < 0,
+	TEST((r = pack_rpc_reqheader(sr, uuid1, "Player", "new", "test_world", 1)) < 0,
 		"pack_rpc_header fail (%d)\n", r);
 	PUSHSTR(sr, umegaya);
 	sr.unpack_start(sr.p(), sr.len());
@@ -340,6 +354,7 @@ int	ll_resume_test_thread_main(THREAD th, int argc, char *argv[])
 		"unpack packed buf fails (%d)\n", r);
 	/* Player:new should be yielding */
 	TEST((r = co1.init(&fb1, &scr1)) < 0, "fb1 init fails (%d)\n", r);
+	TEST(!(o1 = of.create(uuid1,&co1,w,&scr1,"Player")), "create o1 fail (%p)\n", o1);
 	TEST((r = co1.call(req, true)) < 0, "fb1 call fails (%d)\n", r);/* should be yield */
 	/* invoke fiber for creating Item object (co2) */
 	TEST((r = co2.init(&fb2, &scr2)) < 0, "fb2 init fails (%d)\n", r);
@@ -359,7 +374,7 @@ int	ll_resume_test_thread_main(THREAD th, int argc, char *argv[])
 
 	/* call Player:attack */
 	sr.pack_start(buf, sizeof(buf));
-	TEST((r = pack_rpc_reqheader(sr, *o1, "attack", "test_world", 0)) < 0,
+	TEST((r = pack_rpc_reqheader(sr, o1->uuid(), o1->klass(), "attack", "test_world", 0)) < 0,
 		"pack_rpc_header fail (%d)\n", r);
 	sr.unpack_start(sr.p(), sr.len());
 	TEST((r = sr.unpack(req, sr.p(), sr.len())) < 0, "unpack packed buf fails (%d)\n", r);

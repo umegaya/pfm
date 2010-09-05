@@ -22,7 +22,7 @@ int object::request(MSGID msgid, ll *vm, serializer &sr)
 		return m_test_request(this, msgid, vm, sr);
 	}
 #endif
-	if (local()) {
+	if (local() && !replica()) {
 		if (thread_current(vm)) {
 			ASSERT(false);
 			return NBR_EINVAL;

@@ -113,7 +113,11 @@ public:
 	int argc() const { return super::argc() - 1; }
 	const data &argv(int n) const { return super::argv(n + 1); }
 	data &argv(int n) { return super::argv(n + 1); }
+#if !defined(_OLD_OBJECT)
+	static int pack_object(serializer &sr, const UUID &uuid, const char *klass);
+#else
 	static int pack_object(serializer &sr, pfmobj &o);
+#endif
 	static inline int pack_header(serializer &sr, MSGID msgid,
 		U8 cmd, world_id wid, size_t wlen, int n_arg);
 	static world_request &cast(request &r) {
@@ -149,9 +153,16 @@ public:
 	}
 	int argc() const { return super::argc() - 2; }
 	const data &argv(int n) const { return super::argv(n+2); }
+#if !defined(_OLD_OBJECT)
+	static inline int pack_header(serializer &sr, MSGID msgid,
+			const UUID &uuid, const char *klass,
+			const char *method, size_t mlen,
+			world_id wid, size_t wlen, U8 mth, int n_arg);
+#else
 	static inline int pack_header(serializer &sr, MSGID msgid,
 			pfmobj &o, const char *method, size_t mlen,
 			world_id wid, size_t wlen, U8 mth, int n_arg);
+#endif
 	static inline ll_exec_request &cast(request &r) {
 		ASSERT((U32)r.method() == ll_exec ||
 				(U32)r.method() == ll_exec_local ||
@@ -441,6 +452,18 @@ inline int world_request::pack_header(serializer &sr, MSGID msgid, U8 reqtype,
 	return sr.len();
 }
 
+#if !defined(_OLD_OBJECT)
+inline int ll_exec_request::pack_header(serializer &sr, MSGID msgid,
+			const UUID &uuid, const char *klass,
+			const char *method, size_t mlen,
+			world_id wid, size_t wlen, U8 mth, int n_arg)
+{
+	super::pack_header(sr, msgid, mth, wid, wlen, n_arg + 2);
+	sr.push_string(method, mlen);
+	super::pack_object(sr, uuid, klass);
+	return sr.len();
+}
+#else
 inline int ll_exec_request::pack_header(serializer &sr, MSGID msgid,
 		pfmobj &o, const char *method, size_t mlen,
 		world_id wid, size_t wlen, U8 mth, int n_arg)
@@ -450,6 +473,7 @@ inline int ll_exec_request::pack_header(serializer &sr, MSGID msgid,
 	super::pack_object(sr, o);
 	return sr.len();
 }
+#endif
 
 inline int create_object_request::pack_header(
 		serializer &sr, MSGID msgid, const UUID &uuid,

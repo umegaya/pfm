@@ -292,11 +292,22 @@ protected:
 		ll::watcher *m_w;
 	};
 	MSGID m_msgid;
+	UTIME m_start;
+	static UTIME m_tot;
+	static U32 m_cnt;
 public:
 	watcher() : m_p(NULL), m_msgid(INVALID_MSGID) {}
 	watcher(MSGID msgid) : m_p(NULL), m_msgid(msgid) {}
 	MSGID msgid() const { return m_msgid; }
-	void set_watcher(fiber *) {}
+	void set_watcher(fiber *) { m_start = nbr_time(); }
+	void stats() {
+		m_tot += (nbr_time() - m_start);
+		m_cnt++;
+	}
+	static void show_stats() {
+		fprintf(stderr, "tot %lluus/%u query = ave %lf us\n",
+			m_tot, m_cnt, ((float)m_tot) / ((float)m_cnt));
+	}
 };
 
 #if defined(_TEST)
@@ -514,6 +525,7 @@ fiber_factory<FB>::resume(FROM from, rpc::response &res, char *p, int l)
 	if (!f) {	/* would be destroyed by timeout or error */
 		watcher *w = find_watcher(res.msgid());
 		if (w) {
+			w->stats();
 			watcher_unregister(res.msgid());
 			return NBR_OK;
 		}
@@ -687,7 +699,7 @@ fiber::call(fiber_factory<FB> &ff, rpc::request &req, bool trusted,
 	case rpc::ll_exec: {
 		m_wid = get_world_id(req);
 		rpc::ll_exec_request &rq = rpc::ll_exec_request::cast(req);
-		if (check_forwarding_and_notice(from, true, rq.rcvr_uuid(), p, l)) {
+		if (check_forwarding_and_notice(from, trusted, rq.rcvr_uuid(), p, l)) {
 			return NBR_OK; 
 		}
 		if (!(m_ctx.co = ff.co_create(this))) {
@@ -707,7 +719,6 @@ fiber::call(fiber_factory<FB> &ff, rpc::request &req, bool trusted,
 	case rpc::authentication: {
 		rpc::authentication_request &rq = rpc::authentication_request::cast(req);
 		m_wid = get_world_id(rq);
-		/* TODO : if for different thread, switch thread */
 		if (!(m_ctx.co = ff.co_create(this))) {
 			send_error(NBR_EEXPIRE); return NBR_EEXPIRE;
 		}
@@ -719,7 +730,7 @@ fiber::call(fiber_factory<FB> &ff, rpc::request &req, bool trusted,
 			case rpc::ll_exec_local: {
 				m_wid = get_world_id(req);
 				rpc::ll_exec_request &rq = rpc::ll_exec_request::cast(req);
-				if (check_forwarding_and_notice(from, false, rq.rcvr_uuid(), p, l)) {
+				if (check_forwarding_and_notice(from, true, rq.rcvr_uuid(), p, l)) {
 					return NBR_OK;
 				}
 				if (!(m_ctx.co = ff.co_create(this))) {

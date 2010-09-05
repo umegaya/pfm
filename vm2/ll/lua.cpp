@@ -8,8 +8,15 @@ using namespace pfm;
 using namespace pfm::rpc;
 
 //#define CAN_PROCESS(co, o) (o->can_process_with(ll::cast(&(co->scr()))))
+#if !defined(_OLD_OBJECT)
+#define METHOD_CALLABLE(co, o) (o && !o->replica() && 	\
+								o->thread_current(ll::cast(&(co->scr()))))
+#define ATTR_ACCESIBLE(co, o) (o && !o->replica() && 	\
+								o->thread_current(ll::cast(&(co->scr()))))
+#else
 #define METHOD_CALLABLE(co, o) (o->method_callable(ll::cast(&(co->scr()))))
 #define ATTR_ACCESIBLE(co, o) (o->attr_accesible(ll::cast(&(co->scr()))))
+#endif
 
 /* lua::method */
 const char *
@@ -205,8 +212,8 @@ int lua::coroutine::resume(ll_exec_response &res, bool packobj)
 			if (r > ll_exec_error_move_to) { sr << r; }
 			else {
 				object *o = to_o(2);
-				if (!o) { sr << NBR_ENOTFOUND; break; }
 				TRACE("ll resume do re-request\n");
+				if (!o) { sr << NBR_ENOTFOUND; break; }
 				if ((r = scr().wf().re_request(o->belong()->id(),
 					res.msgid(), o->uuid(), (r == ll_exec_error_move_to))) < 0) {
 					TRACE("ll resume re-request fails (%d)\n", r);
@@ -237,6 +244,33 @@ int lua::coroutine::resume(ll_exec_response &res, bool packobj)
 	return dispatch(r, packobj);
 }
 
+#if !defined(_OLD_OBJECT)
+int lua::coroutine::push_world_object(const UUID &uuid)
+{
+#if defined(_DEBUG)
+	char buf[256];
+	TRACE("push_world_object:%s\n", uuid.to_s(buf, sizeof(buf)));
+#endif
+	if (!remote_object_new(this, uuid, lua::world_klass_name, true)) {
+		return NBR_EEXPIRE;
+	}
+	lua_setfield(m_exec, LUA_GLOBALSINDEX, lua::world_object_name);
+	return NBR_OK;
+}
+
+int lua::coroutine::pack_object(serializer &sr,
+		const UUID &uuid, const char *klass, bool packobj)
+{
+	int r;
+	if ((r = sr.push_array_len(packobj ? 4 : 3)) < 0) { return r; }
+	if ((r = (sr << ((U8)LUA_TUSERDATA))) < 0) { return r; }
+	if ((r = sr.push_string(klass, strlen(klass))) < 0) { return r; }
+	if ((r = sr.push_raw(reinterpret_cast<const char *>(&uuid), sizeof(UUID))) < 0) {
+		return r;
+	}
+	return NBR_OK;
+}
+#else
 int lua::coroutine::push_world_object(object *o)
 {
 #if defined(_DEBUG)
@@ -260,6 +294,7 @@ int lua::coroutine::pack_object(serializer &sr, object &o, bool packobj)
 	}
 	return NBR_OK;
 }
+#endif
 
 int lua::coroutine::save_object(class object &o, char *p, int l)
 {
@@ -268,7 +303,13 @@ int lua::coroutine::save_object(class object &o, char *p, int l)
 	serializer &sr = scr().sr();
 	sr.pack_start(p, l);
 	int top = lua_gettop(m_exec);
+#if !defined(_OLD_OBJECT)
+	if (!remote_object_new(this, o.uuid(), o.klass(), false)) {
+		return NBR_EMALLOC;
+	}
+#else
 	if ((r = push_object(&o)) < 0) { return r; }
+#endif
 	if ((r = from_stack(sr, -1, true)) < 0) { return r; }
 	lua_settop(m_exec, top);
 	return sr.len();
@@ -283,7 +324,11 @@ int lua::coroutine::load_object(class object &o, const char *p, int l)
 	sr.unpack_start(p, l);
 	int r, top = lua_gettop(m_exec);
 	if ((r = sr.unpack(d, p, l)) <= 0) { return NBR_ESHORT; }
+#if !defined(_OLD_OBJECT)
+	if ((r = push_object(&d)) < 0) { return r; }
+#else
 	if ((r = push_object(&o, &(d.elem(3)))) < 0) { return r; }
+#endif
 	lua_settop(m_exec, top);
 	return NBR_OK;
 }
@@ -375,12 +420,33 @@ int lua::coroutine::from_stack(serializer &sr, int stkid, bool packobj)
 			lua_pop(m_exec, 1);
 		} break;
 	case LUA_TUSERDATA: { /* = array ( LUA_TUSERDATA, UUID, objectdata ) */
+#if !defined(_OLD_OBJECT)
+		remote_object *ro = to_ro(stkid);
+		if (!ro) { ASSERT(false); return NBR_EINVAL; }
+		pack_object(sr, ro->m_uuid, ro->m_klass, packobj);
+		if (packobj) {
+			lua_pushlstring(m_exec, 
+				reinterpret_cast<char *>(&(ro->m_uuid)), sizeof(UUID));
+			lua_gettable(m_exec, LUA_GLOBALSINDEX);
+			if (lua_istable(m_exec, -1)) {
+				if ((r = from_stack(sr, lua_gettop(m_exec))) < 0) {
+					ASSERT(false); return r;
+				}
+			}
+			else if (lua_isnil(m_exec, -1)) { sr.push_map_len(0); }
+			else {
+				TRACE("invalid value : %u\n", lua_type(m_exec, -1));
+				ASSERT(false); return NBR_EINVAL;
+			}
+		}
+#else
 		object *o = to_o(stkid);
-		if (o) { pack_object(sr, *o, packobj); }
+		if (o) { pack_object(sr, o->uuid(), o->klass(), packobj); }
 		if (packobj) {
 			lua_getmetatable(m_exec, stkid);
 			from_stack(sr, lua_gettop(m_exec));
 		}
+#endif
 		} break;
 	case LUA_TTHREAD:
 	case LUA_TLIGHTUSERDATA:
@@ -433,6 +499,12 @@ int lua::coroutine::to_stack(const rpc::data &d)
 			b = lua_istable(m_exec, -1);
 			lua_pop(m_exec, 1);
 			if (b) {
+#if !defined(_OLD_OBJECT)
+				if (!remote_object_new(this, d.elem(2),
+					m_scr->of().create_symbol(d.elem(1)), true)) {
+					ASSERT(false); return NBR_EINVAL;
+				}
+#else
 				/* object */
 				world *w = m_scr->wf().find(m_fb->wid());
 				if (!w) { ASSERT(false); return NBR_ENOTFOUND; }
@@ -455,6 +527,7 @@ int lua::coroutine::to_stack(const rpc::data &d)
 				else
 #endif
 				if ((r = push_object(o, NULL, true)) < 0) { return r; }
+#endif
 			}
 			else {
 				/* TODO: another developper defined objects */
@@ -546,8 +619,8 @@ int lua::coroutine::to_stack(create_object_request &req)
 	world *w = m_scr->wf().find(req.wid());
 	if (!w) { return NBR_ENOTFOUND; }
 	TRACE("object create uuid = <%s>\n", req.object_id().to_s(buf, sizeof(buf)));
-	object *o = m_scr->of().create(req.object_id(), this, w, ll::cast(m_scr),
-		req.klass());
+	object *o;
+	o = m_scr->of().create(req.object_id(), this, w, ll::cast(m_scr), req.klass());
 	ASSERT(!o || o == m_scr->of().find(req.object_id()));
 	if (!o) { 
 		o = m_scr->of().load(req.object_id(), this, w, ll::cast(m_scr), req.klass());
@@ -558,14 +631,14 @@ int lua::coroutine::to_stack(create_object_request &req)
 			TRACE("object(%s:%p) already created!\n", 
 				o->uuid().to_s(buf, sizeof(buf)), m_scr);
 #endif
-			push_object(o);
+			remote_object_new(this, o->uuid(), o->klass(), true);
 			return NBR_EALREADY;
 		}
+		ASSERT(false);
 		return NBR_EEXPIRE; 
 	}
-	push_object(o, NULL, true);
+	remote_object_new(this, o->uuid(), o->klass(), true);
 	ASSERT(req.argc() >= 0);
-	TRACE("req.argc() = %d\n", req.argc());
 	for (i = 0, an = req.argc(); i < an; i++) {
 		if ((r = to_stack(req.argv(i))) < 0) { return r; }
 	}
@@ -629,11 +702,22 @@ int lua::coroutine::to_stack(rpc::authentication_request &req)
 
 object *lua::coroutine::to_o(int stkid)
 {
+#if !defined(_OLD_OBJECT)
+	lua::remote_object *ro = to_ro(stkid);
+	if (!ro) { return NULL; }
+	return m_scr->of().find(ro->m_uuid);
+#else
 	lua::userdata *p = (lua::userdata *)lua_touserdata(m_exec, stkid);
 	if (!p || p->type != lua::userdata::object) {
 		return NULL;
 	}
 	return p->o;
+#endif
+}
+
+lua::remote_object *lua::coroutine::to_ro(int stkid)
+{
+	return (lua::remote_object *)lua_touserdata(m_exec, stkid);
 }
 
 lua::method *lua::coroutine::to_m(int stkid)
@@ -655,6 +739,53 @@ lua::coroutine::to_co(VM vm)
 	return co;
 }
 
+#if !defined(_OLD_OBJECT)
+int lua::coroutine::push_object(const rpc::data *d)
+{
+	ASSERT(d);
+	bool need_init = false;
+	lua_pushlstring(m_exec, (const char *)(const UUID *)(d->elem(2)), sizeof(UUID));
+	lua_gettable(m_exec, LUA_GLOBALSINDEX);
+	if (lua_isnil(m_exec, -1)) {
+		lua_pop(m_exec, 1);
+		lua_pushlstring(m_exec, 
+			(const char *)(const UUID *)(d->elem(2)), sizeof(UUID));
+		lua_pushvalue(m_exec, -1);
+		lua_createtable(m_exec, 0, 100);
+		need_init = true;
+	}
+#if defined(_DEBUG)
+	const void *ptr = lua_topointer(m_exec, -1);
+	TRACE("metatable %p:%p:%p:%s:%p\n", (m_scr->attached_thrd()),
+		m_scr,ptr, (const char *)d->elem(1), d);
+	//ASSERT(ok_nil || d);
+	//dump_table(m_exec, lua_gettop(m_exec));
+#endif
+	const rpc::data &h = *d;
+	for (size_t i = 0; i < h.size(); i++) {
+		to_stack(h.key(i));
+		to_stack(h.val(i));
+#if defined(_DEBUG)
+		TRACE("[%d]%s:%u\n", i, (const char *)h.key(i),
+			lua_type(m_exec, -1));
+#endif
+		lua_settable(m_exec, -3);
+	}
+	lua_settable(m_exec, LUA_GLOBALSINDEX);
+	lua_gettable(m_exec, LUA_GLOBALSINDEX);
+	ASSERT(lua_istable(m_exec, -1));
+	if (need_init) {
+		lua_pushcfunction(m_exec, object_index);
+		lua_setfield(m_exec, -2, "__index");
+		lua_pushcfunction(m_exec, object_newindex);
+		lua_setfield(m_exec, -2, "__newindex");
+		lua_pushcfunction(m_exec, generic_gc);
+		lua_setfield(m_exec, -2, "__gc");
+	}
+	/* register metatable */
+	return NBR_OK;
+}
+#else
 int lua::coroutine::push_object(object *o, const rpc::data *d, bool ok_nil)
 {
 	lua::userdata *p = (lua::userdata *)lua_newuserdata(m_exec, sizeof(userdata));
@@ -724,6 +855,7 @@ int lua::coroutine::push_object(object *o, const rpc::data *d, bool ok_nil)
 	lua_setmetatable(m_exec, -2);
 	return NBR_OK;
 }
+#endif
 
 int lua::coroutine::object_index(VM vm)
 {
@@ -734,7 +866,7 @@ int lua::coroutine::object_index(VM vm)
 		lua_error(vm);
 	}
 	object *o = co->to_o(-2);
-//	TRACE("object index get %s\n", lua_tostring(vm, 2));
+	TRACE("object index get %s\n", lua_tostring(vm, 2));
 	static int g_f = 0;
 	if (strcmp(lua_tostring(vm, 2), "enter") == 0) {
 		g_f++;
@@ -742,10 +874,11 @@ int lua::coroutine::object_index(VM vm)
 	}
 	if (ATTR_ACCESIBLE(co, o)) {
 		char b[256];
-//		TRACE("object_index (%s)%p/%p/%s\n",
-//				lua_tostring(vm, 2), o, o->vm(),
-//				o->uuid().to_s(b, sizeof(b)));
 		lua_getmetatable(vm, -2);	/* object's metatable */
+		TRACE("object_index (%s)%p/%p/%p/%s\n",
+				lua_tostring(vm, 2), o, o->vm(),
+				lua_topointer(vm, -1),
+				o->uuid().to_s(b, sizeof(b)));
 		lua_pushvalue(vm, -2);		/* key to get */
 		lua_gettable(vm, -2);
 //		TRACE("object_index : check method table? (%s)\n",
@@ -760,13 +893,8 @@ int lua::coroutine::object_index(VM vm)
 			lua_rawget(vm, -2);
 		}
 		/* this object must have remote master. */
-		if (lua_isnil(vm, -1) && o->has_localdata()) {
+		if (lua_isnil(vm, -1)  && o->has_localdata() ) {
 //			TRACE("this object mush have remote master!\n");
-#if defined(_DEBUG)
-			if (strcmp(lua_tostring(vm, 2), "open_ui") == 0) {
-				dump_table(vm, 3);
-			}
-#endif
 			lua_settop(vm, 2); /* rollback stack */
 			goto remote_call;
 		}
@@ -805,17 +933,14 @@ int lua::coroutine::object_newindex(VM vm)
 	object *o = co->to_o(-3);
 	if (ATTR_ACCESIBLE(co, o)) {
 		char b[256];
-//		TRACE("set data [%s/%u]%p/%s to obj\n",
-//			lua_tostring(vm, 2), lua_type(vm, 3), o->vm(),
-//			o->uuid().to_s(b, sizeof(b)));
 		lua_getmetatable(vm, -3);	/* object's metatable */
+		TRACE("set data %p[%s/%u]%p/%s to obj\n",
+			lua_topointer(vm, -1),
+			lua_tostring(vm, 2), lua_type(vm, 3), o->vm(),
+			o->uuid().to_s(b, sizeof(b)));
 		lua_pushvalue(vm, -3);		/* key to set */
 		lua_pushvalue(vm, -3);		/* value to set */
 		lua_settable(vm, -3);		/* metatable[key] = value */
-		if (strcmp(lua_tostring(vm, 2), "open_ui") == 0) {
-			dump_table(vm, 4);
-		}
-
 	}
 	else {
 		lua_pushstring(vm, "cannot set data to object belongs to other VM");
@@ -835,10 +960,6 @@ int lua::coroutine::method_call(VM vm)
 		lua_error(vm);
 	}
 	object *o = co->to_o(2);
-	if (!o) {
-		lua_pushstring(vm, "function arugment wrong");
-		lua_error(vm);
-	}
 	lua::method *m = co->to_m(1);
 	int top = lua_gettop(vm), r;
 	if (METHOD_CALLABLE(co, o)) {
@@ -878,14 +999,18 @@ int lua::coroutine::method_call(VM vm)
 			pfm::watcher *w;
 			msgid = co->fb().new_watcher_msgid(&w);
 		}
+#if !defined(_OLD_OBJECT)
+		remote_object *ro = co->to_ro(2);
+#endif
 #if defined(_DEBUG)
 		char b[256];
-		TRACE("rpc call %s(%08x) for %s\n", mth, ca, o->uuid().to_s(b, sizeof(b)));
+		TRACE("rpc call %s(%08x) for %s (%p)\n",
+			mth, ca, ro->m_uuid.to_s(b, sizeof(b)), o);
 #endif
 		PREPARE_PACK(co->scr().sr());
-		ll_exec_request::pack_header(co->scr().sr(), msgid, *o,
-			mth, nbr_str_length(mth, 256),
-			o->belong()->id(), nbr_str_length(o->belong()->id(), max_wid),
+		ll_exec_request::pack_header(co->scr().sr(), msgid,
+			ro->m_uuid, ro->m_klass, mth, nbr_str_length(mth, 256),
+			co->fb().wid(), nbr_str_length(co->fb().wid(), max_wid),
 			(ca & method::ca_clientcall ? ll_exec_client : ll_exec), top - 2);
 		/* arguments are starts from index 3 */
 		for (int i = 3; i <= top; i++) {
@@ -894,9 +1019,22 @@ int lua::coroutine::method_call(VM vm)
 				lua_error(vm);
 			}
 		}
-		if ((r = o->request(msgid, ll::cast(&(co->scr())), co->scr().sr())) < 0) {
-			lua_pushfstring(vm, "send request to object fail (%d)", r);
-			lua_error(vm);
+		if (o) {
+			if ((r = o->request(msgid, ll::cast(&(co->scr())), co->scr().sr())) < 0) {
+				lua_pushfstring(vm, "send request to object fail (%d)", r);
+				lua_error(vm);
+			}
+		}
+		else {
+			world *wld = co->scr().wf().find(co->fb().wid());
+			if (!wld) {
+				lua_pushfstring(vm, "send request to object fail (wld = NULL)");
+				lua_error(vm);
+			}
+			if ((r = wld->request(msgid, ro->m_uuid, co->scr().sr())) < 0) {
+				lua_pushfstring(vm, "send request to object fail (%d)", r);
+				lua_error(vm);
+			}
 		}
 		if (nf) {
 			/* FIXME : push watcher object */
@@ -1009,6 +1147,59 @@ int lua::load_module(world_id wid, const char *srcfile)
 	return NBR_OK;
 }
 
+lua::remote_object *
+lua::remote_object_new(coroutine *co,
+		const UUID &uuid, const char *klass, bool try_load)
+{
+#if defined(_DEBUG)
+	char b[256];
+	TRACE("rem_obj_new : %s/%s\n", uuid.to_s(b, sizeof(b)), klass);
+#endif
+	bool retry = !try_load;
+	world *w; object *o;
+	VM vm = co->vm();
+	remote_object *ud = new(lua_newuserdata(vm, sizeof(remote_object))) remote_object;
+	ud->m_uuid = uuid;
+	ud->m_klass = klass;
+find_table:
+	lua_pushlstring(vm, (const char *)&uuid, sizeof(UUID));
+	lua_gettable(vm, LUA_GLOBALSINDEX);
+	if (lua_isnil(vm, -1)) {
+		lua_pop(vm, 1);
+		if (retry) {
+			ASSERT(!try_load);
+create_tmp:
+			lua_newtable(vm); /* this is metatable */
+TRACE("tmp table for remobj : %p\n", lua_topointer(vm, -1));
+			lua_pushcfunction(vm, coroutine::object_index);
+			lua_setfield(vm, -2, "__index");
+			lua_pushcfunction(vm, coroutine::object_newindex);
+			lua_setfield(vm, -2, "__newindex");
+		}
+		else {
+			if (!(w = co->scr().wf().find(co->fb().wid()))) {
+				TRACE("remobj: load fail (world not found)\n");
+				ASSERT(false); goto create_tmp;
+			}
+			if (!(o = co->scr().of().load(
+				uuid, co, w, ll::cast(&(co->scr())), klass))) {
+				TRACE("remobj: load fail (object not found)\n");
+				goto create_tmp;
+			}
+			TRACE("remobj: load success (again)\n");
+			retry = true;
+			goto find_table;
+		}
+	}
+	else {
+TRACE("use table store for remobj : %p\n", lua_topointer(vm, -1));
+	}
+	ASSERT(lua_istable(vm, -1));
+	lua_setmetatable(vm, -2);
+	/* after this function finish, stack size increases by 1.(USERDATA *ud) */
+	return ud;
+}
+
 lua::method *
 lua::method_new(VM vm, lua_CFunction fn, const char *name)
 {
@@ -1071,6 +1262,8 @@ int lua::init_world(world_id wid, world_id from, const char *srcfile)
 	ASSERT(lua_istable(m_vm, -1));
 	/* insert this table and initialize */
 	lua_setfield(m_vm, LUA_REGISTRYINDEX, wid);
+	/* FIXME : temporary fix have to remove this */
+	lua_gc(m_vm, LUA_GCSTOP, 0);
 	return load_module(wid, srcfile);
 }
 

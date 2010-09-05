@@ -25,6 +25,8 @@ void ffutil::clear_tls() {
 	m_last_check = 0;
 }
 #endif
+UTIME watcher::m_tot = 0LL;
+U32 watcher::m_cnt = 0;
 
 /* ffutil */
 int ffutil::init(int max_node, int max_replica,
@@ -303,7 +305,7 @@ fiber::get_world_id(rpc::request &req)
 {
 	world *w = ff().wf().find(rpc::world_request::cast(req).wid());
 	ASSERT(w);
-	return w->id();
+	return w ? w->id() : "";
 }
 
 object *
@@ -332,6 +334,10 @@ fiber::check_forwarding_and_notice_intr(bool check_rpc, const UUID &uuid,
 		send_error(w->primary_node_for(uuid) ?
 			ll_exec_error_will_move_to : ll_exec_error_move_to);
 		return NBR_EALREADY;
+	}
+	else if (!o) {
+		TRACE("check_fwd : o == NULL\n");
+		return NBR_OK;
 	}
 	*pvm = o->vm();
 	TRACE("check_fwd: vm : %p %p\n", ff().vm(), *pvm);

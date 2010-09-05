@@ -83,7 +83,7 @@ public:
 		connector() : super(), m_next_ct(NULL), m_prev_ct(NULL) {
 			m_sent.m_top = m_sent.m_last = NULL;
 			m_fail.m_top = m_fail.m_last = NULL;
-			if (!m_lock) { assert((m_lock = nbr_rwlock_create())); }
+			if (!m_lock) { m_lock = nbr_rwlock_create(); }
 		}
 		~connector() {}
 		void set(connector_resource *cr) { m_cr = cr; }
